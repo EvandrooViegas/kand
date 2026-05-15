@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useLayoutEffect } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'
@@ -13,10 +13,11 @@ import { Switch } from '@/components/ui/switch'
 import {
   ArrowLeft, Type, Image as ImageIcon, Trash2, Save, Play, Code2, Copy, Check,
   Square, Circle, ChevronUp, ChevronDown, ChevronsUp, ChevronsDown, Upload,
-  Link as LinkIcon, Palette, Plus, X, Moon, Sun, Italic, Bold, Sparkles, Wand2,
+  Link as LinkIcon, Palette, Plus, X, Moon, Sun, Italic, Sparkles, Wand2, GripVertical,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { v4 as uuidv4 } from 'uuid'
+import { KandMark } from '@/components/logo'
 
 // Font config (mirrors lib/fonts.js)
 const FONT_META = {
@@ -123,6 +124,8 @@ function Editor() {
   const [imageUrl, setImageUrl] = useState('')
   const [uploading, setUploading] = useState(false)
   const fileInputRef = useRef(null)
+  const measureRef = useRef(null)
+  const [dragOverId, setDragOverId] = useState(null)
 
   useEffect(() => {
     fetch(`/api/canvases/${id}`).then((r) => r.json()).then((data) => {
@@ -181,6 +184,49 @@ function Editor() {
       return { ...c, nodes }
     })
   }
+
+  // Drag-reorder a layer: place draggedId in the visual (front-first) list just before targetId
+  const reorderByDrag = (draggedId, targetId) => {
+    if (!draggedId || !targetId || draggedId === targetId) return
+    setCanvas((c) => {
+      const visual = c.nodes.slice().reverse()
+      const dragIdx = visual.findIndex((n) => n.id === draggedId)
+      const tgtIdx = visual.findIndex((n) => n.id === targetId)
+      if (dragIdx === -1 || tgtIdx === -1) return c
+      const [item] = visual.splice(dragIdx, 1)
+      const newTgt = visual.findIndex((n) => n.id === targetId)
+      visual.splice(newTgt, 0, item)
+      return { ...c, nodes: visual.reverse() }
+    })
+  }
+
+  // Adaptive text height: measure all text nodes via a hidden mirror div, update height
+  useLayoutEffect(() => {
+    if (!canvas || !measureRef.current) return
+    const el = measureRef.current
+    const updates = []
+    for (const n of canvas.nodes || []) {
+      if (n.type !== 'text') continue
+      if (n.autoSize === false) continue
+      el.style.width = `${n.width}px`
+      el.style.fontSize = `${n.fontSize || 48}px`
+      el.style.fontFamily = `'${n.fontFamily || 'Inter'}', sans-serif`
+      el.style.fontWeight = String(n.fontWeight || 400)
+      el.style.fontStyle = n.fontStyle === 'italic' ? 'italic' : 'normal'
+      el.style.lineHeight = '1.2'
+      el.style.whiteSpace = 'pre-wrap'
+      el.style.wordBreak = 'break-word'
+      el.textContent = (n.text && n.text.length > 0) ? n.text : 'M'
+      const h = Math.max(40, Math.ceil(el.getBoundingClientRect().height))
+      if (h !== n.height) updates.push({ id: n.id, height: h })
+    }
+    if (updates.length) {
+      setCanvas((c) => ({ ...c, nodes: c.nodes.map((n) => {
+        const u = updates.find((x) => x.id === n.id)
+        return u ? { ...n, height: u.height } : n
+      }) }))
+    }
+  }, [canvas?.nodes])
 
   const addText = () => {
     const newNode = {
@@ -271,7 +317,15 @@ function Editor() {
       const ds = dragState.current; if (!ds) return
       const dx = (e.clientX - ds.startX) / scale, dy = (e.clientY - ds.startY) / scale
       if (ds.mode === 'move') updateNode(ds.nodeId, { x: Math.round(ds.orig.x + dx), y: Math.round(ds.orig.y + dy) })
-      else if (ds.mode === 'resize') updateNode(ds.nodeId, { width: Math.max(20, Math.round(ds.orig.width + dx)), height: Math.max(20, Math.round(ds.orig.height + dy)) })
+      else if (ds.mode === 'resize') {
+        const isText = canvas?.nodes?.find((n) => n.id === ds.nodeId)?.type === 'text'
+        if (isText) {
+          // Text: width changes; height is auto-measured
+          updateNode(ds.nodeId, { width: Math.max(40, Math.round(ds.orig.width + dx)) })
+        } else {
+          updateNode(ds.nodeId, { width: Math.max(20, Math.round(ds.orig.width + dx)), height: Math.max(20, Math.round(ds.orig.height + dy)) })
+        }
+      }
     }
     const onUp = () => { dragState.current = null; document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
     document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
@@ -298,7 +352,7 @@ function Editor() {
       outline: selectedId === node.id ? '3px solid #6366f1' : 'none', outlineOffset: 2,
       display: 'flex', alignItems: 'center',
       justifyContent: node.textAlign === 'center' ? 'center' : node.textAlign === 'right' ? 'flex-end' : 'flex-start',
-      overflow: 'hidden', userSelect: 'none', whiteSpace: 'pre-wrap',
+      overflow: node.type === 'text' ? 'visible' : 'hidden', userSelect: 'none', whiteSpace: 'pre-wrap',
     }
     if (node.type === 'text') {
       return {
@@ -337,10 +391,12 @@ function Editor() {
 
   return (
     <div className="h-screen flex flex-col bg-background">
+      <div ref={measureRef} aria-hidden="true" style={{ position: 'fixed', visibility: 'hidden', pointerEvents: 'none', left: -99999, top: -99999, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }} />
       <div className="border-b bg-card px-4 py-2.5 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon" onClick={() => router.push('/')}><ArrowLeft className="w-4 h-4" /></Button>
-          <Input value={canvas.name} onChange={(e) => setCanvas({ ...canvas, name: e.target.value })} className="w-64 font-medium" />
+          <div className="text-foreground"><KandMark size={28} /></div>
+          <Input value={canvas.name} onChange={(e) => setCanvas({ ...canvas, name: e.target.value })} className="w-64 font-medium border-foreground/20" />
         </div>
         <div className="flex items-center gap-2">
           <ThemeToggle />
@@ -366,8 +422,16 @@ function Editor() {
             <p className="text-xs font-semibold uppercase text-muted-foreground mb-2 tracking-wide">Layers</p>
             <div className="flex-1 overflow-y-auto space-y-1">
               {(canvas.nodes || []).slice().reverse().map((n) => (
-                <div key={n.id} onClick={() => setSelectedId(n.id)}
-                  className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-sm ${selectedId === n.id ? 'bg-primary/10 text-primary' : 'hover:bg-muted'}`}>
+                <div key={n.id}
+                  draggable
+                  onDragStart={(e) => { e.dataTransfer.setData('text/plain', n.id); e.dataTransfer.effectAllowed = 'move' }}
+                  onDragOver={(e) => { e.preventDefault(); if (dragOverId !== n.id) setDragOverId(n.id) }}
+                  onDragLeave={(e) => { if (dragOverId === n.id) setDragOverId(null) }}
+                  onDrop={(e) => { e.preventDefault(); const id = e.dataTransfer.getData('text/plain'); setDragOverId(null); reorderByDrag(id, n.id) }}
+                  onDragEnd={() => setDragOverId(null)}
+                  onClick={() => setSelectedId(n.id)}
+                  className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-grab active:cursor-grabbing text-sm transition relative ${selectedId === n.id ? 'bg-primary/10 text-primary' : 'hover:bg-muted'} ${dragOverId === n.id ? 'border-t-2 border-[#9AB800]' : ''}`}>
+                  <GripVertical className="w-3 h-3 text-muted-foreground opacity-60" />
                   {layerIcon(n)}
                   <span className="truncate flex-1">{layerLabel(n)}</span>
                   {n.dynamic_key && <span className="text-[10px] bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 rounded">DYN</span>}

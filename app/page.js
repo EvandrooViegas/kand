@@ -3,13 +3,15 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
 } from '@/components/ui/dialog'
-import { Plus, Image as ImageIcon, Trash2, Pencil, Sparkles, Copy, Moon, Sun } from 'lucide-react'
+import { Plus, Trash2, Pencil, Copy, Moon, Sun, ArrowUpRight, ArrowRight } from 'lucide-react'
 import { toast } from 'sonner'
+import { KandLogo, KandMark } from '@/components/logo'
+
+const BEBAS = { fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.01em' }
 
 function buildGradientCssClient(node) {
   const stops = (node.stops || [{ color: '#6366f1', position: 0, alpha: 100 }, { color: '#ec4899', position: 100, alpha: 100 }])
@@ -32,16 +34,7 @@ function buildGradientCssClient(node) {
 function buildFilterCssClient(filters) {
   if (!filters) return 'none'
   const f = { brightness: 100, contrast: 100, saturate: 100, grayscale: 0, blur: 0, sepia: 0, hueRotate: 0, opacity: 100, ...filters }
-  return [
-    `brightness(${f.brightness}%)`,
-    `contrast(${f.contrast}%)`,
-    `saturate(${f.saturate}%)`,
-    `grayscale(${f.grayscale}%)`,
-    `sepia(${f.sepia}%)`,
-    `hue-rotate(${f.hueRotate}deg)`,
-    `blur(${f.blur}px)`,
-    `opacity(${f.opacity}%)`,
-  ].join(' ')
+  return `brightness(${f.brightness}%) contrast(${f.contrast}%) saturate(${f.saturate}%) grayscale(${f.grayscale}%) sepia(${f.sepia}%) hue-rotate(${f.hueRotate}deg) blur(${f.blur}px) opacity(${f.opacity}%)`
 }
 
 function maskRadiusClient(node) {
@@ -59,7 +52,7 @@ function maskRadiusClient(node) {
 
 function CanvasPreview({ canvas }) {
   const w = canvas.width || 1080
-  const scale = 280 / w
+  const scale = 320 / w
   const colorFilter =
     canvas.colorMode === 'grayscale' ? 'grayscale(100%)' :
     canvas.colorMode === 'sepia' ? 'sepia(80%) saturate(120%)' :
@@ -73,27 +66,21 @@ function CanvasPreview({ canvas }) {
             position: 'absolute', left: n.x, top: n.y, width: n.width, height: n.height,
             display: 'flex', alignItems: 'center',
             justifyContent: n.textAlign === 'center' ? 'center' : n.textAlign === 'right' ? 'flex-end' : 'flex-start',
-            overflow: 'hidden',
+            overflow: n.type === 'text' ? 'visible' : 'hidden',
           }
           let style = base
           if (n.type === 'text') {
-            style = {
-              ...base, color: n.color || '#000', fontSize: n.fontSize || 48, fontWeight: n.fontWeight || 400,
+            style = { ...base, color: n.color || '#000', fontSize: n.fontSize || 48, fontWeight: n.fontWeight || 400,
               fontStyle: n.fontStyle === 'italic' ? 'italic' : 'normal',
               fontFamily: `'${n.fontFamily || 'Inter'}', sans-serif`,
-              textShadow: n.textShadow?.enabled ? `${n.textShadow.offsetX || 0}px ${n.textShadow.offsetY || 0}px ${n.textShadow.blur || 0}px ${n.textShadow.color || '#000'}` : 'none',
-            }
+              textShadow: n.textShadow?.enabled ? `${n.textShadow.offsetX || 0}px ${n.textShadow.offsetY || 0}px ${n.textShadow.blur || 0}px ${n.textShadow.color || '#000'}` : 'none' }
           } else if (n.type === 'shape') {
-            style = {
-              ...base, background: n.fill || '#6366f1',
+            style = { ...base, background: n.fill || '#6366f1',
               borderRadius: n.shape === 'ellipse' ? Math.max(n.width, n.height) : (n.borderRadius || 0),
-              border: n.strokeWidth ? `${n.strokeWidth}px solid ${n.stroke || '#000'}` : 'none',
-            }
+              border: n.strokeWidth ? `${n.strokeWidth}px solid ${n.stroke || '#000'}` : 'none' }
           } else if (n.type === 'gradient') {
-            style = {
-              ...base, backgroundImage: buildGradientCssClient(n),
-              borderRadius: n.shape === 'ellipse' ? Math.max(n.width, n.height) : (n.borderRadius || 0),
-            }
+            style = { ...base, backgroundImage: buildGradientCssClient(n),
+              borderRadius: n.shape === 'ellipse' ? Math.max(n.width, n.height) : (n.borderRadius || 0) }
           } else if (n.type === 'image') {
             style = { ...base, borderRadius: maskRadiusClient(n) }
           }
@@ -136,51 +123,49 @@ function Dashboard() {
       const data = await res.json()
       setCanvases(Array.isArray(data) ? data : [])
     } catch (e) {
-      toast.error('Failed to load canvases')
+      toast.error('Failed to load')
     } finally { setLoading(false) }
   }
   useEffect(() => { load() }, [])
 
   const createCanvas = async () => {
-    const res = await fetch('/api/canvases', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name || 'Untitled Canvas' }) })
+    const res = await fetch('/api/canvases', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name || 'Untitled' }) })
     const c = await res.json()
     setOpen(false); setName('')
     router.push(`/editor/${c.id}`)
   }
-
   const deleteCanvas = async (id) => {
-    if (!confirm('Delete this canvas?')) return
+    if (!confirm('Delete this design?')) return
     await fetch(`/api/canvases/${id}`, { method: 'DELETE' })
-    toast.success('Canvas deleted'); load()
+    toast.success('Deleted'); load()
   }
-
   const duplicateCanvas = async (id) => {
     const res = await fetch(`/api/canvases/${id}/duplicate`, { method: 'POST' })
-    if (res.ok) { toast.success('Canvas duplicated'); load() } else toast.error('Duplicate failed')
+    if (res.ok) { toast.success('Duplicated'); load() } else toast.error('Failed')
   }
 
+  const totalNodes = canvases.reduce((acc, c) => acc + (c.nodes?.length || 0), 0)
+
   return (
-    <div className="min-h-screen bg-background">
-      <div className="border-b bg-card sticky top-0 z-10">
-        <div className="container max-w-6xl mx-auto py-4 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-pink-500 via-purple-500 to-indigo-600 flex items-center justify-center text-white shadow-md">
-              <Sparkles className="w-5 h-5" />
-            </div>
-            <div>
-              <span className="text-lg font-bold tracking-tight">DynaCanvas</span>
-              <p className="text-xs text-muted-foreground -mt-0.5">Dynamic Instagram posts via API</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-1">
+    <div className="min-h-screen bg-[#FAF7F2] dark:bg-[#0E0D0B] text-foreground">
+      {/* Header */}
+      <header className="border-b-2 border-foreground/90 bg-[#FAF7F2] dark:bg-[#0E0D0B] sticky top-0 z-20">
+        <div className="container max-w-6xl mx-auto py-4 flex items-center justify-between px-4">
+          <KandLogo size={34} />
+          <div className="flex items-center gap-2">
+            <a href="#api-docs" className="hidden sm:flex items-center gap-1 text-sm font-medium hover:opacity-70 transition" style={BEBAS}>
+              DOCS <ArrowUpRight className="w-3.5 h-3.5" />
+            </a>
             <ThemeToggle />
             <Dialog open={open} onOpenChange={setOpen}>
               <DialogTrigger asChild>
-                <Button className="ml-2"><Plus className="w-4 h-4 mr-2" />New Canvas</Button>
+                <Button className="bg-foreground text-background hover:bg-foreground/85 rounded-full px-5 h-10 font-semibold">
+                  <Plus className="w-4 h-4 mr-1.5" />New Design
+                </Button>
               </DialogTrigger>
               <DialogContent>
-                <DialogHeader><DialogTitle>Create a new canvas</DialogTitle></DialogHeader>
-                <Input placeholder="My new design" value={name} onChange={(e) => setName(e.target.value)} autoFocus onKeyDown={(e) => e.key === 'Enter' && createCanvas()} />
+                <DialogHeader><DialogTitle>Name your design</DialogTitle></DialogHeader>
+                <Input placeholder="Summer launch post" value={name} onChange={(e) => setName(e.target.value)} autoFocus onKeyDown={(e) => e.key === 'Enter' && createCanvas()} />
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
                   <Button onClick={createCanvas}>Create</Button>
@@ -189,47 +174,134 @@ function Dashboard() {
             </Dialog>
           </div>
         </div>
+      </header>
+
+      {/* Hero */}
+      <section className="container max-w-6xl mx-auto px-4 pt-12 pb-10 sm:pt-16 sm:pb-14">
+        <div className="grid grid-cols-1 md:grid-cols-12 gap-6 items-end">
+          <div className="md:col-span-9">
+            <div className="inline-flex items-center gap-2 px-3 py-1 border border-foreground/80 rounded-full text-xs font-semibold uppercase tracking-widest mb-5">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#9AB800] animate-pulse" />
+              Design studio · v0.1
+            </div>
+            <h1 className="leading-[0.85]" style={{ ...BEBAS, fontSize: 'clamp(64px, 11vw, 144px)' }}>
+              MAKE ONCE.<br />
+              <span className="relative inline-block">
+                RENDER FOREVER<span style={{ color: '#9AB800' }}>.</span>
+                <span className="absolute -bottom-1 left-0 right-0 h-1.5 bg-[#D4FF00] -z-10" />
+              </span>
+            </h1>
+            <p className="mt-6 text-lg max-w-xl text-foreground/70 leading-relaxed">
+              Lay out a design once. Tag any text or image as <span className="font-mono text-sm bg-foreground text-background px-1.5 py-0.5 rounded">{`{dynamic}`}</span>, then render fresh PNGs by POSTing JSON. Templates that talk back.
+            </p>
+          </div>
+          <div className="md:col-span-3 flex md:flex-col md:items-end gap-4 md:gap-1 text-foreground/80">
+            <div className="md:text-right">
+              <div style={{ ...BEBAS, fontSize: 56, lineHeight: 1 }}>{canvases.length.toString().padStart(2, '0')}</div>
+              <div className="text-[11px] uppercase tracking-widest font-semibold">Designs</div>
+            </div>
+            <div className="md:text-right md:mt-4">
+              <div style={{ ...BEBAS, fontSize: 56, lineHeight: 1 }}>{totalNodes.toString().padStart(2, '0')}</div>
+              <div className="text-[11px] uppercase tracking-widest font-semibold">Layers</div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* Section title */}
+      <div className="container max-w-6xl mx-auto px-4 mb-6 flex items-baseline justify-between border-t-2 border-foreground/15 pt-6">
+        <h2 className="text-2xl font-bold" style={BEBAS}>YOUR STUDIO</h2>
+        <span className="text-xs uppercase tracking-widest text-foreground/60">Drag · Edit · Render</span>
       </div>
 
-      <div className="container max-w-6xl mx-auto py-10 px-4">
-        <h1 className="text-3xl font-bold mb-2 tracking-tight">Your Canvases</h1>
-        <p className="text-muted-foreground mb-8">Design templates with dynamic placeholders. Render them with any data via a simple HTTP request.</p>
-
+      {/* Cards */}
+      <div className="container max-w-6xl mx-auto px-4 pb-20">
         {loading ? (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-            {[1, 2, 3, 4].map((i) => <div key={i} className="aspect-square bg-muted animate-pulse rounded-lg" />)}
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5">
+            {[1, 2, 3].map((i) => <div key={i} className="aspect-[4/5] bg-foreground/5 animate-pulse rounded-2xl" />)}
           </div>
         ) : canvases.length === 0 ? (
-          <div className="border-2 border-dashed rounded-xl p-16 text-center bg-card">
-            <div className="w-16 h-16 rounded-full bg-gradient-to-br from-pink-100 to-purple-100 mx-auto mb-4 flex items-center justify-center">
-              <ImageIcon className="w-7 h-7 text-purple-600" />
-            </div>
-            <p className="font-medium mb-1">No canvases yet</p>
-            <p className="text-sm text-muted-foreground mb-5">Create your first dynamic Instagram post template.</p>
-            <Button onClick={() => setOpen(true)}><Plus className="w-4 h-4 mr-2" />Create your first canvas</Button>
-          </div>
+          <EmptyState onNew={() => setOpen(true)} />
         ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6">
-            {canvases.map((c) => (
-              <Card key={c.id} className="overflow-hidden group hover:shadow-xl transition-all duration-200 hover:-translate-y-0.5">
-                <div className="aspect-square bg-muted relative cursor-pointer overflow-hidden" onClick={() => router.push(`/editor/${c.id}`)}>
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-5">
+            {canvases.map((c, idx) => (
+              <article
+                key={c.id}
+                className="group relative bg-card rounded-2xl border-2 border-foreground/90 overflow-hidden hover:-translate-y-1 transition-all duration-200 hover:shadow-[8px_8px_0_0_rgba(0,0,0,0.9)] dark:hover:shadow-[8px_8px_0_0_rgba(212,255,0,0.4)]"
+              >
+                <div className="aspect-square bg-foreground/5 relative cursor-pointer overflow-hidden border-b-2 border-foreground/90" onClick={() => router.push(`/editor/${c.id}`)}>
                   <CanvasPreview canvas={c} />
+                  <div className="absolute top-3 left-3 bg-[#D4FF00] text-foreground px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border border-foreground/90">
+                    #{(idx + 1).toString().padStart(2, '0')}
+                  </div>
+                  <div className="absolute bottom-3 right-3 bg-foreground text-background w-9 h-9 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition">
+                    <ArrowUpRight className="w-4 h-4" />
+                  </div>
                 </div>
-                <CardContent className="p-3 flex items-center justify-between gap-2">
+                <div className="p-3.5 flex items-center justify-between gap-2">
                   <div className="min-w-0 flex-1">
-                    <h3 className="font-semibold truncate text-sm">{c.name}</h3>
-                    <p className="text-xs text-muted-foreground">{(c.nodes || []).length} elements</p>
+                    <h3 className="font-bold truncate text-base leading-tight">{c.name}</h3>
+                    <p className="text-[11px] uppercase tracking-widest text-foreground/60 mt-0.5">
+                      {(c.nodes || []).length} layers · {new Date(c.updatedAt).toLocaleDateString('en', { day: '2-digit', month: 'short' })}
+                    </p>
                   </div>
                   <div className="flex gap-0.5">
-                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => router.push(`/editor/${c.id}`)} title="Edit"><Pencil className="w-3.5 h-3.5" /></Button>
-                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => duplicateCanvas(c.id)} title="Duplicate"><Copy className="w-3.5 h-3.5" /></Button>
-                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => deleteCanvas(c.id)} title="Delete"><Trash2 className="w-3.5 h-3.5" /></Button>
+                    <Button size="icon" variant="ghost" className="h-8 w-8 hover:bg-[#D4FF00] hover:text-foreground" onClick={() => router.push(`/editor/${c.id}`)} title="Edit"><Pencil className="w-3.5 h-3.5" /></Button>
+                    <Button size="icon" variant="ghost" className="h-8 w-8 hover:bg-[#D4FF00] hover:text-foreground" onClick={() => duplicateCanvas(c.id)} title="Duplicate"><Copy className="w-3.5 h-3.5" /></Button>
+                    <Button size="icon" variant="ghost" className="h-8 w-8 hover:bg-destructive hover:text-destructive-foreground" onClick={() => deleteCanvas(c.id)} title="Delete"><Trash2 className="w-3.5 h-3.5" /></Button>
                   </div>
-                </CardContent>
-              </Card>
+                </div>
+              </article>
             ))}
           </div>
         )}
+      </div>
+
+      {/* Footer mini docs */}
+      <footer id="api-docs" className="border-t-2 border-foreground/90 bg-foreground text-background mt-12">
+        <div className="container max-w-6xl mx-auto px-4 py-12 grid grid-cols-1 md:grid-cols-2 gap-8">
+          <div>
+            <div className="flex items-center gap-2 text-background mb-3">
+              <KandMark size={28} />
+              <span style={{ ...BEBAS, fontSize: 28 }}>KAND<span style={{ color: '#D4FF00' }}>.</span></span>
+            </div>
+            <p className="text-background/70 text-sm leading-relaxed max-w-md">
+              An open canvas with a programmable seam. Build the look in the editor, swap the words via HTTP. No SDK, no auth dance — one POST.
+            </p>
+          </div>
+          <div className="text-sm">
+            <div className="text-[11px] uppercase tracking-widest text-[#D4FF00] mb-2">Render endpoint</div>
+            <pre className="bg-black/40 border border-background/20 p-3 rounded text-xs overflow-x-auto">{`POST /api/render
+{
+  "canva_id": "...",
+  "data": { "text_1": "Hello", "image1_url": "..." }
+}`}</pre>
+            <p className="text-background/60 mt-2 text-xs">Returns <span className="font-mono">{`{ url }`}</span> pointing to a PNG. Open the editor → API tab for a copyable cURL for any design.</p>
+          </div>
+        </div>
+        <div className="border-t border-background/15 py-3 text-center text-[11px] uppercase tracking-widest text-background/50">
+          Built with satori · sharp · MongoDB
+        </div>
+      </footer>
+    </div>
+  )
+}
+
+function EmptyState({ onNew }) {
+  return (
+    <div className="rounded-3xl border-2 border-dashed border-foreground/30 p-12 sm:p-16 text-center bg-card relative overflow-hidden">
+      <div className="absolute -top-10 -right-10 w-48 h-48 rounded-full bg-[#D4FF00]/30 blur-3xl pointer-events-none" />
+      <div className="relative">
+        <div className="inline-flex p-3 rounded-2xl bg-foreground text-background mb-6">
+          <KandMark size={48} />
+        </div>
+        <h3 className="text-3xl mb-1" style={BEBAS}>NOTHING HERE — YET.</h3>
+        <p className="text-foreground/60 max-w-md mx-auto mb-7">
+          Spin up your first template. Pick a font, drop in a placeholder, and you'll have a render-ready endpoint in two minutes.
+        </p>
+        <Button onClick={onNew} className="bg-foreground text-background hover:bg-foreground/85 h-12 px-7 rounded-full text-base">
+          Create your first design <ArrowRight className="w-4 h-4 ml-2" />
+        </Button>
       </div>
     </div>
   )

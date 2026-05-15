@@ -3,8 +3,8 @@ import { Toaster } from '@/components/ui/sonner'
 import { ThemeProvider } from '@/components/theme-provider'
 
 export const metadata = {
-  title: 'DynaCanvas - Dynamic Instagram Post Generator',
-  description: 'Design templates and render them dynamically via API',
+  title: 'Kand — Make once. Render forever.',
+  description: 'Design templates once, render them with dynamic data via a single API call.',
 }
 
 const GOOGLE_FONTS_HREF =
