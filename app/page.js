@@ -15,38 +15,49 @@ import {
 import { Plus, Image as ImageIcon, Trash2, Pencil, Sparkles, Copy } from 'lucide-react'
 import { toast } from 'sonner'
 
+function buildGradientCssClient(node) {
+  const stops = (node.stops || [{ color: '#6366f1', position: 0 }, { color: '#ec4899', position: 100 }])
+    .slice()
+    .sort((a, b) => (a.position || 0) - (b.position || 0))
+    .map((s) => `${s.color} ${s.position || 0}%`)
+    .join(', ')
+  if (node.gradientType === 'radial') return `radial-gradient(circle at center, ${stops})`
+  const angle = typeof node.angle === 'number' ? node.angle : 90
+  return `linear-gradient(${angle}deg, ${stops})`
+}
+
 function CanvasPreview({ canvas }) {
   const w = canvas.width || 1080
   const scale = 280 / w
   return (
     <div className="absolute inset-0 overflow-hidden" style={{ background: canvas.background || '#fff' }}>
       <div style={{ transform: `scale(${scale})`, transformOrigin: 'top left', width: w, height: canvas.height || 1080, position: 'relative' }}>
-        {(canvas.nodes || []).map((n) => (
-          <div
-            key={n.id}
-            style={{
-              position: 'absolute',
-              left: n.x,
-              top: n.y,
-              width: n.width,
-              height: n.height,
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: n.textAlign === 'center' ? 'center' : n.textAlign === 'right' ? 'flex-end' : 'flex-start',
-              color: n.color || '#000',
-              fontSize: n.fontSize || 48,
-              fontWeight: n.fontWeight || 400,
-              overflow: 'hidden',
-              background: n.type === 'shape' ? (n.fill || '#6366f1') : 'transparent',
-              borderRadius: n.type === 'shape' && n.shape === 'ellipse' ? Math.max(n.width, n.height) : (n.borderRadius || 0),
-              border: n.type === 'shape' && n.strokeWidth ? `${n.strokeWidth}px solid ${n.stroke || '#000'}` : 'none',
-            }}
-          >
-            {n.type === 'text' ? (n.text || '') : n.type === 'image' && n.src ? (
-              <img src={n.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-            ) : null}
-          </div>
-        ))}
+        {(canvas.nodes || []).map((n) => {
+          const baseStyle = {
+            position: 'absolute', left: n.x, top: n.y, width: n.width, height: n.height,
+            display: 'flex', alignItems: 'center',
+            justifyContent: n.textAlign === 'center' ? 'center' : n.textAlign === 'right' ? 'flex-end' : 'flex-start',
+            overflow: 'hidden',
+          }
+          let style = baseStyle
+          if (n.type === 'text') {
+            style = { ...baseStyle, color: n.color || '#000', fontSize: n.fontSize || 48, fontWeight: n.fontWeight || 400, fontFamily: `'${n.fontFamily || 'Inter'}', sans-serif` }
+          } else if (n.type === 'shape') {
+            style = { ...baseStyle, background: n.fill || '#6366f1',
+              borderRadius: n.shape === 'ellipse' ? Math.max(n.width, n.height) : (n.borderRadius || 0),
+              border: n.strokeWidth ? `${n.strokeWidth}px solid ${n.stroke || '#000'}` : 'none' }
+          } else if (n.type === 'gradient') {
+            style = { ...baseStyle, backgroundImage: buildGradientCssClient(n),
+              borderRadius: n.shape === 'ellipse' ? Math.max(n.width, n.height) : (n.borderRadius || 0) }
+          }
+          return (
+            <div key={n.id} style={style}>
+              {n.type === 'text' ? (n.text || '') : n.type === 'image' && n.src ? (
+                <img src={n.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              ) : null}
+            </div>
+          )
+        })}
       </div>
     </div>
   )

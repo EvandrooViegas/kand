@@ -11,30 +11,43 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
-  DialogFooter,
 } from '@/components/ui/dialog'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
+import { Slider } from '@/components/ui/slider'
 import {
-  ArrowLeft,
-  Type,
-  Image as ImageIcon,
-  Trash2,
-  Save,
-  Play,
-  Code2,
-  Copy,
-  Check,
-  Square,
-  Circle,
-  ChevronUp,
-  ChevronDown,
-  ChevronsUp,
-  ChevronsDown,
-  Upload,
-  Link as LinkIcon,
+  ArrowLeft, Type, Image as ImageIcon, Trash2, Save, Play, Code2, Copy, Check,
+  Square, Circle, ChevronUp, ChevronDown, ChevronsUp, ChevronsDown, Upload,
+  Link as LinkIcon, Palette, Plus, X,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { v4 as uuidv4 } from 'uuid'
+
+const FONT_OPTIONS = [
+  'Inter', 'Roboto', 'Poppins', 'Oswald', 'Montserrat', 'Playfair Display',
+  'Bebas Neue', 'Dancing Script', 'Pacifico', 'Lobster', 'Raleway', 'Lato', 'Open Sans',
+]
+
+const GRADIENT_PRESETS = [
+  { name: 'Sunset', stops: [{ color: '#ff7e5f', position: 0 }, { color: '#feb47b', position: 100 }], angle: 135 },
+  { name: 'Purple Haze', stops: [{ color: '#667eea', position: 0 }, { color: '#764ba2', position: 100 }], angle: 135 },
+  { name: 'Ocean', stops: [{ color: '#2193b0', position: 0 }, { color: '#6dd5ed', position: 100 }], angle: 135 },
+  { name: 'Pink Bloom', stops: [{ color: '#ec4899', position: 0 }, { color: '#8b5cf6', position: 100 }], angle: 90 },
+  { name: 'Forest', stops: [{ color: '#134e5e', position: 0 }, { color: '#71b280', position: 100 }], angle: 135 },
+  { name: 'Fire', stops: [{ color: '#f12711', position: 0 }, { color: '#f5af19', position: 100 }], angle: 45 },
+  { name: 'Sky', stops: [{ color: '#60a5fa', position: 0 }, { color: '#a78bfa', position: 50 }, { color: '#f472b6', position: 100 }], angle: 90 },
+  { name: 'Mint', stops: [{ color: '#11998e', position: 0 }, { color: '#38ef7d', position: 100 }], angle: 90 },
+]
+
+function buildGradientCssClient(node) {
+  const stops = (node.stops || [{ color: '#6366f1', position: 0 }, { color: '#ec4899', position: 100 }])
+    .slice()
+    .sort((a, b) => (a.position || 0) - (b.position || 0))
+    .map((s) => `${s.color} ${s.position || 0}%`)
+    .join(', ')
+  if (node.gradientType === 'radial') return `radial-gradient(circle at center, ${stops})`
+  const angle = typeof node.angle === 'number' ? node.angle : 90
+  return `linear-gradient(${angle}deg, ${stops})`
+}
 
 function Editor() {
   const router = useRouter()
@@ -93,7 +106,6 @@ function Editor() {
     setRenderData(JSON.stringify({ canva_id: id, data: sample }, null, 2))
   }, [canvas?.id, canvas?.nodes?.length, renderDialog])
 
-  // Keyboard shortcut: Delete key removes selected
   useEffect(() => {
     const handler = (e) => {
       if (!selectedId) return
@@ -118,7 +130,6 @@ function Editor() {
     setSelectedId(null)
   }
 
-  // Z-order operations (nodes array: index 0 = back, last = front)
   const moveNode = (nodeId, direction) => {
     setCanvas((c) => {
       const nodes = [...c.nodes]
@@ -142,13 +153,11 @@ function Editor() {
       type: 'text',
       x: Math.round((canvas.width - 600) / 2),
       y: Math.round((canvas.height - 100) / 2),
-      width: 600,
-      height: 100,
+      width: 600, height: 100,
       text: 'New text',
-      fontSize: 72,
-      fontWeight: 700,
-      color: '#111111',
-      textAlign: 'center',
+      fontFamily: 'Inter',
+      fontSize: 72, fontWeight: 700,
+      color: '#111111', textAlign: 'center',
     }
     setCanvas((c) => ({ ...c, nodes: [...(c.nodes || []), newNode] }))
     setSelectedId(newNode.id)
@@ -156,37 +165,45 @@ function Editor() {
 
   const addShape = (shape) => {
     const newNode = {
-      id: uuidv4(),
-      type: 'shape',
-      shape,
+      id: uuidv4(), type: 'shape', shape,
       x: Math.round((canvas.width - 300) / 2),
       y: Math.round((canvas.height - 300) / 2),
-      width: 300,
-      height: 300,
-      fill: '#6366f1',
-      stroke: '#000000',
-      strokeWidth: 0,
+      width: 300, height: 300,
+      fill: '#6366f1', stroke: '#000000', strokeWidth: 0,
       borderRadius: shape === 'rect' ? 0 : 9999,
     }
     setCanvas((c) => ({ ...c, nodes: [...(c.nodes || []), newNode] }))
     setSelectedId(newNode.id)
   }
 
-  const openImageDialog = () => {
-    setImageUrl('')
-    setImageDialog(true)
+  const addGradient = () => {
+    const newNode = {
+      id: uuidv4(),
+      type: 'gradient',
+      gradientType: 'linear',
+      angle: 135,
+      shape: 'rect',
+      stops: [
+        { color: '#667eea', position: 0 },
+        { color: '#764ba2', position: 100 },
+      ],
+      x: Math.round((canvas.width - 600) / 2),
+      y: Math.round((canvas.height - 400) / 2),
+      width: 600, height: 400,
+      borderRadius: 24,
+    }
+    setCanvas((c) => ({ ...c, nodes: [...(c.nodes || []), newNode] }))
+    setSelectedId(newNode.id)
   }
+
+  const openImageDialog = () => { setImageUrl(''); setImageDialog(true) }
 
   const insertImageNode = (src) => {
     const newNode = {
-      id: uuidv4(),
-      type: 'image',
+      id: uuidv4(), type: 'image',
       x: Math.round((canvas.width - 500) / 2),
       y: Math.round((canvas.height - 500) / 2),
-      width: 500,
-      height: 500,
-      src,
-      borderRadius: 0,
+      width: 500, height: 500, src, borderRadius: 0,
     }
     setCanvas((c) => ({ ...c, nodes: [...(c.nodes || []), newNode] }))
     setSelectedId(newNode.id)
@@ -194,25 +211,18 @@ function Editor() {
   }
 
   const addImageByUrl = () => {
-    if (!imageUrl.trim()) {
-      toast.error('Enter an image URL')
-      return
-    }
+    if (!imageUrl.trim()) { toast.error('Enter an image URL'); return }
     insertImageNode(imageUrl.trim())
   }
 
   const uploadFile = async (file) => {
     if (!file) return
-    if (file.size > 6 * 1024 * 1024) {
-      toast.error('Image too large (max 6MB)')
-      return
-    }
+    if (file.size > 6 * 1024 * 1024) { toast.error('Image too large (max 6MB)'); return }
     setUploading(true)
     try {
       const reader = new FileReader()
       const dataUrl = await new Promise((resolve, reject) => {
-        reader.onload = () => resolve(reader.result)
-        reader.onerror = reject
+        reader.onload = () => resolve(reader.result); reader.onerror = reject
         reader.readAsDataURL(file)
       })
       const res = await fetch('/api/uploads', {
@@ -221,74 +231,51 @@ function Editor() {
         body: JSON.stringify({ data: dataUrl }),
       })
       const result = await res.json()
-      if (result.url) {
-        insertImageNode(result.url)
-        toast.success('Uploaded')
-      } else {
-        toast.error(result.error || 'Upload failed')
-      }
-    } catch (e) {
-      toast.error('Upload failed: ' + e.message)
-    } finally {
-      setUploading(false)
-    }
+      if (result.url) { insertImageNode(result.url); toast.success('Uploaded') }
+      else toast.error(result.error || 'Upload failed')
+    } catch (e) { toast.error('Upload failed: ' + e.message) }
+    finally { setUploading(false) }
   }
 
   const save = async () => {
     if (!canvas) return
     try {
       const res = await fetch(`/api/canvases/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(canvas),
       })
-      if (res.ok) toast.success('Saved!')
-      else toast.error('Save failed')
-    } catch (e) {
-      toast.error('Save failed: ' + e.message)
-    }
+      if (res.ok) toast.success('Saved!'); else toast.error('Save failed')
+    } catch (e) { toast.error('Save failed: ' + e.message) }
   }
 
   const testRender = async () => {
-    setRendering(true)
-    setRenderResult(null)
+    setRendering(true); setRenderResult(null)
     try {
       const parsed = renderData.trim() ? JSON.parse(renderData) : { canva_id: id, data: {} }
       await fetch(`/api/canvases/${id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(canvas),
       })
       const res = await fetch('/api/render', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ canva_id: parsed.canva_id || id, data: parsed.data || {} }),
       })
       const r = await res.json()
-      if (r.url) setRenderResult(r.url)
-      else toast.error(r.error || 'Render failed')
-    } catch (e) {
-      toast.error('Error: ' + e.message)
-    } finally {
-      setRendering(false)
-    }
+      if (r.url) setRenderResult(r.url); else toast.error(r.error || 'Render failed')
+    } catch (e) { toast.error('Error: ' + e.message) }
+    finally { setRendering(false) }
   }
 
   const dragState = useRef(null)
   const handleMouseDown = (e, node, mode = 'move') => {
-    e.stopPropagation()
-    e.preventDefault()
+    e.stopPropagation(); e.preventDefault()
     setSelectedId(node.id)
     dragState.current = {
-      nodeId: node.id,
-      startX: e.clientX,
-      startY: e.clientY,
-      orig: { x: node.x, y: node.y, width: node.width, height: node.height },
-      mode,
+      nodeId: node.id, startX: e.clientX, startY: e.clientY,
+      orig: { x: node.x, y: node.y, width: node.width, height: node.height }, mode,
     }
     const onMove = (e) => {
-      const ds = dragState.current
-      if (!ds) return
+      const ds = dragState.current; if (!ds) return
       const dx = (e.clientX - ds.startX) / scale
       const dy = (e.clientY - ds.startY) / scale
       if (ds.mode === 'move') {
@@ -309,57 +296,107 @@ function Editor() {
     document.addEventListener('mouseup', onUp)
   }
 
-  if (!canvas) {
-    return (
-      <div className="h-screen flex items-center justify-center">
-        <p className="text-muted-foreground">Loading canvas...</p>
-      </div>
-    )
-  }
+  if (!canvas) return <div className="h-screen flex items-center justify-center"><p className="text-muted-foreground">Loading canvas...</p></div>
 
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
   const curlBody = JSON.stringify(
-    {
-      canva_id: id,
-      data: Object.fromEntries(
-        (canvas.nodes || [])
-          .filter((n) => n.dynamic_key)
-          .map((n) => [n.dynamic_key, n.type === 'text' ? 'your text' : 'https://example.com/image.png'])
-      ),
-    },
-    null,
-    2
+    { canva_id: id, data: Object.fromEntries((canvas.nodes || []).filter((n) => n.dynamic_key).map((n) => [n.dynamic_key, n.type === 'text' ? 'your text' : 'https://example.com/image.png'])) },
+    null, 2,
   )
   const curlCmd = `curl -X POST ${origin}/api/render \\
   -H "Content-Type: application/json" \\
   -d '${JSON.stringify({ canva_id: id, data: Object.fromEntries((canvas.nodes || []).filter((n) => n.dynamic_key).map((n) => [n.dynamic_key, n.type === 'text' ? 'your text' : 'https://example.com/image.png'])) })}'`
 
+  // Helpers for rendering nodes in editor (and selecting their preview style)
+  const renderNodeContent = (node) => {
+    if (node.type === 'text') return node.text || ''
+    if (node.type === 'image' && node.src) {
+      return <img src={node.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} draggable={false} />
+    }
+    if (node.type === 'image') return <div style={{ width: '100%', height: '100%', background: '#e5e7eb' }} />
+    return null
+  }
+
+  const nodeBoxStyle = (node) => {
+    const base = {
+      position: 'absolute', left: node.x, top: node.y, width: node.width, height: node.height,
+      cursor: 'move',
+      outline: selectedId === node.id ? '3px solid #6366f1' : 'none', outlineOffset: 2,
+      display: 'flex', alignItems: 'center',
+      justifyContent: node.textAlign === 'center' ? 'center' : node.textAlign === 'right' ? 'flex-end' : 'flex-start',
+      overflow: 'hidden', userSelect: 'none', whiteSpace: 'pre-wrap',
+    }
+    if (node.type === 'text') {
+      return { ...base, color: node.color || '#000', fontSize: node.fontSize || 48, fontWeight: node.fontWeight || 400, fontFamily: `'${node.fontFamily || 'Inter'}', sans-serif` }
+    }
+    if (node.type === 'shape') {
+      return {
+        ...base,
+        background: node.fill || '#6366f1',
+        borderRadius: node.shape === 'ellipse' ? Math.max(node.width, node.height) : (node.borderRadius || 0),
+        border: node.strokeWidth ? `${node.strokeWidth}px solid ${node.stroke || '#000'}` : 'none',
+      }
+    }
+    if (node.type === 'gradient') {
+      return {
+        ...base,
+        backgroundImage: buildGradientCssClient(node),
+        borderRadius: node.shape === 'ellipse' ? Math.max(node.width, node.height) : (node.borderRadius || 0),
+      }
+    }
+    return base
+  }
+
+  const layerIcon = (n) => {
+    if (n.type === 'text') return <Type className="w-3.5 h-3.5" />
+    if (n.type === 'image') return <ImageIcon className="w-3.5 h-3.5" />
+    if (n.type === 'gradient') return <Palette className="w-3.5 h-3.5" />
+    if (n.shape === 'ellipse') return <Circle className="w-3.5 h-3.5" />
+    return <Square className="w-3.5 h-3.5" />
+  }
+
+  const layerLabel = (n) => {
+    if (n.dynamic_key) return `{${n.dynamic_key}}`
+    if (n.type === 'text') return (n.text || '').slice(0, 18) || 'Text'
+    if (n.type === 'image') return 'Image'
+    if (n.type === 'gradient') return 'Gradient'
+    return n.shape === 'ellipse' ? 'Circle' : 'Rectangle'
+  }
+
+  const addStop = () => {
+    if (!selected) return
+    const stops = [...(selected.stops || [])]
+    const lastPos = stops.length ? stops[stops.length - 1].position : 0
+    stops.push({ color: '#ffffff', position: Math.min(100, lastPos + 25) })
+    updateNode(selected.id, { stops })
+  }
+  const removeStop = (idx) => {
+    if (!selected) return
+    const stops = (selected.stops || []).filter((_, i) => i !== idx)
+    if (stops.length < 2) return toast.error('A gradient needs at least 2 stops')
+    updateNode(selected.id, { stops })
+  }
+  const updateStop = (idx, patch) => {
+    if (!selected) return
+    const stops = (selected.stops || []).map((s, i) => (i === idx ? { ...s, ...patch } : s))
+    updateNode(selected.id, { stops })
+  }
+  const applyPreset = (preset) => {
+    if (!selected) return
+    updateNode(selected.id, { stops: preset.stops, angle: preset.angle, gradientType: 'linear' })
+  }
+
   return (
     <div className="h-screen flex flex-col bg-slate-50">
       <div className="border-b bg-white px-4 py-2.5 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => router.push('/')}>
-            <ArrowLeft className="w-4 h-4" />
-          </Button>
-          <Input
-            value={canvas.name}
-            onChange={(e) => setCanvas({ ...canvas, name: e.target.value })}
-            className="w-64 font-medium"
-          />
+          <Button variant="ghost" size="icon" onClick={() => router.push('/')}><ArrowLeft className="w-4 h-4" /></Button>
+          <Input value={canvas.name} onChange={(e) => setCanvas({ ...canvas, name: e.target.value })} className="w-64 font-medium" />
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => setApiDialog(true)}>
-            <Code2 className="w-4 h-4 mr-2" />
-            API
-          </Button>
-          <Button variant="outline" size="sm" onClick={() => setRenderDialog(true)}>
-            <Play className="w-4 h-4 mr-2" />
-            Test Render
-          </Button>
-          <Button size="sm" onClick={save}>
-            <Save className="w-4 h-4 mr-2" />
-            Save
-          </Button>
+          <Button variant="outline" size="sm" onClick={() => setApiDialog(true)}><Code2 className="w-4 h-4 mr-2" />API</Button>
+          <Button variant="outline" size="sm" onClick={() => setRenderDialog(true)}><Play className="w-4 h-4 mr-2" />Test Render</Button>
+          <Button size="sm" onClick={save}><Save className="w-4 h-4 mr-2" />Save</Button>
         </div>
       </div>
 
@@ -367,42 +404,22 @@ function Editor() {
         <div className="w-60 border-r bg-white p-3 flex flex-col">
           <p className="text-xs font-semibold uppercase text-muted-foreground mb-2 tracking-wide">Add Elements</p>
           <div className="space-y-1.5">
-            <Button variant="outline" className="w-full justify-start" onClick={addText}>
-              <Type className="w-4 h-4 mr-2" /> Add Text
-            </Button>
-            <Button variant="outline" className="w-full justify-start" onClick={openImageDialog}>
-              <ImageIcon className="w-4 h-4 mr-2" /> Add Image
-            </Button>
+            <Button variant="outline" className="w-full justify-start" onClick={addText}><Type className="w-4 h-4 mr-2" /> Add Text</Button>
+            <Button variant="outline" className="w-full justify-start" onClick={openImageDialog}><ImageIcon className="w-4 h-4 mr-2" /> Add Image</Button>
+            <Button variant="outline" className="w-full justify-start" onClick={addGradient}><Palette className="w-4 h-4 mr-2" /> Add Gradient</Button>
             <div className="grid grid-cols-2 gap-1.5">
-              <Button variant="outline" size="sm" onClick={() => addShape('rect')}>
-                <Square className="w-4 h-4 mr-1" /> Rect
-              </Button>
-              <Button variant="outline" size="sm" onClick={() => addShape('ellipse')}>
-                <Circle className="w-4 h-4 mr-1" /> Circle
-              </Button>
+              <Button variant="outline" size="sm" onClick={() => addShape('rect')}><Square className="w-4 h-4 mr-1" /> Rect</Button>
+              <Button variant="outline" size="sm" onClick={() => addShape('ellipse')}><Circle className="w-4 h-4 mr-1" /> Circle</Button>
             </div>
           </div>
           <div className="mt-5 pt-4 border-t flex-1 min-h-0 flex flex-col">
             <p className="text-xs font-semibold uppercase text-muted-foreground mb-2 tracking-wide">Layers</p>
             <div className="flex-1 overflow-y-auto space-y-1">
               {(canvas.nodes || []).slice().reverse().map((n) => (
-                <div
-                  key={n.id}
-                  onClick={() => setSelectedId(n.id)}
-                  className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-sm ${
-                    selectedId === n.id ? 'bg-primary/10 text-primary' : 'hover:bg-muted'
-                  }`}
-                >
-                  {n.type === 'text' ? <Type className="w-3.5 h-3.5" /> : n.type === 'image' ? <ImageIcon className="w-3.5 h-3.5" /> : n.shape === 'ellipse' ? <Circle className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />}
-                  <span className="truncate flex-1">
-                    {n.dynamic_key
-                      ? `{${n.dynamic_key}}`
-                      : n.type === 'text'
-                      ? (n.text || '').slice(0, 18) || 'Text'
-                      : n.type === 'image'
-                      ? 'Image'
-                      : n.shape === 'ellipse' ? 'Circle' : 'Rectangle'}
-                  </span>
+                <div key={n.id} onClick={() => setSelectedId(n.id)}
+                  className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-sm ${selectedId === n.id ? 'bg-primary/10 text-primary' : 'hover:bg-muted'}`}>
+                  {layerIcon(n)}
+                  <span className="truncate flex-1">{layerLabel(n)}</span>
                   {n.dynamic_key && <span className="text-[10px] bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded">DYN</span>}
                 </div>
               ))}
@@ -410,113 +427,26 @@ function Editor() {
           </div>
         </div>
 
-        <div
-          className="flex-1 overflow-auto flex items-center justify-center p-6"
+        <div className="flex-1 overflow-auto flex items-center justify-center p-6"
           style={{ background: 'repeating-conic-gradient(#e5e7eb 0% 25%, #f3f4f6 0% 50%) 50% / 24px 24px' }}
-          onClick={() => setSelectedId(null)}
-        >
-          <div
-            ref={canvasRef}
-            className="relative shadow-2xl"
-            style={{
-              width: canvas.width * scale,
-              height: canvas.height * scale,
-              background: canvas.background || '#ffffff',
-            }}
-          >
-            <div
-              style={{
-                width: canvas.width,
-                height: canvas.height,
-                transform: `scale(${scale})`,
-                transformOrigin: 'top left',
-                position: 'relative',
-              }}
-            >
+          onClick={() => setSelectedId(null)}>
+          <div ref={canvasRef} className="relative shadow-2xl"
+            style={{ width: canvas.width * scale, height: canvas.height * scale, background: canvas.background || '#ffffff' }}>
+            <div style={{ width: canvas.width, height: canvas.height, transform: `scale(${scale})`, transformOrigin: 'top left', position: 'relative' }}>
               {(canvas.nodes || []).map((node) => (
-                <div
-                  key={node.id}
+                <div key={node.id}
                   onMouseDown={(e) => handleMouseDown(e, node, 'move')}
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    setSelectedId(node.id)
-                  }}
-                  style={{
-                    position: 'absolute',
-                    left: node.x,
-                    top: node.y,
-                    width: node.width,
-                    height: node.height,
-                    cursor: 'move',
-                    outline: selectedId === node.id ? '3px solid #6366f1' : 'none',
-                    outlineOffset: 2,
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent:
-                      node.textAlign === 'center'
-                        ? 'center'
-                        : node.textAlign === 'right'
-                        ? 'flex-end'
-                        : 'flex-start',
-                    color: node.color || '#000000',
-                    fontSize: node.fontSize || 48,
-                    fontWeight: node.fontWeight || 400,
-                    fontFamily: 'Inter, sans-serif',
-                    overflow: 'hidden',
-                    userSelect: 'none',
-                    whiteSpace: 'pre-wrap',
-                    background: node.type === 'shape' ? (node.fill || '#6366f1') : 'transparent',
-                    borderRadius: node.type === 'shape' && node.shape === 'ellipse' ? Math.max(node.width, node.height) : (node.borderRadius || 0),
-                    border: node.type === 'shape' && node.strokeWidth ? `${node.strokeWidth}px solid ${node.stroke || '#000'}` : 'none',
-                  }}
-                >
-                  {node.type === 'text' ? (
-                    node.text || ''
-                  ) : node.type === 'image' && node.src ? (
-                    <img
-                      src={node.src}
-                      alt=""
-                      style={{ width: '100%', height: '100%', objectFit: 'cover' }}
-                      draggable={false}
-                    />
-                  ) : node.type === 'image' ? (
-                    <div style={{ width: '100%', height: '100%', background: '#e5e7eb' }} />
-                  ) : null}
+                  onClick={(e) => { e.stopPropagation(); setSelectedId(node.id) }}
+                  style={nodeBoxStyle(node)}>
+                  {renderNodeContent(node)}
                   {selectedId === node.id && (
-                    <div
-                      onMouseDown={(e) => handleMouseDown(e, node, 'resize')}
-                      style={{
-                        position: 'absolute',
-                        right: -8,
-                        bottom: -8,
-                        width: 20,
-                        height: 20,
-                        background: '#6366f1',
-                        borderRadius: 4,
-                        cursor: 'nwse-resize',
-                        border: '2px solid white',
-                      }}
-                    />
+                    <div onMouseDown={(e) => handleMouseDown(e, node, 'resize')}
+                      style={{ position: 'absolute', right: -8, bottom: -8, width: 20, height: 20, background: '#6366f1', borderRadius: 4, cursor: 'nwse-resize', border: '2px solid white' }} />
                   )}
                 </div>
               ))}
               {selected && selected.dynamic_key && (
-                <div
-                  style={{
-                    position: 'absolute',
-                    left: selected.x,
-                    top: selected.y - 32,
-                    fontSize: 16,
-                    color: '#fff',
-                    background: '#6366f1',
-                    padding: '4px 10px',
-                    borderRadius: 4,
-                    fontWeight: 500,
-                    pointerEvents: 'none',
-                    fontFamily: 'monospace',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
+                <div style={{ position: 'absolute', left: selected.x, top: selected.y - 32, fontSize: 16, color: '#fff', background: '#6366f1', padding: '4px 10px', borderRadius: 4, fontWeight: 500, pointerEvents: 'none', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
                   {`{${selected.dynamic_key}}`}
                 </div>
               )}
@@ -530,42 +460,18 @@ function Editor() {
               <p className="text-xs font-semibold uppercase text-muted-foreground mb-3 tracking-wide">Canvas Settings</p>
               <div className="space-y-3">
                 <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <Label className="text-xs">Width</Label>
-                    <Input
-                      type="number"
-                      value={canvas.width}
-                      onChange={(e) => setCanvas({ ...canvas, width: parseInt(e.target.value) || 1080 })}
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-xs">Height</Label>
-                    <Input
-                      type="number"
-                      value={canvas.height}
-                      onChange={(e) => setCanvas({ ...canvas, height: parseInt(e.target.value) || 1080 })}
-                    />
-                  </div>
+                  <div><Label className="text-xs">Width</Label><Input type="number" value={canvas.width} onChange={(e) => setCanvas({ ...canvas, width: parseInt(e.target.value) || 1080 })} /></div>
+                  <div><Label className="text-xs">Height</Label><Input type="number" value={canvas.height} onChange={(e) => setCanvas({ ...canvas, height: parseInt(e.target.value) || 1080 })} /></div>
                 </div>
                 <div>
                   <Label className="text-xs">Background</Label>
                   <div className="flex gap-2">
-                    <Input
-                      type="color"
-                      className="w-14 p-1 h-10"
-                      value={canvas.background || '#ffffff'}
-                      onChange={(e) => setCanvas({ ...canvas, background: e.target.value })}
-                    />
-                    <Input
-                      value={canvas.background || '#ffffff'}
-                      onChange={(e) => setCanvas({ ...canvas, background: e.target.value })}
-                    />
+                    <Input type="color" className="w-14 p-1 h-10" value={canvas.background || '#ffffff'} onChange={(e) => setCanvas({ ...canvas, background: e.target.value })} />
+                    <Input value={canvas.background || '#ffffff'} onChange={(e) => setCanvas({ ...canvas, background: e.target.value })} />
                   </div>
                 </div>
                 <div className="pt-3 border-t mt-3">
-                  <p className="text-xs text-muted-foreground">
-                    Tip: Set a <span className="font-mono bg-muted px-1 rounded">dynamic_key</span> on any element to make it dynamic via the API.
-                  </p>
+                  <p className="text-xs text-muted-foreground">Tip: Set a <span className="font-mono bg-muted px-1 rounded">dynamic_key</span> on any element to make it dynamic via the API.</p>
                 </div>
               </div>
             </div>
@@ -573,27 +479,16 @@ function Editor() {
             <div>
               <div className="flex items-center justify-between mb-3">
                 <p className="text-xs font-semibold uppercase text-muted-foreground tracking-wide">
-                  {selected.type === 'text' ? 'Text' : selected.type === 'image' ? 'Image' : 'Shape'} Properties
+                  {selected.type === 'text' ? 'Text' : selected.type === 'image' ? 'Image' : selected.type === 'gradient' ? 'Gradient' : 'Shape'} Properties
                 </p>
-                <Button variant="ghost" size="icon" onClick={() => deleteNode(selected.id)}>
-                  <Trash2 className="w-4 h-4" />
-                </Button>
+                <Button variant="ghost" size="icon" onClick={() => deleteNode(selected.id)}><Trash2 className="w-4 h-4" /></Button>
               </div>
 
-              {/* Z-order controls */}
               <div className="flex gap-1 mb-3 pb-3 border-b">
-                <Button variant="outline" size="sm" className="flex-1" onClick={() => moveNode(selected.id, 'front')} title="Bring to front">
-                  <ChevronsUp className="w-3.5 h-3.5" />
-                </Button>
-                <Button variant="outline" size="sm" className="flex-1" onClick={() => moveNode(selected.id, 'forward')} title="Bring forward">
-                  <ChevronUp className="w-3.5 h-3.5" />
-                </Button>
-                <Button variant="outline" size="sm" className="flex-1" onClick={() => moveNode(selected.id, 'backward')} title="Send backward">
-                  <ChevronDown className="w-3.5 h-3.5" />
-                </Button>
-                <Button variant="outline" size="sm" className="flex-1" onClick={() => moveNode(selected.id, 'back')} title="Send to back">
-                  <ChevronsDown className="w-3.5 h-3.5" />
-                </Button>
+                <Button variant="outline" size="sm" className="flex-1" onClick={() => moveNode(selected.id, 'front')} title="Bring to front"><ChevronsUp className="w-3.5 h-3.5" /></Button>
+                <Button variant="outline" size="sm" className="flex-1" onClick={() => moveNode(selected.id, 'forward')} title="Bring forward"><ChevronUp className="w-3.5 h-3.5" /></Button>
+                <Button variant="outline" size="sm" className="flex-1" onClick={() => moveNode(selected.id, 'backward')} title="Send backward"><ChevronDown className="w-3.5 h-3.5" /></Button>
+                <Button variant="outline" size="sm" className="flex-1" onClick={() => moveNode(selected.id, 'back')} title="Send to back"><ChevronsDown className="w-3.5 h-3.5" /></Button>
               </div>
 
               <div className="space-y-3">
@@ -601,28 +496,23 @@ function Editor() {
                   <>
                     <div>
                       <Label className="text-xs">Text</Label>
-                      <Textarea
-                        value={selected.text || ''}
-                        onChange={(e) => updateNode(selected.id, { text: e.target.value })}
-                        rows={3}
-                      />
+                      <Textarea value={selected.text || ''} onChange={(e) => updateNode(selected.id, { text: e.target.value })} rows={3} />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Font Family</Label>
+                      <select className="w-full h-10 border rounded-md px-3 text-sm bg-white"
+                        style={{ fontFamily: `'${selected.fontFamily || 'Inter'}', sans-serif` }}
+                        value={selected.fontFamily || 'Inter'}
+                        onChange={(e) => updateNode(selected.id, { fontFamily: e.target.value })}>
+                        {FONT_OPTIONS.map((f) => (
+                          <option key={f} value={f} style={{ fontFamily: `'${f}', sans-serif` }}>{f}</option>
+                        ))}
+                      </select>
                     </div>
                     <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <Label className="text-xs">Font Size</Label>
-                        <Input
-                          type="number"
-                          value={selected.fontSize || 48}
-                          onChange={(e) => updateNode(selected.id, { fontSize: parseInt(e.target.value) || 48 })}
-                        />
-                      </div>
-                      <div>
-                        <Label className="text-xs">Weight</Label>
-                        <select
-                          className="w-full h-10 border rounded-md px-3 text-sm bg-white"
-                          value={selected.fontWeight || 400}
-                          onChange={(e) => updateNode(selected.id, { fontWeight: parseInt(e.target.value) })}
-                        >
+                      <div><Label className="text-xs">Font Size</Label><Input type="number" value={selected.fontSize || 48} onChange={(e) => updateNode(selected.id, { fontSize: parseInt(e.target.value) || 48 })} /></div>
+                      <div><Label className="text-xs">Weight</Label>
+                        <select className="w-full h-10 border rounded-md px-3 text-sm bg-white" value={selected.fontWeight || 400} onChange={(e) => updateNode(selected.id, { fontWeight: parseInt(e.target.value) })}>
                           <option value={400}>Regular</option>
                           <option value={700}>Bold</option>
                         </select>
@@ -631,25 +521,13 @@ function Editor() {
                     <div>
                       <Label className="text-xs">Color</Label>
                       <div className="flex gap-2">
-                        <Input
-                          type="color"
-                          className="w-14 p-1 h-10"
-                          value={selected.color || '#000000'}
-                          onChange={(e) => updateNode(selected.id, { color: e.target.value })}
-                        />
-                        <Input
-                          value={selected.color || '#000000'}
-                          onChange={(e) => updateNode(selected.id, { color: e.target.value })}
-                        />
+                        <Input type="color" className="w-14 p-1 h-10" value={selected.color || '#000000'} onChange={(e) => updateNode(selected.id, { color: e.target.value })} />
+                        <Input value={selected.color || '#000000'} onChange={(e) => updateNode(selected.id, { color: e.target.value })} />
                       </div>
                     </div>
                     <div>
                       <Label className="text-xs">Alignment</Label>
-                      <select
-                        className="w-full h-10 border rounded-md px-3 text-sm bg-white"
-                        value={selected.textAlign || 'left'}
-                        onChange={(e) => updateNode(selected.id, { textAlign: e.target.value })}
-                      >
+                      <select className="w-full h-10 border rounded-md px-3 text-sm bg-white" value={selected.textAlign || 'left'} onChange={(e) => updateNode(selected.id, { textAlign: e.target.value })}>
                         <option value="left">Left</option>
                         <option value="center">Center</option>
                         <option value="right">Right</option>
@@ -657,121 +535,116 @@ function Editor() {
                     </div>
                   </>
                 )}
+
                 {selected.type === 'image' && (
                   <>
-                    <div>
-                      <Label className="text-xs">Image URL</Label>
-                      <Input
-                        value={selected.src || ''}
-                        onChange={(e) => updateNode(selected.id, { src: e.target.value })}
-                      />
-                    </div>
-                    <div>
-                      <Label className="text-xs">Border Radius</Label>
-                      <Input
-                        type="number"
-                        value={selected.borderRadius || 0}
-                        onChange={(e) => updateNode(selected.id, { borderRadius: parseInt(e.target.value) || 0 })}
-                      />
-                    </div>
+                    <div><Label className="text-xs">Image URL</Label><Input value={selected.src || ''} onChange={(e) => updateNode(selected.id, { src: e.target.value })} /></div>
+                    <div><Label className="text-xs">Border Radius</Label><Input type="number" value={selected.borderRadius || 0} onChange={(e) => updateNode(selected.id, { borderRadius: parseInt(e.target.value) || 0 })} /></div>
                   </>
                 )}
+
                 {selected.type === 'shape' && (
                   <>
                     <div>
                       <Label className="text-xs">Fill Color</Label>
                       <div className="flex gap-2">
-                        <Input
-                          type="color"
-                          className="w-14 p-1 h-10"
-                          value={selected.fill || '#6366f1'}
-                          onChange={(e) => updateNode(selected.id, { fill: e.target.value })}
-                        />
-                        <Input
-                          value={selected.fill || '#6366f1'}
-                          onChange={(e) => updateNode(selected.id, { fill: e.target.value })}
-                        />
+                        <Input type="color" className="w-14 p-1 h-10" value={selected.fill || '#6366f1'} onChange={(e) => updateNode(selected.id, { fill: e.target.value })} />
+                        <Input value={selected.fill || '#6366f1'} onChange={(e) => updateNode(selected.id, { fill: e.target.value })} />
                       </div>
                     </div>
                     <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <Label className="text-xs">Stroke</Label>
-                        <Input
-                          type="color"
-                          className="w-full p-1 h-10"
-                          value={selected.stroke || '#000000'}
-                          onChange={(e) => updateNode(selected.id, { stroke: e.target.value })}
-                        />
-                      </div>
-                      <div>
-                        <Label className="text-xs">Stroke Width</Label>
-                        <Input
-                          type="number"
-                          value={selected.strokeWidth || 0}
-                          onChange={(e) => updateNode(selected.id, { strokeWidth: parseInt(e.target.value) || 0 })}
-                        />
-                      </div>
+                      <div><Label className="text-xs">Stroke</Label><Input type="color" className="w-full p-1 h-10" value={selected.stroke || '#000000'} onChange={(e) => updateNode(selected.id, { stroke: e.target.value })} /></div>
+                      <div><Label className="text-xs">Stroke Width</Label><Input type="number" value={selected.strokeWidth || 0} onChange={(e) => updateNode(selected.id, { strokeWidth: parseInt(e.target.value) || 0 })} /></div>
                     </div>
                     {selected.shape === 'rect' && (
-                      <div>
-                        <Label className="text-xs">Corner Radius</Label>
-                        <Input
-                          type="number"
-                          value={selected.borderRadius || 0}
-                          onChange={(e) => updateNode(selected.id, { borderRadius: parseInt(e.target.value) || 0 })}
-                        />
-                      </div>
+                      <div><Label className="text-xs">Corner Radius</Label><Input type="number" value={selected.borderRadius || 0} onChange={(e) => updateNode(selected.id, { borderRadius: parseInt(e.target.value) || 0 })} /></div>
                     )}
                   </>
                 )}
-                <div className="grid grid-cols-2 gap-2">
-                  <div>
-                    <Label className="text-xs">X</Label>
-                    <Input
-                      type="number"
-                      value={selected.x}
-                      onChange={(e) => updateNode(selected.id, { x: parseInt(e.target.value) || 0 })}
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-xs">Y</Label>
-                    <Input
-                      type="number"
-                      value={selected.y}
-                      onChange={(e) => updateNode(selected.id, { y: parseInt(e.target.value) || 0 })}
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-xs">Width</Label>
-                    <Input
-                      type="number"
-                      value={selected.width}
-                      onChange={(e) => updateNode(selected.id, { width: parseInt(e.target.value) || 0 })}
-                    />
-                  </div>
-                  <div>
-                    <Label className="text-xs">Height</Label>
-                    <Input
-                      type="number"
-                      value={selected.height}
-                      onChange={(e) => updateNode(selected.id, { height: parseInt(e.target.value) || 0 })}
-                    />
-                  </div>
+
+                {selected.type === 'gradient' && (
+                  <>
+                    {/* Preview */}
+                    <div className="rounded-md border h-16" style={{ backgroundImage: buildGradientCssClient(selected) }} />
+
+                    <div>
+                      <Label className="text-xs">Type</Label>
+                      <select className="w-full h-10 border rounded-md px-3 text-sm bg-white"
+                        value={selected.gradientType || 'linear'}
+                        onChange={(e) => updateNode(selected.id, { gradientType: e.target.value })}>
+                        <option value="linear">Linear</option>
+                        <option value="radial">Radial</option>
+                      </select>
+                    </div>
+
+                    {(selected.gradientType || 'linear') === 'linear' && (
+                      <div>
+                        <div className="flex items-center justify-between">
+                          <Label className="text-xs">Angle</Label>
+                          <span className="text-xs text-muted-foreground">{selected.angle ?? 90}°</span>
+                        </div>
+                        <Slider value={[selected.angle ?? 90]} min={0} max={360} step={1}
+                          onValueChange={(v) => updateNode(selected.id, { angle: v[0] })} />
+                      </div>
+                    )}
+
+                    <div>
+                      <Label className="text-xs">Shape</Label>
+                      <select className="w-full h-10 border rounded-md px-3 text-sm bg-white"
+                        value={selected.shape || 'rect'}
+                        onChange={(e) => updateNode(selected.id, { shape: e.target.value })}>
+                        <option value="rect">Rectangle</option>
+                        <option value="ellipse">Ellipse</option>
+                      </select>
+                    </div>
+
+                    {selected.shape !== 'ellipse' && (
+                      <div><Label className="text-xs">Corner Radius</Label><Input type="number" value={selected.borderRadius || 0} onChange={(e) => updateNode(selected.id, { borderRadius: parseInt(e.target.value) || 0 })} /></div>
+                    )}
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <Label className="text-xs">Color Stops</Label>
+                        <Button variant="ghost" size="sm" className="h-7 px-2" onClick={addStop}><Plus className="w-3.5 h-3.5 mr-1" />Add</Button>
+                      </div>
+                      <div className="space-y-1.5">
+                        {(selected.stops || []).map((stop, i) => (
+                          <div key={i} className="flex items-center gap-1.5">
+                            <Input type="color" className="w-10 h-9 p-1 shrink-0" value={stop.color} onChange={(e) => updateStop(i, { color: e.target.value })} />
+                            <Input value={stop.color} onChange={(e) => updateStop(i, { color: e.target.value })} className="text-xs font-mono" />
+                            <Input type="number" min={0} max={100} value={stop.position} onChange={(e) => updateStop(i, { position: Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) })} className="w-16" />
+                            <span className="text-xs text-muted-foreground">%</span>
+                            <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => removeStop(i)}><X className="w-3.5 h-3.5" /></Button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div>
+                      <Label className="text-xs">Presets</Label>
+                      <div className="grid grid-cols-4 gap-1.5 mt-1">
+                        {GRADIENT_PRESETS.map((p) => (
+                          <button key={p.name} title={p.name} onClick={() => applyPreset(p)}
+                            className="h-10 rounded border hover:ring-2 hover:ring-primary transition"
+                            style={{ backgroundImage: buildGradientCssClient({ stops: p.stops, angle: p.angle, gradientType: 'linear' }) }} />
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
+
+                <div className="grid grid-cols-2 gap-2 pt-3 border-t">
+                  <div><Label className="text-xs">X</Label><Input type="number" value={selected.x} onChange={(e) => updateNode(selected.id, { x: parseInt(e.target.value) || 0 })} /></div>
+                  <div><Label className="text-xs">Y</Label><Input type="number" value={selected.y} onChange={(e) => updateNode(selected.id, { y: parseInt(e.target.value) || 0 })} /></div>
+                  <div><Label className="text-xs">Width</Label><Input type="number" value={selected.width} onChange={(e) => updateNode(selected.id, { width: parseInt(e.target.value) || 0 })} /></div>
+                  <div><Label className="text-xs">Height</Label><Input type="number" value={selected.height} onChange={(e) => updateNode(selected.id, { height: parseInt(e.target.value) || 0 })} /></div>
                 </div>
-                {selected.type !== 'shape' && (
+
+                {(selected.type === 'text' || selected.type === 'image') && (
                   <div className="pt-3 border-t">
-                    <Label className="text-xs flex items-center gap-2 mb-1">
-                      Dynamic Key
-                      <span className="text-[10px] text-muted-foreground font-normal">(optional)</span>
-                    </Label>
-                    <Input
-                      placeholder="e.g. text_1"
-                      value={selected.dynamic_key || ''}
-                      onChange={(e) => updateNode(selected.id, { dynamic_key: e.target.value })}
-                    />
-                    <p className="text-xs text-muted-foreground mt-1">
-                      Set this to make the element dynamic via the API.
-                    </p>
+                    <Label className="text-xs flex items-center gap-2 mb-1">Dynamic Key <span className="text-[10px] text-muted-foreground font-normal">(optional)</span></Label>
+                    <Input placeholder="e.g. text_1" value={selected.dynamic_key || ''} onChange={(e) => updateNode(selected.id, { dynamic_key: e.target.value })} />
+                    <p className="text-xs text-muted-foreground mt-1">Set this to make the element dynamic via the API.</p>
                   </div>
                 )}
               </div>
@@ -794,35 +667,16 @@ function Editor() {
             </TabsList>
             <TabsContent value="url" className="space-y-3 pt-3">
               <Label className="text-xs">Image URL</Label>
-              <Input
-                placeholder="https://example.com/image.png"
-                value={imageUrl}
-                onChange={(e) => setImageUrl(e.target.value)}
-                autoFocus
-                onKeyDown={(e) => e.key === 'Enter' && addImageByUrl()}
-              />
+              <Input placeholder="https://example.com/image.png" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} autoFocus onKeyDown={(e) => e.key === 'Enter' && addImageByUrl()} />
               <Button onClick={addImageByUrl} className="w-full">Add Image</Button>
             </TabsContent>
             <TabsContent value="upload" className="space-y-3 pt-3">
-              <div
-                className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:bg-muted/50 transition"
-                onClick={() => fileInputRef.current?.click()}
-              >
+              <div className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:bg-muted/50 transition" onClick={() => fileInputRef.current?.click()}>
                 <Upload className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
                 <p className="text-sm font-medium">Click to upload</p>
                 <p className="text-xs text-muted-foreground">PNG, JPG, WEBP up to 6MB</p>
               </div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={(e) => {
-                  const f = e.target.files?.[0]
-                  if (f) uploadFile(f)
-                  e.target.value = ''
-                }}
-              />
+              <input ref={fileInputRef} type="file" accept="image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadFile(f); e.target.value = '' }} />
               {uploading && <p className="text-sm text-center text-muted-foreground">Uploading...</p>}
             </TabsContent>
           </Tabs>
@@ -834,43 +688,23 @@ function Editor() {
         <DialogContent className="max-w-4xl">
           <DialogHeader>
             <DialogTitle>Test Dynamic Render</DialogTitle>
-            <DialogDescription>
-              Provide JSON matching your dynamic keys. Auto-saves before rendering.
-            </DialogDescription>
+            <DialogDescription>Provide JSON matching your dynamic keys. Auto-saves before rendering.</DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-4">
             <div>
               <Label className="text-xs mb-1">Request body (POST /api/render)</Label>
-              <Textarea
-                rows={14}
-                className="font-mono text-xs"
-                value={renderData}
-                onChange={(e) => setRenderData(e.target.value)}
-              />
-              <Button onClick={testRender} disabled={rendering} className="mt-3 w-full">
-                {rendering ? 'Rendering...' : 'Render'}
-              </Button>
+              <Textarea rows={14} className="font-mono text-xs" value={renderData} onChange={(e) => setRenderData(e.target.value)} />
+              <Button onClick={testRender} disabled={rendering} className="mt-3 w-full">{rendering ? 'Rendering...' : 'Render'}</Button>
             </div>
             <div>
               <Label className="text-xs mb-1">Result</Label>
               <div className="aspect-square bg-slate-100 rounded border flex items-center justify-center overflow-hidden">
-                {renderResult ? (
-                  <img src={renderResult} alt="rendered" className="max-w-full max-h-full" />
-                ) : (
-                  <span className="text-xs text-muted-foreground">Render result will appear here</span>
-                )}
+                {renderResult ? <img src={renderResult} alt="rendered" className="max-w-full max-h-full" /> : <span className="text-xs text-muted-foreground">Render result will appear here</span>}
               </div>
               {renderResult && (
                 <div className="mt-2">
                   <p className="text-xs text-muted-foreground mb-1">Image URL:</p>
-                  <a
-                    href={renderResult}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-xs text-primary underline break-all"
-                  >
-                    {renderResult}
-                  </a>
+                  <a href={renderResult} target="_blank" rel="noreferrer" className="text-xs text-primary underline break-all">{renderResult}</a>
                 </div>
               )}
             </div>
@@ -891,48 +725,22 @@ function Editor() {
               <TabsTrigger value="curl">cURL</TabsTrigger>
             </TabsList>
             <TabsContent value="json" className="space-y-3 pt-3">
-              <div>
-                <Label className="text-xs mb-1">Endpoint</Label>
-                <pre className="bg-slate-900 text-slate-100 p-3 rounded text-xs overflow-x-auto">{`POST ${origin}/api/render`}</pre>
-              </div>
+              <div><Label className="text-xs mb-1">Endpoint</Label><pre className="bg-slate-900 text-slate-100 p-3 rounded text-xs overflow-x-auto">{`POST ${origin}/api/render`}</pre></div>
               <div>
                 <div className="flex items-center justify-between mb-1">
                   <Label className="text-xs">Request Body</Label>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      navigator.clipboard.writeText(curlBody)
-                      setCopied(true)
-                      setTimeout(() => setCopied(false), 1500)
-                    }}
-                  >
+                  <Button size="sm" variant="ghost" onClick={() => { navigator.clipboard.writeText(curlBody); setCopied(true); setTimeout(() => setCopied(false), 1500) }}>
                     {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                   </Button>
                 </div>
                 <pre className="bg-slate-900 text-slate-100 p-3 rounded text-xs overflow-x-auto">{curlBody}</pre>
               </div>
-              <div>
-                <Label className="text-xs mb-1">Response</Label>
-                <pre className="bg-slate-900 text-slate-100 p-3 rounded text-xs overflow-x-auto">{JSON.stringify(
-                  { url: `${origin}/api/rendered/<render_id>`, render_id: '<uuid>' },
-                  null,
-                  2
-                )}</pre>
-              </div>
+              <div><Label className="text-xs mb-1">Response</Label><pre className="bg-slate-900 text-slate-100 p-3 rounded text-xs overflow-x-auto">{JSON.stringify({ url: `${origin}/api/rendered/<render_id>`, render_id: '<uuid>' }, null, 2)}</pre></div>
             </TabsContent>
             <TabsContent value="curl" className="space-y-3 pt-3">
               <div className="flex items-center justify-between mb-1">
                 <Label className="text-xs">Run this in your terminal</Label>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
-                    navigator.clipboard.writeText(curlCmd)
-                    setCopied(true)
-                    setTimeout(() => setCopied(false), 1500)
-                  }}
-                >
+                <Button size="sm" variant="ghost" onClick={() => { navigator.clipboard.writeText(curlCmd); setCopied(true); setTimeout(() => setCopied(false), 1500) }}>
                   {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                 </Button>
               </div>
