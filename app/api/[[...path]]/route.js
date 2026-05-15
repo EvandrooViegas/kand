@@ -65,6 +65,26 @@ async function handleRoute(request, { params }) {
       return corsify(NextResponse.json(rest))
     }
 
+    // Duplicate canvas
+    const dupMatch = route.match(/^\/canvases\/([^/]+)\/duplicate$/)
+    if (dupMatch && method === 'POST') {
+      const srcId = dupMatch[1]
+      const src = await db.collection('canvases').findOne({ id: srcId })
+      if (!src) return corsify(NextResponse.json({ error: 'Not found' }, { status: 404 }))
+      const newCanvas = {
+        ...src,
+        id: uuidv4(),
+        name: (src.name || 'Canvas') + ' (Copy)',
+        nodes: (src.nodes || []).map((n) => ({ ...n, id: uuidv4() })),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }
+      delete newCanvas._id
+      await db.collection('canvases').insertOne(newCanvas)
+      const { _id, ...rest } = newCanvas
+      return corsify(NextResponse.json(rest))
+    }
+
     // Single canvas operations
     const canvasMatch = route.match(/^\/canvases\/([^/]+)$/)
     if (canvasMatch) {
@@ -89,6 +109,52 @@ async function handleRoute(request, { params }) {
         await db.collection('canvases').deleteOne({ id })
         return corsify(NextResponse.json({ success: true }))
       }
+    }
+
+    // Image uploads: accept base64 data URL in JSON body
+    if (route === '/uploads' && method === 'POST') {
+      const body = await request.json().catch(() => ({}))
+      const dataUrl = body.data
+      if (!dataUrl || typeof dataUrl !== 'string' || !dataUrl.startsWith('data:')) {
+        return corsify(NextResponse.json({ error: 'data must be a data: URL string' }, { status: 400 }))
+      }
+      const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/)
+      if (!match) return corsify(NextResponse.json({ error: 'Invalid data URL' }, { status: 400 }))
+      const contentType = match[1]
+      const buf = Buffer.from(match[2], 'base64')
+      if (buf.length > 6 * 1024 * 1024) {
+        return corsify(NextResponse.json({ error: 'Image too large (max 6MB)' }, { status: 413 }))
+      }
+      const uploadId = uuidv4()
+      await db.collection('uploads').insertOne({
+        id: uploadId,
+        contentType,
+        bytes: new Binary(buf),
+        createdAt: new Date(),
+      })
+      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || ''
+      return corsify(NextResponse.json({
+        id: uploadId,
+        url: `${baseUrl}/api/uploads/${uploadId}`,
+        relativeUrl: `/api/uploads/${uploadId}`,
+      }))
+    }
+
+    // Serve uploaded image
+    const uploadMatch = route.match(/^\/uploads\/([^/]+)$/)
+    if (uploadMatch && method === 'GET') {
+      const id = uploadMatch[1]
+      const u = await db.collection('uploads').findOne({ id })
+      if (!u) return corsify(NextResponse.json({ error: 'Not found' }, { status: 404 }))
+      const buf = u.bytes?.buffer ? Buffer.from(u.bytes.buffer) : Buffer.from(u.bytes)
+      return new NextResponse(buf, {
+        status: 200,
+        headers: {
+          'Content-Type': u.contentType || 'image/png',
+          'Cache-Control': 'public, max-age=31536000, immutable',
+          'Access-Control-Allow-Origin': '*',
+        }
+      })
     }
 
     // Render canvas to PNG

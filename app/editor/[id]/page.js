@@ -11,7 +11,9 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from '@/components/ui/dialog'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import {
   ArrowLeft,
   Type,
@@ -22,6 +24,14 @@ import {
   Code2,
   Copy,
   Check,
+  Square,
+  Circle,
+  ChevronUp,
+  ChevronDown,
+  ChevronsUp,
+  ChevronsDown,
+  Upload,
+  Link as LinkIcon,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { v4 as uuidv4 } from 'uuid'
@@ -40,6 +50,10 @@ function Editor() {
   const [rendering, setRendering] = useState(false)
   const [apiDialog, setApiDialog] = useState(false)
   const [copied, setCopied] = useState(false)
+  const [imageDialog, setImageDialog] = useState(false)
+  const [imageUrl, setImageUrl] = useState('')
+  const [uploading, setUploading] = useState(false)
+  const fileInputRef = useRef(null)
 
   useEffect(() => {
     fetch(`/api/canvases/${id}`)
@@ -68,7 +82,6 @@ function Editor() {
     return () => window.removeEventListener('resize', updateScale)
   }, [canvas?.width, canvas?.height])
 
-  // Build default JSON for test renderer
   useEffect(() => {
     if (!canvas) return
     const sample = {}
@@ -80,6 +93,20 @@ function Editor() {
     setRenderData(JSON.stringify({ canva_id: id, data: sample }, null, 2))
   }, [canvas?.id, canvas?.nodes?.length, renderDialog])
 
+  // Keyboard shortcut: Delete key removes selected
+  useEffect(() => {
+    const handler = (e) => {
+      if (!selectedId) return
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault()
+        deleteNode(selectedId)
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [selectedId])
+
   const selected = canvas?.nodes?.find((n) => n.id === selectedId)
 
   const updateNode = (nodeId, patch) => {
@@ -89,6 +116,24 @@ function Editor() {
   const deleteNode = (nodeId) => {
     setCanvas((c) => ({ ...c, nodes: c.nodes.filter((n) => n.id !== nodeId) }))
     setSelectedId(null)
+  }
+
+  // Z-order operations (nodes array: index 0 = back, last = front)
+  const moveNode = (nodeId, direction) => {
+    setCanvas((c) => {
+      const nodes = [...c.nodes]
+      const idx = nodes.findIndex((n) => n.id === nodeId)
+      if (idx === -1) return c
+      const [node] = nodes.splice(idx, 1)
+      let newIdx
+      if (direction === 'forward') newIdx = Math.min(nodes.length, idx + 1)
+      else if (direction === 'backward') newIdx = Math.max(0, idx - 1)
+      else if (direction === 'front') newIdx = nodes.length
+      else if (direction === 'back') newIdx = 0
+      else newIdx = idx
+      nodes.splice(newIdx, 0, node)
+      return { ...c, nodes }
+    })
   }
 
   const addText = () => {
@@ -109,9 +154,30 @@ function Editor() {
     setSelectedId(newNode.id)
   }
 
-  const addImage = () => {
-    const src = prompt('Image URL:', 'https://images.unsplash.com/photo-1506905925346-21bda4d32df4?w=800')
-    if (!src) return
+  const addShape = (shape) => {
+    const newNode = {
+      id: uuidv4(),
+      type: 'shape',
+      shape,
+      x: Math.round((canvas.width - 300) / 2),
+      y: Math.round((canvas.height - 300) / 2),
+      width: 300,
+      height: 300,
+      fill: '#6366f1',
+      stroke: '#000000',
+      strokeWidth: 0,
+      borderRadius: shape === 'rect' ? 0 : 9999,
+    }
+    setCanvas((c) => ({ ...c, nodes: [...(c.nodes || []), newNode] }))
+    setSelectedId(newNode.id)
+  }
+
+  const openImageDialog = () => {
+    setImageUrl('')
+    setImageDialog(true)
+  }
+
+  const insertImageNode = (src) => {
     const newNode = {
       id: uuidv4(),
       type: 'image',
@@ -120,9 +186,52 @@ function Editor() {
       width: 500,
       height: 500,
       src,
+      borderRadius: 0,
     }
     setCanvas((c) => ({ ...c, nodes: [...(c.nodes || []), newNode] }))
     setSelectedId(newNode.id)
+    setImageDialog(false)
+  }
+
+  const addImageByUrl = () => {
+    if (!imageUrl.trim()) {
+      toast.error('Enter an image URL')
+      return
+    }
+    insertImageNode(imageUrl.trim())
+  }
+
+  const uploadFile = async (file) => {
+    if (!file) return
+    if (file.size > 6 * 1024 * 1024) {
+      toast.error('Image too large (max 6MB)')
+      return
+    }
+    setUploading(true)
+    try {
+      const reader = new FileReader()
+      const dataUrl = await new Promise((resolve, reject) => {
+        reader.onload = () => resolve(reader.result)
+        reader.onerror = reject
+        reader.readAsDataURL(file)
+      })
+      const res = await fetch('/api/uploads', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ data: dataUrl }),
+      })
+      const result = await res.json()
+      if (result.url) {
+        insertImageNode(result.url)
+        toast.success('Uploaded')
+      } else {
+        toast.error(result.error || 'Upload failed')
+      }
+    } catch (e) {
+      toast.error('Upload failed: ' + e.message)
+    } finally {
+      setUploading(false)
+    }
   }
 
   const save = async () => {
@@ -145,7 +254,6 @@ function Editor() {
     setRenderResult(null)
     try {
       const parsed = renderData.trim() ? JSON.parse(renderData) : { canva_id: id, data: {} }
-      // Auto-save before rendering so changes are reflected
       await fetch(`/api/canvases/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -210,10 +318,24 @@ function Editor() {
   }
 
   const origin = typeof window !== 'undefined' ? window.location.origin : ''
+  const curlBody = JSON.stringify(
+    {
+      canva_id: id,
+      data: Object.fromEntries(
+        (canvas.nodes || [])
+          .filter((n) => n.dynamic_key)
+          .map((n) => [n.dynamic_key, n.type === 'text' ? 'your text' : 'https://example.com/image.png'])
+      ),
+    },
+    null,
+    2
+  )
+  const curlCmd = `curl -X POST ${origin}/api/render \\
+  -H "Content-Type: application/json" \\
+  -d '${JSON.stringify({ canva_id: id, data: Object.fromEntries((canvas.nodes || []).filter((n) => n.dynamic_key).map((n) => [n.dynamic_key, n.type === 'text' ? 'your text' : 'https://example.com/image.png'])) })}'`
 
   return (
     <div className="h-screen flex flex-col bg-slate-50">
-      {/* Top bar */}
       <div className="border-b bg-white px-4 py-2.5 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon" onClick={() => router.push('/')}>
@@ -242,16 +364,23 @@ function Editor() {
       </div>
 
       <div className="flex-1 flex overflow-hidden">
-        {/* Left toolbar */}
         <div className="w-60 border-r bg-white p-3 flex flex-col">
           <p className="text-xs font-semibold uppercase text-muted-foreground mb-2 tracking-wide">Add Elements</p>
           <div className="space-y-1.5">
             <Button variant="outline" className="w-full justify-start" onClick={addText}>
               <Type className="w-4 h-4 mr-2" /> Add Text
             </Button>
-            <Button variant="outline" className="w-full justify-start" onClick={addImage}>
+            <Button variant="outline" className="w-full justify-start" onClick={openImageDialog}>
               <ImageIcon className="w-4 h-4 mr-2" /> Add Image
             </Button>
+            <div className="grid grid-cols-2 gap-1.5">
+              <Button variant="outline" size="sm" onClick={() => addShape('rect')}>
+                <Square className="w-4 h-4 mr-1" /> Rect
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => addShape('ellipse')}>
+                <Circle className="w-4 h-4 mr-1" /> Circle
+              </Button>
+            </div>
           </div>
           <div className="mt-5 pt-4 border-t flex-1 min-h-0 flex flex-col">
             <p className="text-xs font-semibold uppercase text-muted-foreground mb-2 tracking-wide">Layers</p>
@@ -264,13 +393,15 @@ function Editor() {
                     selectedId === n.id ? 'bg-primary/10 text-primary' : 'hover:bg-muted'
                   }`}
                 >
-                  {n.type === 'text' ? <Type className="w-3.5 h-3.5" /> : <ImageIcon className="w-3.5 h-3.5" />}
+                  {n.type === 'text' ? <Type className="w-3.5 h-3.5" /> : n.type === 'image' ? <ImageIcon className="w-3.5 h-3.5" /> : n.shape === 'ellipse' ? <Circle className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />}
                   <span className="truncate flex-1">
                     {n.dynamic_key
                       ? `{${n.dynamic_key}}`
                       : n.type === 'text'
                       ? (n.text || '').slice(0, 18) || 'Text'
-                      : 'Image'}
+                      : n.type === 'image'
+                      ? 'Image'
+                      : n.shape === 'ellipse' ? 'Circle' : 'Rectangle'}
                   </span>
                   {n.dynamic_key && <span className="text-[10px] bg-indigo-100 text-indigo-700 px-1.5 py-0.5 rounded">DYN</span>}
                 </div>
@@ -279,7 +410,6 @@ function Editor() {
           </div>
         </div>
 
-        {/* Canvas area */}
         <div
           className="flex-1 overflow-auto flex items-center justify-center p-6"
           style={{ background: 'repeating-conic-gradient(#e5e7eb 0% 25%, #f3f4f6 0% 50%) 50% / 24px 24px' }}
@@ -335,20 +465,23 @@ function Editor() {
                     overflow: 'hidden',
                     userSelect: 'none',
                     whiteSpace: 'pre-wrap',
+                    background: node.type === 'shape' ? (node.fill || '#6366f1') : 'transparent',
+                    borderRadius: node.type === 'shape' && node.shape === 'ellipse' ? Math.max(node.width, node.height) : (node.borderRadius || 0),
+                    border: node.type === 'shape' && node.strokeWidth ? `${node.strokeWidth}px solid ${node.stroke || '#000'}` : 'none',
                   }}
                 >
                   {node.type === 'text' ? (
                     node.text || ''
-                  ) : node.src ? (
+                  ) : node.type === 'image' && node.src ? (
                     <img
                       src={node.src}
                       alt=""
                       style={{ width: '100%', height: '100%', objectFit: 'cover' }}
                       draggable={false}
                     />
-                  ) : (
+                  ) : node.type === 'image' ? (
                     <div style={{ width: '100%', height: '100%', background: '#e5e7eb' }} />
-                  )}
+                  ) : null}
                   {selectedId === node.id && (
                     <div
                       onMouseDown={(e) => handleMouseDown(e, node, 'resize')}
@@ -365,32 +498,32 @@ function Editor() {
                       }}
                     />
                   )}
-                  {node.dynamic_key && (
-                    <div
-                      style={{
-                        position: 'absolute',
-                        top: -28,
-                        left: 0,
-                        fontSize: 14,
-                        color: '#fff',
-                        background: '#6366f1',
-                        padding: '2px 8px',
-                        borderRadius: 4,
-                        fontWeight: 500,
-                        pointerEvents: 'none',
-                        fontFamily: 'monospace',
-                      }}
-                    >
-                      {`{${node.dynamic_key}}`}
-                    </div>
-                  )}
                 </div>
               ))}
+              {selected && selected.dynamic_key && (
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: selected.x,
+                    top: selected.y - 32,
+                    fontSize: 16,
+                    color: '#fff',
+                    background: '#6366f1',
+                    padding: '4px 10px',
+                    borderRadius: 4,
+                    fontWeight: 500,
+                    pointerEvents: 'none',
+                    fontFamily: 'monospace',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {`{${selected.dynamic_key}}`}
+                </div>
+              )}
             </div>
           </div>
         </div>
 
-        {/* Right panel */}
         <div className="w-80 border-l bg-white p-4 overflow-y-auto">
           {!selected ? (
             <div>
@@ -440,12 +573,29 @@ function Editor() {
             <div>
               <div className="flex items-center justify-between mb-3">
                 <p className="text-xs font-semibold uppercase text-muted-foreground tracking-wide">
-                  {selected.type === 'text' ? 'Text' : 'Image'} Properties
+                  {selected.type === 'text' ? 'Text' : selected.type === 'image' ? 'Image' : 'Shape'} Properties
                 </p>
                 <Button variant="ghost" size="icon" onClick={() => deleteNode(selected.id)}>
                   <Trash2 className="w-4 h-4" />
                 </Button>
               </div>
+
+              {/* Z-order controls */}
+              <div className="flex gap-1 mb-3 pb-3 border-b">
+                <Button variant="outline" size="sm" className="flex-1" onClick={() => moveNode(selected.id, 'front')} title="Bring to front">
+                  <ChevronsUp className="w-3.5 h-3.5" />
+                </Button>
+                <Button variant="outline" size="sm" className="flex-1" onClick={() => moveNode(selected.id, 'forward')} title="Bring forward">
+                  <ChevronUp className="w-3.5 h-3.5" />
+                </Button>
+                <Button variant="outline" size="sm" className="flex-1" onClick={() => moveNode(selected.id, 'backward')} title="Send backward">
+                  <ChevronDown className="w-3.5 h-3.5" />
+                </Button>
+                <Button variant="outline" size="sm" className="flex-1" onClick={() => moveNode(selected.id, 'back')} title="Send to back">
+                  <ChevronsDown className="w-3.5 h-3.5" />
+                </Button>
+              </div>
+
               <div className="space-y-3">
                 {selected.type === 'text' && (
                   <>
@@ -508,13 +658,71 @@ function Editor() {
                   </>
                 )}
                 {selected.type === 'image' && (
-                  <div>
-                    <Label className="text-xs">Default Image URL</Label>
-                    <Input
-                      value={selected.src || ''}
-                      onChange={(e) => updateNode(selected.id, { src: e.target.value })}
-                    />
-                  </div>
+                  <>
+                    <div>
+                      <Label className="text-xs">Image URL</Label>
+                      <Input
+                        value={selected.src || ''}
+                        onChange={(e) => updateNode(selected.id, { src: e.target.value })}
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Border Radius</Label>
+                      <Input
+                        type="number"
+                        value={selected.borderRadius || 0}
+                        onChange={(e) => updateNode(selected.id, { borderRadius: parseInt(e.target.value) || 0 })}
+                      />
+                    </div>
+                  </>
+                )}
+                {selected.type === 'shape' && (
+                  <>
+                    <div>
+                      <Label className="text-xs">Fill Color</Label>
+                      <div className="flex gap-2">
+                        <Input
+                          type="color"
+                          className="w-14 p-1 h-10"
+                          value={selected.fill || '#6366f1'}
+                          onChange={(e) => updateNode(selected.id, { fill: e.target.value })}
+                        />
+                        <Input
+                          value={selected.fill || '#6366f1'}
+                          onChange={(e) => updateNode(selected.id, { fill: e.target.value })}
+                        />
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <Label className="text-xs">Stroke</Label>
+                        <Input
+                          type="color"
+                          className="w-full p-1 h-10"
+                          value={selected.stroke || '#000000'}
+                          onChange={(e) => updateNode(selected.id, { stroke: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs">Stroke Width</Label>
+                        <Input
+                          type="number"
+                          value={selected.strokeWidth || 0}
+                          onChange={(e) => updateNode(selected.id, { strokeWidth: parseInt(e.target.value) || 0 })}
+                        />
+                      </div>
+                    </div>
+                    {selected.shape === 'rect' && (
+                      <div>
+                        <Label className="text-xs">Corner Radius</Label>
+                        <Input
+                          type="number"
+                          value={selected.borderRadius || 0}
+                          onChange={(e) => updateNode(selected.id, { borderRadius: parseInt(e.target.value) || 0 })}
+                        />
+                      </div>
+                    )}
+                  </>
                 )}
                 <div className="grid grid-cols-2 gap-2">
                   <div>
@@ -550,26 +758,76 @@ function Editor() {
                     />
                   </div>
                 </div>
-                <div className="pt-3 border-t">
-                  <Label className="text-xs flex items-center gap-2 mb-1">
-                    Dynamic Key
-                    <span className="text-[10px] text-muted-foreground font-normal">(optional)</span>
-                  </Label>
-                  <Input
-                    placeholder="e.g. text_1"
-                    value={selected.dynamic_key || ''}
-                    onChange={(e) => updateNode(selected.id, { dynamic_key: e.target.value })}
-                  />
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Set this to make the element dynamic via the API. The value in the request body under{' '}
-                    <span className="font-mono bg-muted px-1 rounded">data.{selected.dynamic_key || 'your_key'}</span> will replace this {selected.type}.
-                  </p>
-                </div>
+                {selected.type !== 'shape' && (
+                  <div className="pt-3 border-t">
+                    <Label className="text-xs flex items-center gap-2 mb-1">
+                      Dynamic Key
+                      <span className="text-[10px] text-muted-foreground font-normal">(optional)</span>
+                    </Label>
+                    <Input
+                      placeholder="e.g. text_1"
+                      value={selected.dynamic_key || ''}
+                      onChange={(e) => updateNode(selected.id, { dynamic_key: e.target.value })}
+                    />
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Set this to make the element dynamic via the API.
+                    </p>
+                  </div>
+                )}
               </div>
             </div>
           )}
         </div>
       </div>
+
+      {/* Add Image dialog */}
+      <Dialog open={imageDialog} onOpenChange={setImageDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add Image</DialogTitle>
+            <DialogDescription>From a URL or upload a file</DialogDescription>
+          </DialogHeader>
+          <Tabs defaultValue="url">
+            <TabsList className="grid grid-cols-2 w-full">
+              <TabsTrigger value="url"><LinkIcon className="w-3.5 h-3.5 mr-2" />URL</TabsTrigger>
+              <TabsTrigger value="upload"><Upload className="w-3.5 h-3.5 mr-2" />Upload</TabsTrigger>
+            </TabsList>
+            <TabsContent value="url" className="space-y-3 pt-3">
+              <Label className="text-xs">Image URL</Label>
+              <Input
+                placeholder="https://example.com/image.png"
+                value={imageUrl}
+                onChange={(e) => setImageUrl(e.target.value)}
+                autoFocus
+                onKeyDown={(e) => e.key === 'Enter' && addImageByUrl()}
+              />
+              <Button onClick={addImageByUrl} className="w-full">Add Image</Button>
+            </TabsContent>
+            <TabsContent value="upload" className="space-y-3 pt-3">
+              <div
+                className="border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:bg-muted/50 transition"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <Upload className="w-8 h-8 mx-auto mb-2 text-muted-foreground" />
+                <p className="text-sm font-medium">Click to upload</p>
+                <p className="text-xs text-muted-foreground">PNG, JPG, WEBP up to 6MB</p>
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={(e) => {
+                  const f = e.target.files?.[0]
+                  if (f) uploadFile(f)
+                  e.target.value = ''
+                }}
+              />
+              {uploading && <p className="text-sm text-center text-muted-foreground">Uploading...</p>}
+            </TabsContent>
+          </Tabs>
+        </DialogContent>
+      </Dialog>
 
       {/* Test render dialog */}
       <Dialog open={renderDialog} onOpenChange={setRenderDialog}>
@@ -577,7 +835,7 @@ function Editor() {
           <DialogHeader>
             <DialogTitle>Test Dynamic Render</DialogTitle>
             <DialogDescription>
-              Provide JSON matching your dynamic keys. Auto-saves canvas before rendering.
+              Provide JSON matching your dynamic keys. Auto-saves before rendering.
             </DialogDescription>
           </DialogHeader>
           <div className="grid grid-cols-2 gap-4">
@@ -627,31 +885,50 @@ function Editor() {
             <DialogTitle>API Usage</DialogTitle>
             <DialogDescription>Render this canvas dynamically via HTTP.</DialogDescription>
           </DialogHeader>
-          <div className="space-y-3">
-            <div>
-              <Label className="text-xs mb-1">Endpoint</Label>
-              <pre className="bg-slate-900 text-slate-100 p-3 rounded text-xs overflow-x-auto">{`POST ${origin}/api/render`}</pre>
-            </div>
-            <div>
+          <Tabs defaultValue="json">
+            <TabsList className="grid grid-cols-2 w-full">
+              <TabsTrigger value="json">JSON</TabsTrigger>
+              <TabsTrigger value="curl">cURL</TabsTrigger>
+            </TabsList>
+            <TabsContent value="json" className="space-y-3 pt-3">
+              <div>
+                <Label className="text-xs mb-1">Endpoint</Label>
+                <pre className="bg-slate-900 text-slate-100 p-3 rounded text-xs overflow-x-auto">{`POST ${origin}/api/render`}</pre>
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <Label className="text-xs">Request Body</Label>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => {
+                      navigator.clipboard.writeText(curlBody)
+                      setCopied(true)
+                      setTimeout(() => setCopied(false), 1500)
+                    }}
+                  >
+                    {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                  </Button>
+                </div>
+                <pre className="bg-slate-900 text-slate-100 p-3 rounded text-xs overflow-x-auto">{curlBody}</pre>
+              </div>
+              <div>
+                <Label className="text-xs mb-1">Response</Label>
+                <pre className="bg-slate-900 text-slate-100 p-3 rounded text-xs overflow-x-auto">{JSON.stringify(
+                  { url: `${origin}/api/rendered/<render_id>`, render_id: '<uuid>' },
+                  null,
+                  2
+                )}</pre>
+              </div>
+            </TabsContent>
+            <TabsContent value="curl" className="space-y-3 pt-3">
               <div className="flex items-center justify-between mb-1">
-                <Label className="text-xs">Request Body</Label>
+                <Label className="text-xs">Run this in your terminal</Label>
                 <Button
                   size="sm"
                   variant="ghost"
                   onClick={() => {
-                    const body = JSON.stringify(
-                      {
-                        canva_id: id,
-                        data: Object.fromEntries(
-                          (canvas.nodes || [])
-                            .filter((n) => n.dynamic_key)
-                            .map((n) => [n.dynamic_key, n.type === 'text' ? 'your text' : 'https://example.com/image.png'])
-                        ),
-                      },
-                      null,
-                      2
-                    )
-                    navigator.clipboard.writeText(body)
+                    navigator.clipboard.writeText(curlCmd)
                     setCopied(true)
                     setTimeout(() => setCopied(false), 1500)
                   }}
@@ -659,31 +936,10 @@ function Editor() {
                   {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                 </Button>
               </div>
-              <pre className="bg-slate-900 text-slate-100 p-3 rounded text-xs overflow-x-auto">{JSON.stringify(
-                {
-                  canva_id: id,
-                  data: Object.fromEntries(
-                    (canvas.nodes || [])
-                      .filter((n) => n.dynamic_key)
-                      .map((n) => [n.dynamic_key, n.type === 'text' ? 'your text' : 'https://example.com/image.png'])
-                  ),
-                },
-                null,
-                2
-              )}</pre>
-            </div>
-            <div>
-              <Label className="text-xs mb-1">Response</Label>
-              <pre className="bg-slate-900 text-slate-100 p-3 rounded text-xs overflow-x-auto">{JSON.stringify(
-                { url: `${origin}/api/rendered/<render_id>`, render_id: '<uuid>' },
-                null,
-                2
-              )}</pre>
-            </div>
-            <p className="text-xs text-muted-foreground">
-              The returned <span className="font-mono">url</span> serves the PNG directly. You can use it in img tags, share, etc.
-            </p>
-          </div>
+              <pre className="bg-slate-900 text-slate-100 p-3 rounded text-xs overflow-x-auto whitespace-pre-wrap break-all">{curlCmd}</pre>
+              <p className="text-xs text-muted-foreground">Pipe the response URL to any HTTP client or paste it into a browser to view the PNG.</p>
+            </TabsContent>
+          </Tabs>
         </DialogContent>
       </Dialog>
     </div>

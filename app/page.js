@@ -12,7 +12,7 @@ import {
   DialogFooter,
   DialogTrigger,
 } from '@/components/ui/dialog'
-import { Plus, Image as ImageIcon, Trash2, Pencil, Sparkles } from 'lucide-react'
+import { Plus, Image as ImageIcon, Trash2, Pencil, Sparkles, Copy } from 'lucide-react'
 import { toast } from 'sonner'
 
 function CanvasPreview({ canvas }) {
@@ -37,9 +37,14 @@ function CanvasPreview({ canvas }) {
               fontSize: n.fontSize || 48,
               fontWeight: n.fontWeight || 400,
               overflow: 'hidden',
+              background: n.type === 'shape' ? (n.fill || '#6366f1') : 'transparent',
+              borderRadius: n.type === 'shape' && n.shape === 'ellipse' ? Math.max(n.width, n.height) : (n.borderRadius || 0),
+              border: n.type === 'shape' && n.strokeWidth ? `${n.strokeWidth}px solid ${n.stroke || '#000'}` : 'none',
             }}
           >
-            {n.type === 'text' ? (n.text || '') : n.src ? <img src={n.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} /> : null}
+            {n.type === 'text' ? (n.text || '') : n.type === 'image' && n.src ? (
+              <img src={n.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            ) : null}
           </div>
         ))}
       </div>
@@ -92,6 +97,20 @@ function Dashboard() {
     await fetch(`/api/canvases/${id}`, { method: 'DELETE' })
     toast.success('Canvas deleted')
     load()
+  }
+
+  const duplicateCanvas = async (id) => {
+    try {
+      const res = await fetch(`/api/canvases/${id}/duplicate`, { method: 'POST' })
+      if (res.ok) {
+        toast.success('Canvas duplicated')
+        load()
+      } else {
+        toast.error('Duplicate failed')
+      }
+    } catch (e) {
+      toast.error('Duplicate failed')
+    }
   }
 
   return (
@@ -168,19 +187,22 @@ function Dashboard() {
                 >
                   <CanvasPreview canvas={c} />
                 </div>
-                <CardContent className="p-4 flex items-center justify-between">
-                  <div className="min-w-0">
-                    <h3 className="font-semibold truncate">{c.name}</h3>
+                <CardContent className="p-3 flex items-center justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <h3 className="font-semibold truncate text-sm">{c.name}</h3>
                     <p className="text-xs text-muted-foreground">
-                      {(c.nodes || []).length} elements · {new Date(c.updatedAt).toLocaleDateString()}
+                      {(c.nodes || []).length} elements
                     </p>
                   </div>
-                  <div className="flex gap-1">
-                    <Button size="icon" variant="ghost" onClick={() => router.push(`/editor/${c.id}`)}>
-                      <Pencil className="w-4 h-4" />
+                  <div className="flex gap-0.5">
+                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => router.push(`/editor/${c.id}`)} title="Edit">
+                      <Pencil className="w-3.5 h-3.5" />
                     </Button>
-                    <Button size="icon" variant="ghost" onClick={() => deleteCanvas(c.id)}>
-                      <Trash2 className="w-4 h-4" />
+                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => duplicateCanvas(c.id)} title="Duplicate">
+                      <Copy className="w-3.5 h-3.5" />
+                    </Button>
+                    <Button size="icon" variant="ghost" className="h-8 w-8" onClick={() => deleteCanvas(c.id)} title="Delete">
+                      <Trash2 className="w-3.5 h-3.5" />
                     </Button>
                   </div>
                 </CardContent>
