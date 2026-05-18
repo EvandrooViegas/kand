@@ -11,9 +11,12 @@ let db
 
 async function connectToMongo() {
   if (!client) {
-    client = new MongoClient(process.env.MONGO_URL)
+    // 1. Added your database name 'kand' directly into the fallback connection string path
+    client = new MongoClient(process.env.MONGO_URL || "mongodb+srv://evand:admin@kand.z1wlvpu.mongodb.net/kand?appName=kand")
     await client.connect()
-    db = client.db(process.env.DB_NAME)
+    
+    // 2. Changed the default fallback database name from "admin" to "kand"
+    db = client.db(process.env.DB_NAME || "kand")
   }
   return db
 }
@@ -42,7 +45,7 @@ async function handleRoute(request, { params }) {
     }
 
     // List canvases
-    if (route === '/canvases' && method === 'GET') {
+    if (route === '/canvases' && method === 'GET') { 
       const list = await db.collection('canvases').find({}).sort({ updatedAt: -1 }).limit(500).toArray()
       return corsify(NextResponse.json(list.map(({ _id, ...rest }) => rest)))
     }
@@ -132,7 +135,11 @@ async function handleRoute(request, { params }) {
         bytes: new Binary(buf),
         createdAt: new Date(),
       })
-      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || ''
+      let baseUrl = process.env.NEXT_PUBLIC_BASE_URL || ''
+      if (baseUrl && !baseUrl.startsWith('http')) baseUrl = `https://${baseUrl}`
+      // use http for localhost
+      if (baseUrl.includes('localhost')) baseUrl = baseUrl.replace('https://', 'http://')
+      
       return corsify(NextResponse.json({
         id: uploadId,
         url: `${baseUrl}/api/uploads/${uploadId}`,
@@ -142,20 +149,23 @@ async function handleRoute(request, { params }) {
 
     // Serve uploaded image
     const uploadMatch = route.match(/^\/uploads\/([^/]+)$/)
-    if (uploadMatch && method === 'GET') {
-      const id = uploadMatch[1]
-      const u = await db.collection('uploads').findOne({ id })
-      if (!u) return corsify(NextResponse.json({ error: 'Not found' }, { status: 404 }))
-      const buf = u.bytes?.buffer ? Buffer.from(u.bytes.buffer) : Buffer.from(u.bytes)
-      return new NextResponse(buf, {
-        status: 200,
-        headers: {
-          'Content-Type': u.contentType || 'image/png',
-          'Cache-Control': 'public, max-age=31536000, immutable',
-          'Access-Control-Allow-Origin': '*',
-        }
-      })
+if (uploadMatch && method === 'GET') {
+  const id = uploadMatch[1]
+  const u = await db.collection('uploads').findOne({ id })
+  if (!u) return corsify(NextResponse.json({ error: 'Not found' }, { status: 404 }))
+  
+  // FIX: Use .value() if it's a MongoDB Binary object, otherwise fall back safely
+  const buf = u.bytes && typeof u.bytes.value === 'function' ? u.bytes.value() : Buffer.from(u.bytes)
+  
+  return new NextResponse(buf, {
+    status: 200,
+    headers: {
+      'Content-Type': u.contentType || 'image/png',
+      'Cache-Control': 'public, max-age=31536000, immutable',
+      'Access-Control-Allow-Origin': '*',
     }
+  })
+}
 
     // Render canvas to PNG
     if (route === '/render' && method === 'POST') {
@@ -177,27 +187,33 @@ async function handleRoute(request, { params }) {
         png: new Binary(png),
         createdAt: new Date()
       })
-      const baseUrl = process.env.NEXT_PUBLIC_BASE_URL || ''
+      let baseUrl = process.env.NEXT_PUBLIC_BASE_URL || ''
+      if (baseUrl && !baseUrl.startsWith('http')) baseUrl = `https://${baseUrl}`
+      if (baseUrl.includes('localhost')) baseUrl = baseUrl.replace('https://', 'http://')
+
       const url = `${baseUrl}/api/rendered/${renderId}`
       return corsify(NextResponse.json({ url, render_id: renderId, canva_id: canvaId }))
     }
 
     // Serve rendered PNG
-    const renderedMatch = route.match(/^\/rendered\/([^/]+?)(?:\.png)?$/)
-    if (renderedMatch && method === 'GET') {
-      const id = renderedMatch[1]
-      const r = await db.collection('renders').findOne({ id })
-      if (!r) return corsify(NextResponse.json({ error: 'Not found' }, { status: 404 }))
-      const buf = r.png?.buffer ? Buffer.from(r.png.buffer) : Buffer.from(r.png)
-      return new NextResponse(buf, {
-        status: 200,
-        headers: {
-          'Content-Type': 'image/png',
-          'Cache-Control': 'public, max-age=86400',
-          'Access-Control-Allow-Origin': '*',
-        }
-      })
+  const renderedMatch = route.match(/^\/rendered\/([^/]+?)(?:\.png)?$/)
+if (renderedMatch && method === 'GET') {
+  const id = renderedMatch[1]
+  const r = await db.collection('renders').findOne({ id })
+  if (!r) return corsify(NextResponse.json({ error: 'Not found' }, { status: 404 }))
+  
+  // FIX: Use .value() to avoid memory pool corruption
+  const buf = r.png && typeof r.png.value === 'function' ? r.png.value() : Buffer.from(r.png)
+  
+  return new NextResponse(buf, {
+    status: 200,
+    headers: {
+      'Content-Type': 'image/png',
+      'Cache-Control': 'public, max-age=86400',
+      'Access-Control-Allow-Origin': '*',
     }
+  })
+}
 
     return corsify(NextResponse.json({ error: `Route ${route} not found` }, { status: 404 }))
   } catch (error) {
