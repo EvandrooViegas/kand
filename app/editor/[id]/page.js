@@ -447,35 +447,87 @@ function Editor() {
         const isText = canvasRefObj.current?.nodes?.find((n) => n.id === ds.nodeId)?.type === 'text'
         const n = canvasRefObj.current?.nodes?.find((n) => n.id === ds.nodeId)
         
-        let rawW = Math.max(isText ? 40 : 20, Math.round(ds.orig.width + dx))
-        let rawH = Math.max(20, Math.round(ds.orig.height + dy))
+        const angle = (ds.orig.rotation || 0) * (Math.PI / 180)
+        const u = { x: Math.cos(angle), y: Math.sin(angle) }
+        const v = { x: -Math.sin(angle), y: Math.cos(angle) }
+        
+        const cx = ds.orig.x + ds.orig.width / 2
+        const cy = ds.orig.y + ds.orig.height / 2
+        
+        const TL = {
+           x: cx - (ds.orig.width/2)*u.x - (ds.orig.height/2)*v.x,
+           y: cy - (ds.orig.width/2)*u.y - (ds.orig.height/2)*v.y
+        }
+        
+        const BR = {
+           x: cx + (ds.orig.width/2)*u.x + (ds.orig.height/2)*v.x,
+           y: cy + (ds.orig.width/2)*u.y + (ds.orig.height/2)*v.y
+        }
+        
+        const newBR = { x: BR.x + dx, y: BR.y + dy }
+        const diag = { x: newBR.x - TL.x, y: newBR.y - TL.y }
+        
+        let rawW = diag.x * u.x + diag.y * u.y
+        let rawH = diag.x * v.x + diag.y * v.y
+        
+        rawW = Math.max(isText ? 40 : 20, Math.round(rawW))
+        rawH = Math.max(20, Math.round(rawH))
+        
         if (n?.maxWidth) rawW = Math.min(rawW, n.maxWidth)
         if (n?.maxHeight) rawH = Math.min(rawH, n.maxHeight)
 
         const lines = []
         const SNAP = 8
-        const rightEdge = ds.orig.x + rawW
-        const bottomEdge = ds.orig.y + rawH
-        
-        if (Math.abs(rightEdge - canvas.width) < SNAP) { rawW = canvas.width - ds.orig.x; lines.push({ type: 'v', pos: canvas.width }) }
-        if (Math.abs(bottomEdge - canvas.height) < SNAP) { rawH = canvas.height - ds.orig.y; lines.push({ type: 'h', pos: canvas.height }) }
-        
-        for (const peer of canvasRefObj.current?.nodes || []) {
-           if (peer.id === ds.nodeId) continue
-           if (Math.abs(rightEdge - peer.x) < SNAP) { rawW = peer.x - ds.orig.x; lines.push({ type: 'v', pos: peer.x }) }
-           if (Math.abs(rightEdge - (peer.x + peer.width)) < SNAP) { rawW = (peer.x + peer.width) - ds.orig.x; lines.push({ type: 'v', pos: peer.x + peer.width }) }
-           if (!isText && Math.abs(bottomEdge - peer.y) < SNAP) { rawH = peer.y - ds.orig.y; lines.push({ type: 'h', pos: peer.y }) }
-           if (!isText && Math.abs(bottomEdge - (peer.y + peer.height)) < SNAP) { rawH = (peer.y + peer.height) - ds.orig.y; lines.push({ type: 'h', pos: peer.y + peer.height }) }
+        if (Math.abs(angle) < 0.01) {
+           const rightEdge = ds.orig.x + rawW
+           const bottomEdge = ds.orig.y + rawH
+           if (Math.abs(rightEdge - canvas.width) < SNAP) { rawW = canvas.width - ds.orig.x; lines.push({ type: 'v', pos: canvas.width }) }
+           if (Math.abs(bottomEdge - canvas.height) < SNAP) { rawH = canvas.height - ds.orig.y; lines.push({ type: 'h', pos: canvas.height }) }
+           
+           for (const peer of canvasRefObj.current?.nodes || []) {
+              if (peer.id === ds.nodeId) continue
+              if (Math.abs(rightEdge - peer.x) < SNAP) { rawW = peer.x - ds.orig.x; lines.push({ type: 'v', pos: peer.x }) }
+              if (Math.abs(rightEdge - (peer.x + peer.width)) < SNAP) { rawW = (peer.x + peer.width) - ds.orig.x; lines.push({ type: 'v', pos: peer.x + peer.width }) }
+              if (!isText && Math.abs(bottomEdge - peer.y) < SNAP) { rawH = peer.y - ds.orig.y; lines.push({ type: 'h', pos: peer.y }) }
+              if (!isText && Math.abs(bottomEdge - (peer.y + peer.height)) < SNAP) { rawH = (peer.y + peer.height) - ds.orig.y; lines.push({ type: 'h', pos: peer.y + peer.height }) }
+           }
         }
-
         setSnapLines(lines)
-        if (isText) updateNode(ds.nodeId, { width: rawW }, true)
-        else updateNode(ds.nodeId, { width: rawW, height: rawH }, true)
+
+        const newCx = TL.x + (rawW/2)*u.x + (rawH/2)*v.x
+        const newCy = TL.y + (rawW/2)*u.y + (rawH/2)*v.y
+        const newX = Math.round(newCx - rawW/2)
+        const newY = Math.round(newCy - rawH/2)
+
+        if (isText) {
+          updateNode(ds.nodeId, { x: newX, y: newY, width: rawW }, true)
+        } else {
+          updateNode(ds.nodeId, { x: newX, y: newY, width: rawW, height: rawH }, true)
+        }
         ds.hasMoved = true
       }
       else if (ds.mode === 'resize-max') {
-        let newMaxW = Math.max(ds.orig.width, Math.round(ds.orig.maxWidth + dx))
-        let newMaxH = Math.max(ds.orig.height, Math.round(ds.orig.maxHeight + dy))
+        const angle = (ds.orig.rotation || 0) * (Math.PI / 180)
+        const u = { x: Math.cos(angle), y: Math.sin(angle) }
+        const v = { x: -Math.sin(angle), y: Math.cos(angle) }
+        
+        const cx = ds.orig.x + ds.orig.width / 2
+        const cy = ds.orig.y + ds.orig.height / 2
+        const TL = {
+           x: cx - (ds.orig.width/2)*u.x - (ds.orig.height/2)*v.x,
+           y: cy - (ds.orig.width/2)*u.y - (ds.orig.height/2)*v.y
+        }
+        const BR_max = {
+           x: TL.x + ds.orig.maxWidth * u.x + ds.orig.maxHeight * v.x,
+           y: TL.y + ds.orig.maxWidth * u.y + ds.orig.maxHeight * v.y
+        }
+        
+        const newBR = { x: BR_max.x + dx, y: BR_max.y + dy }
+        const diag = { x: newBR.x - TL.x, y: newBR.y - TL.y }
+        
+        let newMaxW = Math.max(ds.orig.width, Math.round(diag.x * u.x + diag.y * u.y))
+        let newMaxH = Math.max(ds.orig.height, Math.round(diag.x * v.x + diag.y * v.y))
+        
         updateNode(ds.nodeId, { maxWidth: newMaxW, maxHeight: newMaxH }, true)
         ds.hasMoved = true
       }
@@ -655,7 +707,7 @@ function Editor() {
 
         <div className="flex-1 overflow-auto flex items-center justify-center p-6"
           style={{ background: 'repeating-conic-gradient(hsl(var(--muted)) 0% 25%, hsl(var(--background)) 0% 50%) 50% / 24px 24px' }}
-          onClick={() => setSelectedId(null)}>
+          onMouseDown={() => setSelectedId(null)}>
           <div ref={canvasRef} className="relative shadow-2xl"
             style={{ width: canvas.width * scale, height: canvas.height * scale, background: canvas.background || '#ffffff', filter: canvasColorFilter }}>
             <div style={{ width: canvas.width, height: canvas.height, transform: `scale(${scale})`, transformOrigin: 'top left', position: 'relative' }}>
@@ -716,18 +768,58 @@ function Editor() {
                     <img src={node.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', filter: buildFilterCss(node.filters) }} draggable={false} />
                    ) :
                    node.type === 'image' ? <div style={{ width: '100%', height: '100%', background: '#e5e7eb' }} /> : null}
-                  {selectedId === node.id && editingId !== node.id && (
-                    <>
-                      <div onMouseDown={(e) => handleMouseDown(e, node, 'resize')}
-                        style={{ position: 'absolute', right: -8, bottom: -8, width: 20, height: 20, background: '#6366f1', borderRadius: 4, cursor: 'nwse-resize', border: '2px solid white' }} />
-                      <div onMouseDown={(e) => handleMouseDown(e, node, 'rotate')}
-                        style={{ position: 'absolute', left: '50%', top: -36, width: 16, height: 16, marginLeft: -8, background: '#fff', borderRadius: '50%', cursor: 'grab', border: '2px solid #6366f1' }} />
-                      <div style={{ position: 'absolute', left: '50%', top: -20, width: 2, height: 20, marginLeft: -1, background: '#6366f1', pointerEvents: 'none' }} />
-                    </>
-                  )}
+                  {/* Handles and Drag surface are now moved to the Selection Overlay below */}
                 </div>
                 </div>
               ))}
+              
+              {/* Selection Overlay (handles drag, resize, rotate, and stays on top!) */}
+              {selectedId && canvas.nodes?.find(n => n.id === selectedId) && editingId !== selectedId && (
+                (() => {
+                  const node = canvas.nodes.find(n => n.id === selectedId)
+                  return (
+                    <div style={{
+                      position: 'absolute', left: node.x, top: node.y, width: node.width, height: node.height,
+                      transform: `rotate(${node.rotation || 0}deg)`, transformOrigin: 'center center',
+                      pointerEvents: 'none', zIndex: 50 // Handles and drag surface are always on top!
+                    }}>
+                      {/* Drag overlay - catches clicks for dragging even if node is behind */}
+                      <div 
+                        data-node-id={node.id}
+                        onMouseDown={(e) => handleMouseDown(e, node, 'move')}
+                        onDoubleClick={(e) => {
+                          e.stopPropagation()
+                          if (node.type === 'text') setEditingId(node.id)
+                        }}
+                        onClick={(e) => { 
+                          e.stopPropagation(); 
+                          if (e.altKey) {
+                            const elements = document.elementsFromPoint(e.clientX, e.clientY)
+                            const nodeIds = elements.map(el => el.getAttribute('data-node-id')).filter(Boolean)
+                            if (nodeIds.length > 1) {
+                              const currentIdx = nodeIds.indexOf(selectedId)
+                              if (currentIdx !== -1 && currentIdx + 1 < nodeIds.length) setSelectedId(nodeIds[currentIdx + 1])
+                              else setSelectedId(nodeIds[0])
+                            } else {
+                              setSelectedId(node.id)
+                            }
+                          }
+                        }}
+                        style={{ position: 'absolute', inset: 0, pointerEvents: 'auto', cursor: 'move' }} 
+                      />
+
+                      {/* Resize handle */}
+                      <div onMouseDown={(e) => handleMouseDown(e, node, 'resize')}
+                        style={{ position: 'absolute', right: -8, bottom: -8, width: 20, height: 20, background: '#6366f1', borderRadius: 4, cursor: 'nwse-resize', border: '2px solid white', pointerEvents: 'auto' }} />
+                      
+                      {/* Rotate handle */}
+                      <div onMouseDown={(e) => handleMouseDown(e, node, 'rotate')}
+                        style={{ position: 'absolute', left: '50%', top: -36, width: 16, height: 16, marginLeft: -8, background: '#fff', borderRadius: '50%', cursor: 'grab', border: '2px solid #6366f1', pointerEvents: 'auto' }} />
+                      <div style={{ position: 'absolute', left: '50%', top: -20, width: 2, height: 20, marginLeft: -1, background: '#6366f1', pointerEvents: 'none' }} />
+                    </div>
+                  )
+                })()
+              )}
               
               {editingId && canvas.nodes?.find(n => n.id === editingId) && (
                 (() => {
