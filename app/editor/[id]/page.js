@@ -126,6 +126,9 @@ function Editor() {
   const fileInputRef = useRef(null)
   const measureRef = useRef(null)
   const [dragOverId, setDragOverId] = useState(null)
+  const [sessionImages, setSessionImages] = useState([])
+  const [isDraggingOverBase, setIsDraggingOverBase] = useState(false)
+  const [snapLines, setSnapLines] = useState([])
 
   useEffect(() => {
     fetch(`/api/canvases/${id}`).then((r) => r.json()).then((data) => {
@@ -286,9 +289,40 @@ function Editor() {
       const dataUrl = await new Promise((resolve, reject) => { reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file) })
       const res = await fetch('/api/uploads', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: dataUrl }) })
       const result = await res.json()
-      if (result.url) { insertImageNode(result.url); toast.success('Uploaded') } else toast.error(result.error || 'Upload failed')
+      if (result.url) { 
+        insertImageNode(result.url); 
+        setSessionImages(prev => [result.url, ...prev].filter((v, i, a) => a.indexOf(v) === i));
+        toast.success('Uploaded') 
+      } else toast.error(result.error || 'Upload failed')
     } catch (e) { toast.error('Upload failed: ' + e.message) }
     finally { setUploading(false) }
+  }
+
+  const handleRootDrop = async (e) => {
+    e.preventDefault()
+    setIsDraggingOverBase(false)
+    if (!e.dataTransfer.files || e.dataTransfer.files.length === 0) return
+    
+    const newImages = []
+    for (const file of Array.from(e.dataTransfer.files)) {
+      if (!file.type.startsWith('image/')) continue
+      if (file.size > 6 * 1024 * 1024) { toast.error('File too large: ' + file.name); continue }
+      try {
+        const reader = new FileReader()
+        const dataUrl = await new Promise((resolve, reject) => { reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file) })
+        const res = await fetch('/api/uploads', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: dataUrl }) })
+        const result = await res.json()
+        if (result.url) {
+          newImages.push(result.url)
+          toast.success('Uploaded ' + file.name)
+        }
+      } catch (err) {
+        toast.error('Failed to upload ' + file.name)
+      }
+    }
+    if (newImages.length > 0) {
+      setSessionImages(prev => [...newImages, ...prev].filter((v, i, a) => a.indexOf(v) === i))
+    }
   }
 
   const save = async () => {
@@ -316,18 +350,55 @@ function Editor() {
     const onMove = (e) => {
       const ds = dragState.current; if (!ds) return
       const dx = (e.clientX - ds.startX) / scale, dy = (e.clientY - ds.startY) / scale
-      if (ds.mode === 'move') updateNode(ds.nodeId, { x: Math.round(ds.orig.x + dx), y: Math.round(ds.orig.y + dy) })
+      if (ds.mode === 'move') {
+        let rawX = Math.round(ds.orig.x + dx)
+        let rawY = Math.round(ds.orig.y + dy)
+        const nodeW = ds.orig.width
+        const nodeH = ds.orig.height
+        const centerXV = rawX + nodeW / 2
+        const centerYV = rawY + nodeH / 2
+        
+        let newX = rawX
+        let newY = rawY
+        const lines = []
+        const SNAP = 8
+        const cCenterX = canvas.width / 2
+        const cCenterY = canvas.height / 2
+        
+        if (Math.abs(centerXV - cCenterX) < SNAP) { newX = cCenterX - nodeW / 2; lines.push({ type: 'v', pos: cCenterX }) }
+        if (Math.abs(centerYV - cCenterY) < SNAP) { newY = cCenterY - nodeH / 2; lines.push({ type: 'h', pos: cCenterY }) }
+        if (Math.abs(rawX) < SNAP) { newX = 0; lines.push({ type: 'v', pos: 0 }) }
+        if (Math.abs(rawY) < SNAP) { newY = 0; lines.push({ type: 'h', pos: 0 }) }
+        if (Math.abs(rawX + nodeW - canvas.width) < SNAP) { newX = canvas.width - nodeW; lines.push({ type: 'v', pos: canvas.width }) }
+        if (Math.abs(rawY + nodeH - canvas.height) < SNAP) { newY = canvas.height - nodeH; lines.push({ type: 'h', pos: canvas.height }) }
+
+        // We do not check other nodes if they are not loaded yet or to keep it fast, 
+        // but since nodes are few, we can iterate:
+        for (const n of canvas.nodes || []) {
+           if (n.id === ds.nodeId) continue
+           const nCenterX = n.x + n.width / 2
+           const nCenterY = n.y + n.height / 2
+           if (Math.abs(centerXV - nCenterX) < SNAP && !lines.find(l => l.type === 'v' && l.pos === nCenterX)) { newX = nCenterX - nodeW / 2; lines.push({ type: 'v', pos: nCenterX }) }
+           if (Math.abs(centerYV - nCenterY) < SNAP && !lines.find(l => l.type === 'h' && l.pos === nCenterY)) { newY = nCenterY - nodeH / 2; lines.push({ type: 'h', pos: nCenterY }) }
+           if (Math.abs(rawX - n.x) < SNAP) { newX = n.x; lines.push({ type: 'v', pos: n.x }) }
+           if (Math.abs(rawY - n.y) < SNAP) { newY = n.y; lines.push({ type: 'h', pos: n.y }) }
+           if (Math.abs(rawX + nodeW - (n.x + n.width)) < SNAP) { newX = n.x + n.width - nodeW; lines.push({ type: 'v', pos: n.x + n.width }) }
+           if (Math.abs(rawY + nodeH - (n.y + n.height)) < SNAP) { newY = n.y + n.height - nodeH; lines.push({ type: 'h', pos: n.y + n.height }) }
+        }
+
+        setSnapLines(lines)
+        updateNode(ds.nodeId, { x: newX, y: newY })
+      }
       else if (ds.mode === 'resize') {
         const isText = canvas?.nodes?.find((n) => n.id === ds.nodeId)?.type === 'text'
         if (isText) {
-          // Text: width changes; height is auto-measured
           updateNode(ds.nodeId, { width: Math.max(40, Math.round(ds.orig.width + dx)) })
         } else {
           updateNode(ds.nodeId, { width: Math.max(20, Math.round(ds.orig.width + dx)), height: Math.max(20, Math.round(ds.orig.height + dy)) })
         }
       }
     }
-    const onUp = () => { dragState.current = null; document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
+    const onUp = () => { dragState.current = null; setSnapLines([]); document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
     document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
   }
 
@@ -390,7 +461,21 @@ function Editor() {
   const fontMeta = selected?.type === 'text' ? (FONT_META[selected.fontFamily] || FONT_META['Inter']) : null
 
   return (
-    <div className="h-screen flex flex-col bg-background">
+    <div className="h-screen flex flex-col bg-background relative"
+      onDragOver={(e) => { e.preventDefault(); if (e.dataTransfer.types.includes('Files')) setIsDraggingOverBase(true); }}
+      onDragLeave={(e) => {
+        // Only set false if we are actually leaving the root element, not entering a child
+        if (e.currentTarget === e.target) setIsDraggingOverBase(false);
+      }}
+      onDrop={handleRootDrop}>
+      {isDraggingOverBase && (
+        <div className="absolute inset-0 z-[100] bg-primary/20 border-4 border-primary border-dashed flex items-center justify-center pointer-events-none transition-all">
+          <div className="bg-background px-8 py-6 rounded-xl shadow-2xl flex flex-col items-center">
+            <Upload className="w-12 h-12 text-primary mb-3 animate-bounce" />
+            <h2 className="text-xl font-bold">Drop images to upload</h2>
+          </div>
+        </div>
+      )}
       <div ref={measureRef} aria-hidden="true" style={{ position: 'fixed', visibility: 'hidden', pointerEvents: 'none', left: -99999, top: -99999, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }} />
       <div className="border-b bg-card px-4 py-2.5 flex items-center justify-between">
         <div className="flex items-center gap-3">
@@ -418,7 +503,7 @@ function Editor() {
               <Button variant="outline" size="sm" onClick={() => addShape('ellipse')}><Circle className="w-4 h-4 mr-1" /> Circle</Button>
             </div>
           </div>
-          <div className="mt-5 pt-4 border-t flex-1 min-h-0 flex flex-col">
+          <div className={`mt-5 pt-4 border-t flex-col ${sessionImages.length > 0 ? 'flex-[0.5]' : 'flex-1'} min-h-0 flex`}>
             <p className="text-xs font-semibold uppercase text-muted-foreground mb-2 tracking-wide">Layers</p>
             <div className="flex-1 overflow-y-auto space-y-1">
               {(canvas.nodes || []).slice().reverse().map((n) => (
@@ -439,6 +524,25 @@ function Editor() {
               ))}
             </div>
           </div>
+
+          {sessionImages.length > 0 && (
+            <div className="mt-3 pt-3 border-t flex-[0.5] min-h-0 flex flex-col">
+              <p className="text-xs font-semibold uppercase text-muted-foreground mb-2 tracking-wide flex items-center justify-between">
+                <span>Dropped Images</span>
+                <span className="bg-muted text-muted-foreground text-[10px] px-1.5 py-0.5 rounded">{sessionImages.length}</span>
+              </p>
+              <div className="flex-1 overflow-y-auto grid grid-cols-2 gap-2 content-start pr-1 pb-2">
+                {sessionImages.map((src, i) => (
+                  <div key={i} className="aspect-square rounded border overflow-hidden cursor-pointer hover:border-primary transition group relative" onClick={() => insertImageNode(src)}>
+                    <img src={src} alt="upload" className="w-full h-full object-cover" />
+                    <div className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition">
+                      <Plus className="text-white w-5 h-5" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="flex-1 overflow-auto flex items-center justify-center p-6"
@@ -468,6 +572,14 @@ function Editor() {
                   {`{${selected.dynamic_key}}`}
                 </div>
               )}
+              {snapLines.map((line, i) => (
+                <div key={i} style={{
+                  position: 'absolute',
+                  background: '#ec4899',
+                  zIndex: 9999,
+                  ...(line.type === 'v' ? { left: line.pos, top: 0, bottom: 0, width: 1 } : { top: line.pos, left: 0, right: 0, height: 1 })
+                }} />
+              ))}
             </div>
           </div>
         </div>
