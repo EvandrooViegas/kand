@@ -1,5 +1,5 @@
 "use client";
-// Inspired by react-hot-toast library
+// Inspired by react-hot-toast librar
 import * as React from "react"
 
 const TOAST_LIMIT = 1
