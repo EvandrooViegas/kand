@@ -13,7 +13,7 @@ import { Switch } from '@/components/ui/switch'
 import {
   ArrowLeft, Type, Image as ImageIcon, Trash2, Save, Play, Code2, Copy, Check,
   Square, Circle, ChevronUp, ChevronDown, ChevronsUp, ChevronsDown, Upload,
-  Link as LinkIcon, Palette, Plus, X, Moon, Sun, Italic, Sparkles, Wand2, GripVertical,
+  Link as LinkIcon, Palette, Plus, X, Moon, Sun, Italic, Sparkles, Wand2, GripVertical, Undo2, Redo2
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { v4 as uuidv4 } from 'uuid'
@@ -110,8 +110,48 @@ function Editor() {
   const router = useRouter()
   const params = useParams()
   const id = params.id
-  const [canvas, setCanvas] = useState(null)
+  const [canvasState, setCanvasState] = useState(null)
+  const historyRef = useRef({ past: [], future: [] })
+  const [, setHistoryTick] = useState(0)
+  const canvasRefObj = useRef(canvasState)
+  canvasRefObj.current = canvasState
+
+  const pushHistory = (stateToPush) => {
+    if (!stateToPush) return
+    historyRef.current.past.push(stateToPush)
+    if (historyRef.current.past.length > 50) historyRef.current.past.shift()
+    historyRef.current.future = []
+    setHistoryTick(t => t + 1)
+  }
+
+  const setCanvas = (updater, skipHistory = false) => {
+    setCanvasState((prev) => {
+      const next = typeof updater === 'function' ? updater(prev) : updater
+      if (!skipHistory && prev && prev !== next) {
+        pushHistory(prev)
+      }
+      return next
+    })
+  }
+
+  const canvas = canvasState
+
+  const undo = () => {
+    if (historyRef.current.past.length === 0) return
+    const prev = historyRef.current.past.pop()
+    historyRef.current.future.push(canvasRefObj.current)
+    setCanvasState(prev)
+    setHistoryTick(t => t + 1)
+  }
+  const redo = () => {
+    if (historyRef.current.future.length === 0) return
+    const next = historyRef.current.future.pop()
+    historyRef.current.past.push(canvasRefObj.current)
+    setCanvasState(next)
+    setHistoryTick(t => t + 1)
+  }
   const [selectedId, setSelectedId] = useState(null)
+  const [editingId, setEditingId] = useState(null)
   const [scale, setScale] = useState(0.5)
   const canvasRef = useRef(null)
   const [renderDialog, setRenderDialog] = useState(false)
@@ -132,7 +172,7 @@ function Editor() {
 
   useEffect(() => {
     fetch(`/api/canvases/${id}`).then((r) => r.json()).then((data) => {
-      if (data.error) { toast.error(data.error); router.push('/') } else setCanvas(data)
+      if (data.error) { toast.error(data.error); router.push('/') } else setCanvas(data, true)
     })
   }, [id])
 
@@ -160,8 +200,21 @@ function Editor() {
 
   useEffect(() => {
     const handler = (e) => {
-      if (!selectedId) return
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
+      
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        if (e.shiftKey) redo()
+        else undo()
+        e.preventDefault()
+        return
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        redo()
+        e.preventDefault()
+        return
+      }
+
+      if (!selectedId) return
       if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteNode(selectedId) }
     }
     window.addEventListener('keydown', handler)
@@ -169,7 +222,7 @@ function Editor() {
   }, [selectedId])
 
   const selected = canvas?.nodes?.find((n) => n.id === selectedId)
-  const updateNode = (nodeId, patch) => setCanvas((c) => ({ ...c, nodes: c.nodes.map((n) => (n.id === nodeId ? { ...n, ...patch } : n)) }))
+  const updateNode = (nodeId, patch, skipHistory = false) => setCanvas((c) => ({ ...c, nodes: c.nodes.map((n) => (n.id === nodeId ? { ...n, ...patch } : n)) }), skipHistory)
   const deleteNode = (nodeId) => { setCanvas((c) => ({ ...c, nodes: c.nodes.filter((n) => n.id !== nodeId) })); setSelectedId(null) }
 
   const moveNode = (nodeId, direction) => {
@@ -346,7 +399,7 @@ function Editor() {
   const dragState = useRef(null)
   const handleMouseDown = (e, node, mode = 'move') => {
     e.stopPropagation(); e.preventDefault(); setSelectedId(node.id)
-    dragState.current = { nodeId: node.id, startX: e.clientX, startY: e.clientY, orig: { x: node.x, y: node.y, width: node.width, height: node.height }, mode }
+    dragState.current = { nodeId: node.id, startX: e.clientX, startY: e.clientY, orig: { x: node.x, y: node.y, width: node.width, height: node.height, maxWidth: node.maxWidth || node.width, maxHeight: node.maxHeight || node.height, rotation: node.rotation || 0 }, mode, initialCanvas: canvasRefObj.current, hasMoved: false }
     const onMove = (e) => {
       const ds = dragState.current; if (!ds) return
       const dx = (e.clientX - ds.startX) / scale, dy = (e.clientY - ds.startY) / scale
@@ -387,18 +440,69 @@ function Editor() {
         }
 
         setSnapLines(lines)
-        updateNode(ds.nodeId, { x: newX, y: newY })
+        updateNode(ds.nodeId, { x: newX, y: newY }, true) // skip history
+        ds.hasMoved = true
       }
       else if (ds.mode === 'resize') {
-        const isText = canvas?.nodes?.find((n) => n.id === ds.nodeId)?.type === 'text'
-        if (isText) {
-          updateNode(ds.nodeId, { width: Math.max(40, Math.round(ds.orig.width + dx)) })
-        } else {
-          updateNode(ds.nodeId, { width: Math.max(20, Math.round(ds.orig.width + dx)), height: Math.max(20, Math.round(ds.orig.height + dy)) })
+        const isText = canvasRefObj.current?.nodes?.find((n) => n.id === ds.nodeId)?.type === 'text'
+        const n = canvasRefObj.current?.nodes?.find((n) => n.id === ds.nodeId)
+        
+        let rawW = Math.max(isText ? 40 : 20, Math.round(ds.orig.width + dx))
+        let rawH = Math.max(20, Math.round(ds.orig.height + dy))
+        if (n?.maxWidth) rawW = Math.min(rawW, n.maxWidth)
+        if (n?.maxHeight) rawH = Math.min(rawH, n.maxHeight)
+
+        const lines = []
+        const SNAP = 8
+        const rightEdge = ds.orig.x + rawW
+        const bottomEdge = ds.orig.y + rawH
+        
+        if (Math.abs(rightEdge - canvas.width) < SNAP) { rawW = canvas.width - ds.orig.x; lines.push({ type: 'v', pos: canvas.width }) }
+        if (Math.abs(bottomEdge - canvas.height) < SNAP) { rawH = canvas.height - ds.orig.y; lines.push({ type: 'h', pos: canvas.height }) }
+        
+        for (const peer of canvasRefObj.current?.nodes || []) {
+           if (peer.id === ds.nodeId) continue
+           if (Math.abs(rightEdge - peer.x) < SNAP) { rawW = peer.x - ds.orig.x; lines.push({ type: 'v', pos: peer.x }) }
+           if (Math.abs(rightEdge - (peer.x + peer.width)) < SNAP) { rawW = (peer.x + peer.width) - ds.orig.x; lines.push({ type: 'v', pos: peer.x + peer.width }) }
+           if (!isText && Math.abs(bottomEdge - peer.y) < SNAP) { rawH = peer.y - ds.orig.y; lines.push({ type: 'h', pos: peer.y }) }
+           if (!isText && Math.abs(bottomEdge - (peer.y + peer.height)) < SNAP) { rawH = (peer.y + peer.height) - ds.orig.y; lines.push({ type: 'h', pos: peer.y + peer.height }) }
+        }
+
+        setSnapLines(lines)
+        if (isText) updateNode(ds.nodeId, { width: rawW }, true)
+        else updateNode(ds.nodeId, { width: rawW, height: rawH }, true)
+        ds.hasMoved = true
+      }
+      else if (ds.mode === 'resize-max') {
+        let newMaxW = Math.max(ds.orig.width, Math.round(ds.orig.maxWidth + dx))
+        let newMaxH = Math.max(ds.orig.height, Math.round(ds.orig.maxHeight + dy))
+        updateNode(ds.nodeId, { maxWidth: newMaxW, maxHeight: newMaxH }, true)
+        ds.hasMoved = true
+      }
+      else if (ds.mode === 'rotate') {
+        const canvasRect = canvasRef.current?.getBoundingClientRect()
+        if (canvasRect) {
+           const cx = canvasRect.left + (ds.orig.x + ds.orig.width / 2) * scale
+           const cy = canvasRect.top + (ds.orig.y + ds.orig.height / 2) * scale
+           const angle = Math.atan2(e.clientY - cy, e.clientX - cx) * (180 / Math.PI)
+           let rotation = Math.round(angle + 90)
+           if (rotation < 0) rotation += 360
+           if (e.shiftKey || Math.abs(rotation % 45) < 5 || Math.abs(rotation % 45) > 40) {
+              rotation = Math.round(rotation / 45) * 45
+           }
+           if (rotation === 360) rotation = 0
+           updateNode(ds.nodeId, { rotation }, true)
+           ds.hasMoved = true
         }
       }
     }
-    const onUp = () => { dragState.current = null; setSnapLines([]); document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) }
+    const onUp = () => { 
+      const ds = dragState.current
+      if (ds && ds.hasMoved) {
+        pushHistory(ds.initialCanvas)
+      }
+      dragState.current = null; setSnapLines([]); document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) 
+    }
     document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp)
   }
 
@@ -419,11 +523,12 @@ function Editor() {
   const nodeBoxStyle = (node) => {
     const base = {
       position: 'absolute', left: node.x, top: node.y, width: node.width, height: node.height,
-      cursor: 'move',
+      cursor: 'move', pointerEvents: 'auto',
       outline: selectedId === node.id ? '3px solid #6366f1' : 'none', outlineOffset: 2,
       display: 'flex', alignItems: 'center',
       justifyContent: node.textAlign === 'center' ? 'center' : node.textAlign === 'right' ? 'flex-end' : 'flex-start',
       overflow: node.type === 'text' ? 'visible' : 'hidden', userSelect: 'none', whiteSpace: 'pre-wrap',
+      transform: `rotate(${node.rotation || 0}deg)`, transformOrigin: 'center center',
     }
     if (node.type === 'text') {
       return {
@@ -484,6 +589,9 @@ function Editor() {
           <Input value={canvas.name} onChange={(e) => setCanvas({ ...canvas, name: e.target.value })} className="w-64 font-medium border-foreground/20" />
         </div>
         <div className="flex items-center gap-2">
+          <Button variant="ghost" size="icon" onClick={undo} disabled={historyRef.current.past.length === 0} title="Undo (Ctrl+Z)"><Undo2 className="w-4 h-4" /></Button>
+          <Button variant="ghost" size="icon" onClick={redo} disabled={historyRef.current.future.length === 0} title="Redo (Ctrl+Y)"><Redo2 className="w-4 h-4" /></Button>
+          <div className="w-px h-6 bg-border mx-1" />
           <ThemeToggle />
           <Button variant="outline" size="sm" onClick={() => setApiDialog(true)}><Code2 className="w-4 h-4 mr-2" />API</Button>
           <Button variant="outline" size="sm" onClick={() => setRenderDialog(true)}><Play className="w-4 h-4 mr-2" />Test Render</Button>
@@ -552,21 +660,100 @@ function Editor() {
             style={{ width: canvas.width * scale, height: canvas.height * scale, background: canvas.background || '#ffffff', filter: canvasColorFilter }}>
             <div style={{ width: canvas.width, height: canvas.height, transform: `scale(${scale})`, transformOrigin: 'top left', position: 'relative' }}>
               {(canvas.nodes || []).map((node) => (
-                <div key={node.id}
-                  onMouseDown={(e) => handleMouseDown(e, node, 'move')}
-                  onClick={(e) => { e.stopPropagation(); setSelectedId(node.id) }}
-                  style={nodeBoxStyle(node)}>
+                <div key={node.id} style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
+                  {selectedId === node.id && (node.maxWidth || node.maxHeight) && (
+                    <div style={{
+                      position: 'absolute', left: node.x, top: node.y,
+                      width: node.maxWidth || node.width, height: node.maxHeight || node.height,
+                      border: '2px dashed #ec4899', pointerEvents: 'none', zIndex: 10,
+                      transform: `rotate(${node.rotation || 0}deg)`, transformOrigin: 'top left', // Note: maxbox aligns with node x,y so origin must be top left if we wanted it to rotate exactly with the node, but wait: the node rotates around center!
+                      // If node rotates around center, top-left is not the same. 
+                      // Simpler: don't rotate the max box, or rotate it with the same center.
+                    }} />
+                  )}
+                  {selectedId === node.id && (node.maxWidth || node.maxHeight) && (
+                    <div style={{
+                      position: 'absolute', left: node.x, top: node.y,
+                      width: node.maxWidth || node.width, height: node.maxHeight || node.height,
+                      transform: `rotate(${node.rotation || 0}deg)`, transformOrigin: `${node.width / 2}px ${node.height / 2}px`,
+                      border: '2px dashed #ec4899', pointerEvents: 'none', zIndex: 10
+                    }}>
+                      <div onMouseDown={(e) => handleMouseDown(e, node, 'resize-max')}
+                        style={{ pointerEvents: 'auto', position: 'absolute', right: -8, bottom: -8, width: 16, height: 16, background: '#fff', border: '2px solid #ec4899', borderRadius: 0, cursor: 'nwse-resize' }} />
+                    </div>
+                  )}
+
+                  <div
+                    data-node-id={node.id}
+                    onMouseDown={(e) => {
+                      if (editingId === node.id) return
+                      handleMouseDown(e, node, 'move')
+                    }}
+                  onClick={(e) => { 
+                    e.stopPropagation(); 
+                    if (editingId === node.id) return
+                    if (e.altKey) {
+                      const elements = document.elementsFromPoint(e.clientX, e.clientY)
+                      const nodeIds = elements.map(el => el.getAttribute('data-node-id')).filter(Boolean)
+                      if (nodeIds.length > 1) {
+                        const currentIdx = nodeIds.indexOf(selectedId)
+                        if (currentIdx !== -1 && currentIdx + 1 < nodeIds.length) setSelectedId(nodeIds[currentIdx + 1])
+                        else setSelectedId(nodeIds[0])
+                      } else {
+                        setSelectedId(node.id)
+                      }
+                    } else {
+                      setSelectedId(node.id) 
+                    }
+                  }}
+                  onDoubleClick={(e) => {
+                    e.stopPropagation()
+                    if (node.type === 'text') setEditingId(node.id)
+                  }}
+                  style={{...nodeBoxStyle(node), opacity: editingId === node.id ? 0 : 1}}>
                   {node.type === 'text' ? (node.text || '') :
                    node.type === 'image' && node.src ? (
                     <img src={node.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', filter: buildFilterCss(node.filters) }} draggable={false} />
                    ) :
                    node.type === 'image' ? <div style={{ width: '100%', height: '100%', background: '#e5e7eb' }} /> : null}
-                  {selectedId === node.id && (
-                    <div onMouseDown={(e) => handleMouseDown(e, node, 'resize')}
-                      style={{ position: 'absolute', right: -8, bottom: -8, width: 20, height: 20, background: '#6366f1', borderRadius: 4, cursor: 'nwse-resize', border: '2px solid white' }} />
+                  {selectedId === node.id && editingId !== node.id && (
+                    <>
+                      <div onMouseDown={(e) => handleMouseDown(e, node, 'resize')}
+                        style={{ position: 'absolute', right: -8, bottom: -8, width: 20, height: 20, background: '#6366f1', borderRadius: 4, cursor: 'nwse-resize', border: '2px solid white' }} />
+                      <div onMouseDown={(e) => handleMouseDown(e, node, 'rotate')}
+                        style={{ position: 'absolute', left: '50%', top: -36, width: 16, height: 16, marginLeft: -8, background: '#fff', borderRadius: '50%', cursor: 'grab', border: '2px solid #6366f1' }} />
+                      <div style={{ position: 'absolute', left: '50%', top: -20, width: 2, height: 20, marginLeft: -1, background: '#6366f1', pointerEvents: 'none' }} />
+                    </>
                   )}
                 </div>
+                </div>
               ))}
+              
+              {editingId && canvas.nodes?.find(n => n.id === editingId) && (
+                (() => {
+                  const enode = canvas.nodes.find(n => n.id === editingId)
+                  return (
+                    <textarea
+                      autoFocus
+                      className="absolute bg-transparent outline-none border-none p-0 m-0 resize-none overflow-hidden"
+                      style={{
+                        left: enode.x, top: enode.y, width: enode.width, height: enode.height,
+                        color: enode.color || '#000', fontSize: enode.fontSize || 48, fontWeight: enode.fontWeight || 400,
+                        fontStyle: enode.fontStyle === 'italic' ? 'italic' : 'normal',
+                        fontFamily: `'${enode.fontFamily || 'Inter'}', sans-serif`,
+                        textAlign: enode.textAlign || 'left', lineHeight: 1.2, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                        textShadow: enode.textShadow?.enabled ? `${enode.textShadow.offsetX || 0}px ${enode.textShadow.offsetY || 0}px ${enode.textShadow.blur || 0}px ${enode.textShadow.color || '#000'}` : 'none'
+                      }}
+                      defaultValue={enode.text || ''}
+                      onBlur={(e) => { updateNode(enode.id, { text: e.target.value }); setEditingId(null) }}
+                      onKeyDown={(e) => {
+                        e.stopPropagation()
+                        if (e.key === 'Escape') { setEditingId(null) }
+                      }}
+                    />
+                  )
+                })()
+              )}
               {selected && selected.dynamic_key && (
                 <div style={{ position: 'absolute', left: selected.x, top: selected.y - 32, fontSize: 16, color: '#fff', background: '#6366f1', padding: '4px 10px', borderRadius: 4, fontWeight: 500, pointerEvents: 'none', fontFamily: 'monospace', whiteSpace: 'nowrap' }}>
                   {`{${selected.dynamic_key}}`}
@@ -622,6 +809,9 @@ function Editor() {
                   <div><Label className="text-xs">Y</Label><Input type="number" value={selected.y} onChange={(e) => updateNode(selected.id, { y: parseInt(e.target.value) || 0 })} /></div>
                   <div><Label className="text-xs">Width</Label><Input type="number" value={selected.width} onChange={(e) => updateNode(selected.id, { width: parseInt(e.target.value) || 0 })} /></div>
                   <div><Label className="text-xs">Height</Label><Input type="number" value={selected.height} onChange={(e) => updateNode(selected.id, { height: parseInt(e.target.value) || 0 })} /></div>
+                  <div><Label className="text-xs text-pink-500">Max Width</Label><Input type="number" placeholder="none" value={selected.maxWidth || ''} onChange={(e) => updateNode(selected.id, { maxWidth: parseInt(e.target.value) || undefined })} /></div>
+                  <div><Label className="text-xs text-pink-500">Max Height</Label><Input type="number" placeholder="none" value={selected.maxHeight || ''} onChange={(e) => updateNode(selected.id, { maxHeight: parseInt(e.target.value) || undefined })} /></div>
+                  <div><Label className="text-xs">Rotation °</Label><Input type="number" value={selected.rotation || 0} onChange={(e) => updateNode(selected.id, { rotation: parseInt(e.target.value) || 0 })} /></div>
                 </div>
 
                 {(selected.type === 'text' || selected.type === 'image') && (
@@ -733,11 +923,33 @@ function Editor() {
   )
 }
 
+const CANVAS_PRESETS = [
+  { label: 'Square', w: 1080, h: 1080 },
+  { label: 'Portrait 4:5', w: 1080, h: 1350 },
+  { label: 'Story 9:16', w: 1080, h: 1920 },
+  { label: 'Landscape 16:9', w: 1920, h: 1080 },
+  { label: 'OG Image', w: 1200, h: 628 },
+  { label: 'Twitter Header', w: 1500, h: 500 },
+  { label: 'LinkedIn Banner', w: 1584, h: 396 },
+  { label: 'A4 Portrait', w: 2480, h: 3508 },
+]
+
 function CanvasSettingsPanel({ canvas, setCanvas }) {
   return (
     <div>
       <p className="text-xs font-semibold uppercase text-muted-foreground mb-3 tracking-wide">Canvas Settings</p>
       <div className="space-y-3">
+        <div>
+          <Label className="text-xs mb-1 block">Size Presets</Label>
+          <div className="flex gap-1.5 overflow-x-auto pb-2 scrollbar-hide">
+            {CANVAS_PRESETS.map((p) => (
+              <button key={p.label} onClick={() => setCanvas({ ...canvas, width: p.w, height: p.h })}
+                className="whitespace-nowrap px-2 py-1 bg-muted hover:bg-muted/80 rounded text-[10px] font-medium transition">
+                {p.label}
+              </button>
+            ))}
+          </div>
+        </div>
         <div className="grid grid-cols-2 gap-2">
           <div><Label className="text-xs">Width</Label><Input type="number" value={canvas.width} onChange={(e) => setCanvas({ ...canvas, width: parseInt(e.target.value) || 1080 })} /></div>
           <div><Label className="text-xs">Height</Label><Input type="number" value={canvas.height} onChange={(e) => setCanvas({ ...canvas, height: parseInt(e.target.value) || 1080 })} /></div>
