@@ -12,11 +12,12 @@ let db
 async function connectToMongo() {
   if (!client) {
     // 1. Added your database name 'kand' directly into the fallback connection string path
-    client = new MongoClient(process.env.MONGO_URL || "mongodb+srv://evand:admin@kand.z1wlvpu.mongodb.net/kand?appName=kand")
+    console.log("Mongo URL:", process.env.MONGO_URL)
+    client = new MongoClient(process.env.MONGO_URL)
     await client.connect()
     
     // 2. Changed the default fallback database name from "admin" to "kand"
-    db = client.db(process.env.DB_NAME || "kand")
+    db = client.db(process.env.DB_NAME)
   }
   return db
 }
@@ -30,6 +31,20 @@ function corsify(response) {
 
 export async function OPTIONS() {
   return corsify(new NextResponse(null, { status: 200 }))
+}
+
+function getBaseUrl(request) {
+  // Prefer explicit env var if set
+  const envBase = process.env.NEXT_PUBLIC_BASE_URL
+  if (envBase) {
+    let b = envBase.trim()
+    if (!b.startsWith('http')) b = (b.includes('localhost') ? 'http://' : 'https://') + b
+    return b
+  }
+  // Derive from incoming request headers (works on Vercel, Render, etc.)
+  const proto = request.headers.get('x-forwarded-proto') || 'https'
+  const host = request.headers.get('x-forwarded-host') || request.headers.get('host') || 'localhost:3000'
+  return `${proto}://${host}`
 }
 
 async function handleRoute(request, { params }) {
@@ -135,11 +150,7 @@ async function handleRoute(request, { params }) {
         bytes: new Binary(buf),
         createdAt: new Date(),
       })
-      let baseUrl = process.env.NEXT_PUBLIC_BASE_URL || ''
-      if (baseUrl && !baseUrl.startsWith('http')) baseUrl = `https://${baseUrl}`
-      // use http for localhost
-      if (baseUrl.includes('localhost')) baseUrl = baseUrl.replace('https://', 'http://')
-      
+      const baseUrl = getBaseUrl(request)
       return corsify(NextResponse.json({
         id: uploadId,
         url: `${baseUrl}/api/uploads/${uploadId}`,
@@ -187,10 +198,7 @@ if (uploadMatch && method === 'GET') {
         png: new Binary(png),
         createdAt: new Date()
       })
-      let baseUrl = process.env.NEXT_PUBLIC_BASE_URL || ''
-      if (baseUrl && !baseUrl.startsWith('http')) baseUrl = `https://${baseUrl}`
-      if (baseUrl.includes('localhost')) baseUrl = baseUrl.replace('https://', 'http://')
-
+      const baseUrl = getBaseUrl(request)
       const url = `${baseUrl}/api/rendered/${renderId}`
       return corsify(NextResponse.json({ url, render_id: renderId, canva_id: canvaId }))
     }
