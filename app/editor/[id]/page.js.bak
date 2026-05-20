@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState, useRef, useLayoutEffect, useCallback } from 'react'
+import { useEffect, useState, useRef, useLayoutEffect } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'
@@ -13,14 +13,11 @@ import { Switch } from '@/components/ui/switch'
 import {
   ArrowLeft, Type, Image as ImageIcon, Trash2, Save, Play, Code2, Copy, Check,
   Square, Circle, ChevronUp, ChevronDown, ChevronsUp, ChevronsDown, Upload,
-  Link as LinkIcon, Palette, Plus, X, Moon, Sun, Italic, Underline, Bold,
-  AlignLeft, AlignCenter, AlignRight, Sparkles, Wand2, GripVertical, Undo2, Redo2
+  Link as LinkIcon, Palette, Plus, X, Moon, Sun, Italic, Sparkles, Wand2, GripVertical, Undo2, Redo2
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { v4 as uuidv4 } from 'uuid'
 import { KandMark } from '@/components/logo'
-import { parseStyledText, renderStyledText, resolveCanvasClass } from '@/lib/styleParser'
-import { createElement } from 'react'
 
 // Font config (mirrors lib/fonts.js)
 const FONT_META = {
@@ -39,14 +36,6 @@ const FONT_META = {
   'Open Sans': { weights: [400, 500, 600, 700, 800], italic: true },
 }
 const WEIGHT_LABELS = { 100: 'Thin', 200: 'Extra Light', 300: 'Light', 400: 'Regular', 500: 'Medium', 600: 'Semi Bold', 700: 'Bold', 800: 'Extra Bold', 900: 'Black' }
-
-const getCanvasClassStyle = (classes = {}, className = '') => resolveCanvasClass(classes, className)?.style || {}
-const normalizeClassTagName = (classes = {}, className = '') => {
-  if (!className) return ''
-  const resolved = resolveCanvasClass(classes, className)
-  if (resolved?.key) return resolved.key.startsWith('.') ? resolved.key : `.${resolved.key}`
-  return className.startsWith('.') ? className : `.${className}`
-}
 
 const GRADIENT_PRESETS = [
   { name: 'Sunset', stops: [{ color: '#ff7e5f', position: 0, alpha: 100 }, { color: '#feb47b', position: 100, alpha: 100 }], angle: 135 },
@@ -122,8 +111,6 @@ function Editor() {
   const params = useParams()
   const id = params.id
   const [canvasState, setCanvasState] = useState(null)
-  const [hasChanges, setHasChanges] = useState(false)
-  const savedCanvasRef = useRef(null)
   const historyRef = useRef({ past: [], future: [] })
   const [, setHistoryTick] = useState(0)
   const canvasRefObj = useRef(canvasState)
@@ -142,9 +129,6 @@ function Editor() {
       const next = typeof updater === 'function' ? updater(prev) : updater
       if (!skipHistory && prev && prev !== next) {
         pushHistory(prev)
-      }
-      if (savedCanvasRef.current) {
-        setHasChanges(JSON.stringify(next) !== savedCanvasRef.current)
       }
       return next
     })
@@ -170,9 +154,6 @@ function Editor() {
   const [editingId, setEditingId] = useState(null)
   const [scale, setScale] = useState(0.5)
   const canvasRef = useRef(null)
-  const editorRef = useRef(null)
-  const hasInitializedRef = useRef(false)
-  const savedRangeRef = useRef(null)
   const [renderDialog, setRenderDialog] = useState(false)
   const [renderData, setRenderData] = useState('')
   const [renderResult, setRenderResult] = useState(null)
@@ -188,239 +169,10 @@ function Editor() {
   const [sessionImages, setSessionImages] = useState([])
   const [isDraggingOverBase, setIsDraggingOverBase] = useState(false)
   const [snapLines, setSnapLines] = useState([])
-  const [selectionRect, setSelectionRect] = useState(null)
-  const [textFormat, setTextFormat] = useState({ bold: false, italic: false, underline: false, color: '#000000', align: 'left' })
-
-  const tagsToHtml = useCallback((text) => {
-    const tokens = parseStyledText(text || '', canvas?.classes || {});
-    const toHtml = (arr) => arr.map(t => {
-      if (typeof t === 'string') return t.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
-      if (t.className) {
-        const cleanName = t.className.startsWith('.') ? t.className.slice(1) : t.className;
-        return `<span class="${cleanName}">${toHtml(t.children)}</span>`;
-      }
-      // Inline style token: serialize style object to html style attr
-      const styleStr = Object.entries(t.style || {}).map(([k, v]) => {
-        const css = k.replace(/([A-Z])/g, '-$1').toLowerCase();
-        return `${css}:${v}`;
-      }).join(';');
-      return `<span style="${styleStr}">${toHtml(t.children)}</span>`;
-    }).join('');
-    return toHtml(tokens);
-  }, [canvas?.classes])
-
-  const htmlToTags = useCallback((html) => {
-    const temp = document.createElement('div');
-    temp.innerHTML = html;
-    const walk = (n) => {
-      let str = '';
-      for (const child of n.childNodes) {
-        if (child.nodeType === Node.TEXT_NODE) {
-          str += child.textContent;
-        } else if (child.nodeType === Node.ELEMENT_NODE) {
-          if (child.tagName === 'SPAN' && child.className && !child.style.cssText) {
-            // Keep class tags stable whether the stored class key has a dot prefix or not.
-            const cls = normalizeClassTagName(canvas?.classes || {}, child.className);
-            str += `<%kind:${cls}:${walk(child)}%>`;
-          } else if (child.tagName === 'SPAN' && child.style.cssText) {
-            // Inline-styled span (from execCommand or manual span)
-            const styleParts = [];
-            if (child.style.color) styleParts.push(`color=${child.style.color}`);
-            if (child.style.fontSize) styleParts.push(`font-size=${child.style.fontSize}`);
-            if (child.style.textDecoration && child.style.textDecoration !== 'none') styleParts.push(`textDecoration=${child.style.textDecoration}`);
-            if (child.style.fontWeight) styleParts.push(`fontWeight=${child.style.fontWeight}`);
-            if (child.style.fontStyle) styleParts.push(`fontStyle=${child.style.fontStyle}`);
-            if (child.style.backgroundColor) styleParts.push(`backgroundColor=${child.style.backgroundColor}`);
-            if (child.style.letterSpacing) styleParts.push(`letterSpacing=${child.style.letterSpacing}`);
-            if (styleParts.length > 0) {
-              str += `<%inline:${styleParts.join('|')}:${walk(child)}%>`;
-            } else {
-              str += walk(child);
-            }
-          } else if (child.tagName === 'FONT') {
-            // execCommand 'foreColor' creates <font color="..."> in some browsers
-            const parts = [];
-            if (child.color) parts.push(`color=${child.color}`);
-            const inner = walk(child);
-            str += parts.length > 0 ? `<%inline:${parts.join('|')}:${inner}%>` : inner;
-          } else if (child.tagName === 'U') {
-            str += `<%inline:textDecoration=underline:${walk(child)}%>`;
-          } else if (child.tagName === 'B' || child.tagName === 'STRONG') {
-            str += `<%inline:fontWeight=bold:${walk(child)}%>`;
-          } else if (child.tagName === 'I' || child.tagName === 'EM') {
-            str += `<%inline:fontStyle=italic:${walk(child)}%>`;
-          } else if (child.tagName === 'BR') {
-            str += '\n';
-          } else if (child.tagName === 'DIV' || child.tagName === 'P') {
-            const childStr = walk(child);
-            str += childStr ? '\n' + childStr : '\n';
-          } else {
-            str += walk(child);
-          }
-        }
-      }
-      return str;
-    };
-    return walk(temp).replace(/\n\n/g, '\n');
-  }, [canvas?.classes])
-
-  const handleSelectionChange = () => {
-    if (!editingId) return;
-    const sel = window.getSelection();
-    if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
-      setSelectionRect(null);
-      savedRangeRef.current = null;
-      return;
-    }
-    const editor = document.getElementById(`editor-${editingId}`);
-    if (!editor || !editor.contains(sel.anchorNode)) {
-      setSelectionRect(null);
-      savedRangeRef.current = null;
-      return;
-    }
-    const range = sel.getRangeAt(0);
-    const rect = range.getBoundingClientRect();
-    if (rect.width === 0) {
-      setSelectionRect(null);
-      savedRangeRef.current = null;
-      return;
-    }
-    savedRangeRef.current = range.cloneRange();
-    setSelectionRect({ top: rect.top, left: rect.left, width: rect.width, height: rect.height });
-    // Detect active formatting at selection
-    const editingNode = canvasState?.nodes?.find(n => n.id === editingId);
-    const nodeColor = editingNode?.color || '#000000';
-    setTextFormat({
-      bold: document.queryCommandState('bold'),
-      italic: document.queryCommandState('italic'),
-      underline: document.queryCommandState('underline'),
-      color: document.queryCommandValue('foreColor') || nodeColor,
-      align: document.queryCommandState('justifyCenter') ? 'center' : document.queryCommandState('justifyRight') ? 'right' : 'left',
-    });
-  }
-
-  const restoreSelection = () => {
-    if (!savedRangeRef.current) return false;
-    const sel = window.getSelection();
-    sel.removeAllRanges();
-    sel.addRange(savedRangeRef.current);
-    return true;
-  }
-
-  const applyAdHocStyle = (styleKey, value) => {
-    const editor = editorRef.current;
-    if (!editor) return;
-    editor.focus();
-    restoreSelection();
-    
-    if (styleKey === 'color') {
-      document.execCommand('foreColor', false, value);
-    } else if (styleKey === 'textDecoration' && value === 'underline') {
-      document.execCommand('underline');
-    } else if (styleKey === 'fontWeight' && value === 'bold') {
-      document.execCommand('bold');
-    } else if (styleKey === 'fontStyle' && value === 'italic') {
-      document.execCommand('italic');
-    } else {
-      // For other styles (fontSize etc.), manually wrap in a span
-      const sel = window.getSelection();
-      if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
-      const range = sel.getRangeAt(0);
-      const span = document.createElement('span');
-      const cssProp = styleKey.replace(/([A-Z])/g, '-$1').toLowerCase();
-      span.style[styleKey] = typeof value === 'number' ? `${value}px` : value;
-      try {
-        const content = range.extractContents();
-        span.appendChild(content);
-        range.insertNode(span);
-      } catch (e) { toast.error('Could not apply style'); return; }
-    }
-    
-    // Save the updated HTML without closing toolbar
-    updateNode(editingId, { text: htmlToTags(editor.innerHTML) });
-    // Don't clear selectionRect here — toolbar persists until click-outside
-  }
-
-  const applyAdHocClass = (className) => {
-    if (!className) return;
-    const editor = editorRef.current;
-    if (!editor) return;
-    editor.focus();
-    if (!restoreSelection()) return;
-    const sel = window.getSelection();
-    if (!sel || sel.isCollapsed || sel.rangeCount === 0) return;
-    const range = sel.getRangeAt(0);
-
-    const span = document.createElement('span');
-    // Strip leading dot — DOM className does NOT include the dot (that's a CSS selector prefix)
-    span.className = className.startsWith('.') ? className.slice(1) : className;
-    try {
-      const content = range.extractContents();
-      span.appendChild(content);
-      range.insertNode(span);
-      updateNode(editingId, { text: htmlToTags(editor.innerHTML) });
-      // Don't clear selectionRect — toolbar persists until click-outside
-    } catch (e) {
-      toast.error('Complex selection format not supported');
-    }
-  }
-
-  useEffect(() => {
-    if (editingId) {
-      if (!hasInitializedRef.current && editorRef.current) {
-        const enode = canvasState?.nodes?.find(n => n.id === editingId)
-        if (enode) {
-          editorRef.current.innerHTML = tagsToHtml(enode.text || '')
-          editorRef.current.focus()
-          
-          // Select all text or put cursor at the end
-          const range = document.createRange()
-          range.selectNodeContents(editorRef.current)
-          range.collapse(false)
-          const sel = window.getSelection()
-          sel.removeAllRanges()
-          sel.addRange(range)
-        }
-        hasInitializedRef.current = true
-      }
-    } else {
-      hasInitializedRef.current = false
-    }
-  }, [editingId, canvasState, tagsToHtml])
-
-  // Close editing and toolbar when clicking outside both editor and toolbar
-  useEffect(() => {
-    if (!editingId) return;
-    const handler = (e) => {
-      const toolbar = document.querySelector('[data-floating-toolbar]');
-      const classPanel = document.querySelector('[data-class-panel]');
-      const editor = editorRef.current;
-      if (toolbar && toolbar.contains(e.target)) return;
-      if (editor && editor.contains(e.target)) return;
-      // Class-panel clicks (sidebar "Apply to Selection" buttons) must not exit edit mode
-      // — the button's onClick will apply the class using savedRangeRef
-      if (classPanel && classPanel.contains(e.target)) return;
-      
-      // Save content and exit edit mode
-      if (editor) {
-        updateNode(editingId, { text: htmlToTags(editor.innerHTML) });
-      }
-      setEditingId(null);
-      setSelectionRect(null);
-      savedRangeRef.current = null;
-    };
-    // Use capture to run before canvas/node selection handlers
-    document.addEventListener('pointerdown', handler, true);
-    return () => document.removeEventListener('pointerdown', handler, true);
-  }, [editingId, htmlToTags])
 
   useEffect(() => {
     fetch(`/api/canvases/${id}`).then((r) => r.json()).then((data) => {
-      if (data.error) { toast.error(data.error); router.push('/') } else {
-        setCanvas(data, true)
-        savedCanvasRef.current = JSON.stringify(data)
-        setHasChanges(false)
-      }
+      if (data.error) { toast.error(data.error); router.push('/') } else setCanvas(data, true)
     })
   }, [id])
 
@@ -512,7 +264,6 @@ function Editor() {
     for (const n of canvas.nodes || []) {
       if (n.type !== 'text') continue
       if (n.autoSize === false) continue
-      el.className = n.className ? (n.className.startsWith('.') ? n.className.slice(1) : n.className) : ''
       el.style.width = `${n.width}px`
       el.style.fontSize = `${n.fontSize || 48}px`
       el.style.fontFamily = `'${n.fontFamily || 'Inter'}', sans-serif`
@@ -521,7 +272,7 @@ function Editor() {
       el.style.lineHeight = '1.2'
       el.style.whiteSpace = 'pre-wrap'
       el.style.wordBreak = 'break-word'
-      el.innerHTML = (n.text && n.text.length > 0) ? tagsToHtml(n.text) : 'M'
+      el.textContent = (n.text && n.text.length > 0) ? n.text : 'M'
       const h = Math.max(40, Math.ceil(el.getBoundingClientRect().height))
       if (h !== n.height) updates.push({ id: n.id, height: h })
     }
@@ -531,7 +282,7 @@ function Editor() {
         return u ? { ...n, height: u.height } : n
       }) }))
     }
-  }, [canvas?.nodes, tagsToHtml])
+  }, [canvas?.nodes])
 
   const addText = () => {
     const newNode = {
@@ -630,11 +381,7 @@ function Editor() {
   const save = async () => {
     if (!canvas) return
     const res = await fetch(`/api/canvases/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(canvas) })
-    if (res.ok) {
-      toast.success('Saved!')
-      savedCanvasRef.current = JSON.stringify(canvas)
-      setHasChanges(false)
-    } else toast.error('Save failed')
+    if (res.ok) toast.success('Saved!'); else toast.error('Save failed')
   }
 
   const testRender = async () => {
@@ -826,61 +573,29 @@ function Editor() {
     canvas.colorMode === 'high-contrast' ? 'contrast(160%)' : 'none'
 
   const nodeBoxStyle = (node) => {
-    const clsStyle = getCanvasClassStyle(canvas.classes || {}, node.className)
     const base = {
       position: 'absolute', left: node.x, top: node.y, width: node.width, height: node.height,
       cursor: 'move', pointerEvents: 'auto',
       outline: selectedId === node.id ? '3px solid #6366f1' : 'none', outlineOffset: 2,
-      display: node.type === 'text' ? 'block' : 'flex', alignItems: node.type === 'text' ? 'normal' : 'center',
+      display: 'flex', alignItems: 'center',
       justifyContent: node.textAlign === 'center' ? 'center' : node.textAlign === 'right' ? 'flex-end' : 'flex-start',
       overflow: node.type === 'text' ? 'visible' : 'hidden', userSelect: 'none', whiteSpace: 'pre-wrap',
       transform: `rotate(${node.rotation || 0}deg)`, transformOrigin: 'center center',
     }
     if (node.type === 'text') {
-      const ts = clsStyle.textShadow && clsStyle.textShadow.enabled ? clsStyle.textShadow : (node.textShadow && node.textShadow.enabled ? node.textShadow : null)
       return {
         ...base,
-        color: clsStyle.color || node.color || '#000', 
-        backgroundColor: clsStyle.background || clsStyle.backgroundColor || 'transparent',
-        fontSize: node.fontSize || 48, 
-        fontWeight: clsStyle.fontWeight || node.fontWeight || 400,
-        fontStyle: clsStyle.fontStyle || (node.fontStyle === 'italic' ? 'italic' : 'normal'),
+        color: node.color || '#000', fontSize: node.fontSize || 48, fontWeight: node.fontWeight || 400,
+        fontStyle: node.fontStyle === 'italic' ? 'italic' : 'normal',
         fontFamily: `'${node.fontFamily || 'Inter'}', sans-serif`,
-        lineHeight: node.lineHeight || 1.2,
-        letterSpacing: `${clsStyle.letterSpacing || node.letterSpacing || 0}px`,
-        textTransform: clsStyle.textTransform || node.textTransform || 'none',
-        textDecoration: clsStyle.textDecoration || 'none',
-        textAlign: node.textAlign || 'left',
-        textShadow: ts ? `${ts.offsetX || 0}px ${ts.offsetY || 0}px ${ts.blur || 0}px ${ts.color || '#000'}` : 'none',
+        textShadow: node.textShadow?.enabled ? `${node.textShadow.offsetX || 0}px ${node.textShadow.offsetY || 0}px ${node.textShadow.blur || 0}px ${node.textShadow.color || '#000'}` : 'none',
       }
     }
     if (node.type === 'shape') {
-      const clsStyle = getCanvasClassStyle(canvas.classes || {}, node.className)
-      return {
-        ...base,
-        backgroundColor: clsStyle.fill || node.fill || '#6366f1',
-        border: `${clsStyle.strokeWidth ?? node.strokeWidth ?? 0}px solid ${clsStyle.stroke || node.stroke || '#000000'}`,
-        borderRadius: (clsStyle.shape || node.shape) === 'ellipse' ? '50%' : (clsStyle.borderRadius ?? node.borderRadius ?? 0),
-      }
+      return { ...base, background: node.fill || '#6366f1', borderRadius: node.shape === 'ellipse' ? Math.max(node.width, node.height) : (node.borderRadius || 0), border: node.strokeWidth ? `${node.strokeWidth}px solid ${node.stroke || '#000'}` : 'none' }
     }
     if (node.type === 'gradient') {
-      const clsStyle = getCanvasClassStyle(canvas.classes || {}, node.className)
-      const stops = clsStyle.stops || node.stops || [{ color: '#6366f1', position: 0, alpha: 100 }, { color: '#ec4899', position: 100, alpha: 100 }]
-      const angle = clsStyle.angle ?? node.angle ?? 90
-      const gType = clsStyle.gradientType || node.gradientType || 'linear'
-      const shape = clsStyle.shape || node.shape || 'rect'
-      
-      const stopsStr = stops.map(s => {
-        const c = s.color + Math.round((typeof s.alpha === 'number' ? s.alpha : 100) * 2.55).toString(16).padStart(2, '0')
-        return `${c} ${s.position}%`
-      }).join(', ')
-      const bg = gType === 'radial' ? `radial-gradient(circle, ${stopsStr})` : `linear-gradient(${angle}deg, ${stopsStr})`
-      
-      return {
-        ...base,
-        background: bg,
-        borderRadius: shape === 'ellipse' ? '50%' : (clsStyle.borderRadius ?? node.borderRadius ?? 0),
-      }
+      return { ...base, backgroundImage: buildGradientCssClient(node), borderRadius: node.shape === 'ellipse' ? Math.max(node.width, node.height) : (node.borderRadius || 0) }
     }
     if (node.type === 'image') {
       return { ...base, borderRadius: maskRadius(node) }
@@ -902,148 +617,14 @@ function Editor() {
 
   const fontMeta = selected?.type === 'text' ? (FONT_META[selected.fontFamily] || FONT_META['Inter']) : null
 
-  const generateCssFromClasses = () => {
-    if (!canvas?.classes) return '';
-    let css = '';
-    for (const [name, cls] of Object.entries(canvas.classes)) {
-      if (cls.type === 'text' || !cls.type) {
-        const selector = name.startsWith('.') ? name : `.${name}`
-        css += `${selector} { `;
-        if (cls.color) css += `color: ${cls.color} !important; `;
-        const bg = cls.background || cls.backgroundColor;
-        if (bg) css += `background-color: ${bg} !important; `;
-        if (cls.fontWeight) css += `font-weight: ${cls.fontWeight} !important; `;
-        if (cls.fontStyle) css += `font-style: ${cls.fontStyle} !important; `;
-        if (cls.letterSpacing) css += `letter-spacing: ${cls.letterSpacing}px !important; `;
-        if (cls.textTransform) css += `text-transform: ${cls.textTransform} !important; `;
-        if (cls.textDecoration) css += `text-decoration: ${cls.textDecoration} !important; `;
-        if (cls.textShadow?.enabled) css += `text-shadow: ${cls.textShadow.offsetX||0}px ${cls.textShadow.offsetY||0}px ${cls.textShadow.blur||0}px ${cls.textShadow.color||'#000'} !important; `;
-        css += `}\n`;
-      }
-    }
-    return css;
-  }
-
   return (
-    <div className="h-screen flex flex-col bg-[#FAF7F2] dark:bg-[#0E0D0B] text-foreground relative"
+    <div className="h-screen flex flex-col bg-background relative"
       onDragOver={(e) => { e.preventDefault(); if (e.dataTransfer.types.includes('Files')) setIsDraggingOverBase(true); }}
       onDragLeave={(e) => {
         // Only set false if we are actually leaving the root element, not entering a child
-        if (!e.currentTarget.contains(e.relatedTarget)) setIsDraggingOverBase(false);
+        if (e.currentTarget === e.target) setIsDraggingOverBase(false);
       }}
-      onDrop={(e) => { e.preventDefault(); setIsDraggingOverBase(false); handleDrop(e); }}>
-      
-      <style>{generateCssFromClasses()}</style>
-      
-      {selectionRect && editingId && (() => {
-        const editingNode = canvas.nodes?.find(n => n.id === editingId);
-        const nodeColor = editingNode?.color || '#000000';
-        const textClasses = Object.entries(canvas.classes || {}).filter(([_, c]) => c.type === 'text' || !c.type);
-        const btnBase = 'w-7 h-7 rounded flex items-center justify-center transition-colors';
-        const btnActive = 'bg-foreground text-background';
-        const btnInactive = 'hover:bg-muted';
-        return (
-          <div
-            data-floating-toolbar="true"
-            style={{
-              position: 'fixed',
-              top: selectionRect.top - 52,
-              left: Math.max(8, Math.min(window.innerWidth - 500, selectionRect.left + selectionRect.width / 2 - 250)),
-              zIndex: 99999
-            }}
-            className="bg-card shadow-2xl border border-foreground/10 rounded-xl px-2 py-1.5 flex gap-0.5 items-center"
-            onPointerDown={(e) => e.preventDefault()}
-          >
-            {/* Class selector — always shown, all classes */}
-            <select
-              className="h-7 border rounded text-[10px] px-1.5 bg-background max-w-[90px] truncate"
-              onChange={(e) => { if (e.target.value) { applyAdHocClass(e.target.value); e.target.value = ''; } }}
-              onPointerDown={(e) => e.stopPropagation()}
-              defaultValue=""
-            >
-              <option value="">{textClasses.length > 0 ? 'Class…' : '(no classes)'}</option>
-              {textClasses.map(([name]) => (
-                <option key={name} value={name}>{name.startsWith('.') ? name.slice(1) : name}</option>
-              ))}
-            </select>
-
-            <div className="w-px h-4 bg-border mx-1 flex-shrink-0" />
-
-            {/* Bold / Italic / Underline */}
-            <button className={`${btnBase} ${textFormat.bold ? btnActive : btnInactive}`} title="Bold (Ctrl+B)" onClick={() => applyAdHocStyle('fontWeight', 'bold')}><Bold className="w-3.5 h-3.5" /></button>
-            <button className={`${btnBase} ${textFormat.italic ? btnActive : btnInactive}`} title="Italic (Ctrl+I)" onClick={() => applyAdHocStyle('fontStyle', 'italic')}><Italic className="w-3.5 h-3.5" /></button>
-            <button className={`${btnBase} ${textFormat.underline ? btnActive : btnInactive}`} title="Underline (Ctrl+U)" onClick={() => applyAdHocStyle('textDecoration', 'underline')}><Underline className="w-3.5 h-3.5" /></button>
-
-            <div className="w-px h-4 bg-border mx-1 flex-shrink-0" />
-
-            {/* Align */}
-            <button className={`${btnBase} ${textFormat.align === 'left' ? btnActive : btnInactive}`} title="Align left" onClick={() => applyAdHocStyle('textAlign', 'left')}><AlignLeft className="w-3.5 h-3.5" /></button>
-            <button className={`${btnBase} ${textFormat.align === 'center' ? btnActive : btnInactive}`} title="Align center" onClick={() => applyAdHocStyle('textAlign', 'center')}><AlignCenter className="w-3.5 h-3.5" /></button>
-            <button className={`${btnBase} ${textFormat.align === 'right' ? btnActive : btnInactive}`} title="Align right" onClick={() => applyAdHocStyle('textAlign', 'right')}><AlignRight className="w-3.5 h-3.5" /></button>
-
-            <div className="w-px h-4 bg-border mx-1 flex-shrink-0" />
-
-            {/* Color — small swatch + native color picker + hex input */}
-            <div className="flex items-center gap-1" title="Text color">
-              <label className="w-5 h-5 rounded border cursor-pointer flex-shrink-0 relative overflow-hidden block" style={{ background: textFormat.color || nodeColor }}>
-                <input
-                  type="color"
-                  value={textFormat.color && /^#[0-9a-fA-F]{3,6}$/.test(textFormat.color) ? (textFormat.color.length === 4 ? '#' + textFormat.color[1] + textFormat.color[1] + textFormat.color[2] + textFormat.color[2] + textFormat.color[3] + textFormat.color[3] : textFormat.color) : '#000000'}
-                  className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setTextFormat(prev => ({ ...prev, color: val }));
-                    applyAdHocStyle('color', val);
-                  }}
-                />
-              </label>
-              <input
-                type="text"
-                maxLength={7}
-                placeholder={nodeColor}
-                value={textFormat.color || ''}
-                className="w-[68px] h-7 text-[10px] border rounded bg-background px-1.5 font-mono"
-                onPointerDown={(e) => e.stopPropagation()}
-                onKeyDown={(e) => {
-                  e.stopPropagation();
-                  if (e.key === 'Enter') {
-                    const v = e.target.value.trim();
-                    if (/^#[0-9a-fA-F]{3,6}$/.test(v)) { applyAdHocStyle('color', v); }
-                  }
-                }}
-                onChange={(e) => {
-                  const v = e.target.value.trim();
-                  setTextFormat(prev => ({ ...prev, color: v }));
-                }}
-              />
-            </div>
-
-            <div className="w-px h-4 bg-border mx-1 flex-shrink-0" />
-
-            {/* Font size */}
-            <div className="flex items-center gap-0.5" title="Font size in px — press Enter">
-              <span className="text-[10px] text-muted-foreground">Size</span>
-              <input
-                type="number"
-                min={6} max={400}
-                placeholder={editingNode?.fontSize || 48}
-                className="w-12 h-7 text-[10px] text-center border rounded bg-background px-1"
-                onPointerDown={(e) => e.stopPropagation()}
-                onKeyDown={(e) => {
-                  e.stopPropagation();
-                  if (e.key === 'Enter') {
-                    const v = parseInt(e.target.value);
-                    if (!isNaN(v) && v > 0) { applyAdHocStyle('fontSize', `${v}px`); e.target.value = ''; }
-                  }
-                }}
-              />
-            </div>
-          </div>
-        );
-      })()}
-
-      
+      onDrop={handleRootDrop}>
       {isDraggingOverBase && (
         <div className="absolute inset-0 z-[100] bg-primary/20 border-4 border-primary border-dashed flex items-center justify-center pointer-events-none transition-all">
           <div className="bg-background px-8 py-6 rounded-xl shadow-2xl flex flex-col items-center">
@@ -1053,7 +634,7 @@ function Editor() {
         </div>
       )}
       <div ref={measureRef} aria-hidden="true" style={{ position: 'fixed', visibility: 'hidden', pointerEvents: 'none', left: -99999, top: -99999, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }} />
-      <div className="border-b-2 border-foreground/90 bg-[#FAF7F2] dark:bg-[#0E0D0B] px-4 py-2.5 flex items-center justify-between">
+      <div className="border-b bg-card px-4 py-2.5 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <Button variant="ghost" size="icon" onClick={() => router.push('/')}><ArrowLeft className="w-4 h-4" /></Button>
           <div className="text-foreground"><KandMark size={28} /></div>
@@ -1066,19 +647,13 @@ function Editor() {
           <ThemeToggle />
           <Button variant="outline" size="sm" onClick={() => setApiDialog(true)}><Code2 className="w-4 h-4 mr-2" />API</Button>
           <Button variant="outline" size="sm" onClick={() => setRenderDialog(true)}><Play className="w-4 h-4 mr-2" />Test Render</Button>
-          <Button size="sm" onClick={save} disabled={!hasChanges} className={!hasChanges ? "bg-muted text-muted-foreground" : ""}><Save className="w-4 h-4 mr-2" />{hasChanges ? 'Save' : 'Saved'}</Button>
+          <Button size="sm" onClick={save}><Save className="w-4 h-4 mr-2" />Save</Button>
         </div>
       </div>
 
       <div className="flex-1 flex overflow-hidden">
-        <Tabs defaultValue="design" className="w-64 border-r-2 border-foreground/90 bg-card flex flex-col">
-          <TabsList className="grid grid-cols-2 rounded-none border-b-2 border-foreground/90 h-11 bg-background">
-            <TabsTrigger value="design" className="rounded-none data-[state=active]:bg-card data-[state=active]:border-b-2 data-[state=active]:border-[#D4FF00] font-bold tracking-widest text-xs uppercase">Design</TabsTrigger>
-            <TabsTrigger value="classes" className="rounded-none data-[state=active]:bg-card data-[state=active]:border-b-2 data-[state=active]:border-[#D4FF00] font-bold tracking-widest text-xs uppercase">Classes</TabsTrigger>
-          </TabsList>
-          
-          <TabsContent value="design" className="flex-1 flex flex-col p-3 m-0 space-y-1 min-h-0">
-            <p className="text-xs font-semibold uppercase text-muted-foreground mb-2 tracking-wide">Add Elements</p>
+        <div className="w-60 border-r bg-card p-3 flex flex-col">
+          <p className="text-xs font-semibold uppercase text-muted-foreground mb-2 tracking-wide">Add Elements</p>
           <div className="space-y-1.5">
             <Button variant="outline" className="w-full justify-start" onClick={addText}><Type className="w-4 h-4 mr-2" /> Add Text</Button>
             <Button variant="outline" className="w-full justify-start" onClick={openImageDialog}><ImageIcon className="w-4 h-4 mr-2" /> Add Image</Button>
@@ -1128,11 +703,7 @@ function Editor() {
               </div>
             </div>
           )}
-          </TabsContent>
-          <TabsContent value="classes" className="flex-1 overflow-y-auto p-3 m-0 min-h-0">
-            <ClassesPanel canvas={canvas} setCanvas={setCanvas} />
-          </TabsContent>
-        </Tabs>
+        </div>
 
         <div className="flex-1 overflow-auto flex items-center justify-center p-6"
           style={{ background: 'repeating-conic-gradient(hsl(var(--muted)) 0% 25%, hsl(var(--background)) 0% 50%) 50% / 24px 24px' }}
@@ -1191,9 +762,8 @@ function Editor() {
                     e.stopPropagation()
                     if (node.type === 'text') setEditingId(node.id)
                   }}
-                   className={node.className ? (node.className.startsWith('.') ? node.className.slice(1) : node.className) : ''}
                   style={{...nodeBoxStyle(node), opacity: editingId === node.id ? 0 : 1}}>
-                  {node.type === 'text' ? renderStyledText(parseStyledText(node.text || '', canvas.classes || {}), createElement) :
+                  {node.type === 'text' ? (node.text || '') :
                    node.type === 'image' && node.src ? (
                     <img src={node.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', filter: buildFilterCss(node.filters) }} draggable={false} />
                    ) :
@@ -1254,33 +824,23 @@ function Editor() {
               {editingId && canvas.nodes?.find(n => n.id === editingId) && (
                 (() => {
                   const enode = canvas.nodes.find(n => n.id === editingId)
-                  
                   return (
-                    <div
-                      id={`editor-${enode.id}`}
-                      ref={editorRef}
-                      contentEditable
-                      suppressContentEditableWarning
-                      className={`absolute bg-transparent outline-none p-0 m-0 resize-none overflow-visible ${enode.className ? (enode.className.startsWith('.') ? enode.className.slice(1) : enode.className) : ''}`}
+                    <textarea
+                      autoFocus
+                      className="absolute bg-transparent outline-none border-none p-0 m-0 resize-none overflow-hidden"
                       style={{
                         left: enode.x, top: enode.y, width: enode.width, height: enode.height,
                         color: enode.color || '#000', fontSize: enode.fontSize || 48, fontWeight: enode.fontWeight || 400,
                         fontStyle: enode.fontStyle === 'italic' ? 'italic' : 'normal',
                         fontFamily: `'${enode.fontFamily || 'Inter'}', sans-serif`,
-                        textAlign: enode.textAlign || 'left', lineHeight: enode.lineHeight || 1.2, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
-                        textShadow: enode.textShadow?.enabled ? `${enode.textShadow.offsetX || 0}px ${enode.textShadow.offsetY || 0}px ${enode.textShadow.blur || 0}px ${enode.textShadow.color || '#000'}` : 'none',
-                        outline: '2px solid #6366f1', outlineOffset: 2,
-                        zIndex: 50, cursor: 'text'
+                        textAlign: enode.textAlign || 'left', lineHeight: 1.2, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                        textShadow: enode.textShadow?.enabled ? `${enode.textShadow.offsetX || 0}px ${enode.textShadow.offsetY || 0}px ${enode.textShadow.blur || 0}px ${enode.textShadow.color || '#000'}` : 'none'
                       }}
-                      onMouseDown={(e) => e.stopPropagation()}
-                      onMouseUp={handleSelectionChange}
-                      onKeyUp={handleSelectionChange}
-                      onBlur={(e) => {
-                        updateNode(enode.id, { text: htmlToTags(e.target.innerHTML) });
-                      }}
+                      defaultValue={enode.text || ''}
+                      onBlur={(e) => { updateNode(enode.id, { text: e.target.value }); setEditingId(null) }}
                       onKeyDown={(e) => {
                         e.stopPropagation()
-                        if (e.key === 'Escape') { setEditingId(null); setSelectionRect(null); }
+                        if (e.key === 'Escape') { setEditingId(null) }
                       }}
                     />
                   )
@@ -1324,7 +884,7 @@ function Editor() {
 
               <div className="space-y-3">
                 {selected.type === 'text' && (
-                  <TextProperties node={selected} updateNode={updateNode} meta={fontMeta} canvas={canvas} editorRef={editorRef} savedRangeRef={savedRangeRef} htmlToTags={htmlToTags} editingId={editingId} />
+                  <TextProperties node={selected} updateNode={updateNode} meta={fontMeta} />
                 )}
                 {selected.type === 'image' && (
                   <ImageProperties node={selected} updateNode={updateNode} />
@@ -1345,14 +905,6 @@ function Editor() {
                   <div><Label className="text-xs text-pink-500">Max Height</Label><Input type="number" placeholder="none" value={selected.maxHeight || ''} onChange={(e) => updateNode(selected.id, { maxHeight: parseInt(e.target.value) || undefined })} /></div>
                   <div><Label className="text-xs">Rotation °</Label><Input type="number" value={selected.rotation || 0} onChange={(e) => updateNode(selected.id, { rotation: parseInt(e.target.value) || 0 })} /></div>
                 </div>
-
-                {selected.type !== 'text' && (
-                  <div className="pt-3 border-t">
-                    <Label className="text-xs mb-1">Class Name</Label>
-                    <Input placeholder="e.g. .highlight" value={selected.className || ''} onChange={(e) => updateNode(selected.id, { className: e.target.value })} />
-                    <p className="text-xs text-muted-foreground mt-1">Link this node to a custom class.</p>
-                  </div>
-                )}
 
                 {(selected.type === 'text' || selected.type === 'image') && (
                   <div className="pt-3 border-t">
@@ -1522,128 +1074,15 @@ function CanvasSettingsPanel({ canvas, setCanvas }) {
   )
 }
 
-function TextProperties({ node, updateNode, meta, canvas, editorRef, savedRangeRef, htmlToTags, editingId }) {
+function TextProperties({ node, updateNode, meta }) {
   const weights = meta?.weights || [400, 700]
   const supportsItalic = meta?.italic
   const ts = node.textShadow || { enabled: false, offsetX: 0, offsetY: 4, blur: 12, color: '#00000055' }
-
-  const applyTextClassToCanvas = (className) => {
-    // Only works while this node is being edited
-    if (editingId !== node.id) return toast.error('Double-click the text on canvas to enter edit mode, then highlight text and click a class');
-    const editor = editorRef?.current;
-    if (!editor) return;
-
-    // Restore the saved selection (editor may have lost focus when clicking the sidebar)
-    const range = savedRangeRef?.current;
-    if (!range) return toast.error('Highlight some text in the canvas editor first');
-
-    editor.focus();
-    const sel = window.getSelection();
-    sel.removeAllRanges();
-    sel.addRange(range);
-
-    const span = document.createElement('span');
-    span.className = className.startsWith('.') ? className.slice(1) : className;
-    try {
-      const content = range.extractContents();
-      span.appendChild(content);
-      range.insertNode(span);
-      // Move cursor after the span
-      const newRange = document.createRange();
-      newRange.setStartAfter(span);
-      newRange.collapse(true);
-      sel.removeAllRanges();
-      sel.addRange(newRange);
-      // Save node text immediately
-      if (htmlToTags) updateNode(node.id, { text: htmlToTags(editor.innerHTML) });
-    } catch (e) {
-      toast.error('Could not apply class to this selection');
-    }
-  }
-
-  const clearTextClassFromCanvas = () => {
-    if (editingId !== node.id) return toast.error('Double-click the text on canvas to enter edit mode, then highlight text and click Clear');
-    const editor = editorRef?.current;
-    if (!editor) return;
-
-    const range = savedRangeRef?.current;
-    if (!range) return toast.error('Highlight some text in the canvas editor first');
-
-    let modified = false;
-
-    if (range.collapsed) {
-       let curr = range.startContainer;
-       if (curr.nodeType === Node.TEXT_NODE) curr = curr.parentNode;
-       while (curr && curr !== editor) {
-         if (curr.tagName === 'SPAN' && curr.className) {
-           curr.removeAttribute('class');
-           modified = true;
-           break;
-         }
-         curr = curr.parentNode;
-       }
-    } else {
-       const spans = Array.from(editor.querySelectorAll('span[class]'));
-       spans.forEach(span => {
-         if (range.intersectsNode(span)) {
-           span.removeAttribute('class');
-           modified = true;
-         }
-       });
-    }
-
-    if (modified) {
-      if (htmlToTags) updateNode(node.id, { text: htmlToTags(editor.innerHTML) });
-    } else {
-      toast.error('No class found on the selected text');
-    }
-  }
-
-  const textClasses = Object.entries(canvas.classes || {}).filter(([_, c]) => c.type === 'text' || !c.type)
-
   return (
     <>
-      <div className="space-y-3 bg-muted/30 border p-3 rounded-lg">
-        {/* Whole Node Class dropdown */}
-        <div className="space-y-1">
-          <Label className="text-[11px] font-semibold uppercase text-muted-foreground tracking-wider block">Whole Node Class</Label>
-          <select 
-            className="w-full h-9 border rounded-md px-2 text-xs bg-background"
-            value={node.className || ''} 
-            onChange={(e) => updateNode(node.id, { className: e.target.value || undefined })}
-          >
-            <option value="">(None)</option>
-            {textClasses.map(([name]) => (
-              <option key={name} value={name}>{name}</option>
-            ))}
-          </select>
-        </div>
-
-        {/* Inline Selection Class list — wrapped in data-class-panel so click-outside handler ignores it */}
-        {textClasses.length > 0 && (
-          <div data-class-panel className="space-y-1.5 pt-2 border-t border-foreground/5">
-            <Label className="text-[11px] font-semibold uppercase text-muted-foreground tracking-wider block">Apply Class to Selection</Label>
-            <div className="flex flex-wrap gap-1">
-              {textClasses.map(([name, _]) => (
-                <button 
-                  key={name}
-                  onClick={() => applyTextClassToCanvas(name)}
-                  title={`Apply ${name} to selected text on canvas`}
-                  className="text-xs bg-card hover:bg-muted border border-foreground/10 px-2 py-0.5 rounded cursor-pointer transition-colors font-mono"
-                >
-                  {name}
-                </button>
-              ))}
-              <button 
-                onClick={clearTextClassFromCanvas}
-                title="Remove class from selected text"
-                className="text-xs bg-red-500/10 text-red-600 hover:bg-red-500/20 border border-red-500/20 px-2 py-0.5 rounded cursor-pointer transition-colors flex items-center gap-1"
-              >
-                <X className="w-3 h-3" /> Clear
-              </button>
-            </div>
-          </div>
-        )}
+      <div>
+        <Label className="text-xs">Text</Label>
+        <Textarea value={node.text || ''} onChange={(e) => updateNode(node.id, { text: e.target.value })} rows={3} />
       </div>
       <div>
         <Label className="text-xs">Font Family</Label>
@@ -1688,26 +1127,6 @@ function TextProperties({ node, updateNode, meta, canvas, editorRef, savedRangeR
           <option value="left">Left</option>
           <option value="center">Center</option>
           <option value="right">Right</option>
-        </select>
-      </div>
-
-      <div className="grid grid-cols-2 gap-2 mt-3">
-        <div>
-          <Label className="text-xs">Letter Spacing</Label>
-          <Input type="number" value={node.letterSpacing || 0} onChange={(e) => updateNode(node.id, { letterSpacing: parseInt(e.target.value) || 0 })} />
-        </div>
-        <div>
-          <Label className="text-xs">Line Height</Label>
-          <Input type="number" step="0.1" value={node.lineHeight || 1.2} onChange={(e) => updateNode(node.id, { lineHeight: parseFloat(e.target.value) || 1.2 })} />
-        </div>
-      </div>
-      <div className="mt-3">
-        <Label className="text-xs">Transform</Label>
-        <select className="w-full h-10 border rounded-md px-3 text-sm bg-background" value={node.textTransform || 'none'} onChange={(e) => updateNode(node.id, { textTransform: e.target.value })}>
-          <option value="none">None</option>
-          <option value="uppercase">Uppercase</option>
-          <option value="lowercase">Lowercase</option>
-          <option value="capitalize">Capitalize</option>
         </select>
       </div>
 
@@ -1904,205 +1323,3 @@ function GradientProperties({ node, updateNode }) {
 }
 
 export default Editor
-
-function ClassesPanel({ canvas, setCanvas }) {
-  const classes = canvas.classes || {}
-  const [newClassName, setNewClassName] = useState('')
-  const [newClassType, setNewClassType] = useState('text')
-
-  const addClass = () => {
-    let name = newClassName.trim()
-    if (!name) return
-    if (!name.startsWith('.')) name = '.' + name
-    if (resolveCanvasClass(classes, name)) return toast.error('Class already exists')
-    
-    let defaults = { type: newClassType }
-    if (newClassType === 'image') defaults.filters = {}
-    if (newClassType === 'gradient') defaults.stops = [{color: '#6366f1', position: 0, alpha: 100}, {color: '#ec4899', position: 100, alpha: 100}]
-
-    setCanvas({ ...canvas, classes: { ...classes, [name]: defaults } })
-    setNewClassName('')
-  }
-
-  const removeClass = (name) => {
-    const updated = { ...classes }
-    delete updated[name]
-    setCanvas({ ...canvas, classes: updated })
-  }
-
-  const updateClass = (name, key, value) => {
-    const updated = { ...classes }
-    if (value === undefined || value === '' || Number.isNaN(value)) {
-      delete updated[name][key]
-    } else {
-      updated[name] = { ...updated[name], [key]: value }
-    }
-    setCanvas({ ...canvas, classes: updated })
-  }
-
-  return (
-    <div>
-      <p className="text-xs font-semibold uppercase text-muted-foreground mb-3 tracking-wide">Custom Classes</p>
-      <div className="flex flex-col gap-2 mb-4">
-        <div className="flex gap-2">
-          <select className="h-8 border rounded text-xs px-2 bg-background w-24" value={newClassType} onChange={e => setNewClassType(e.target.value)}>
-            <option value="text">Text</option>
-            <option value="image">Image</option>
-            <option value="shape">Shape</option>
-            <option value="gradient">Gradient</option>
-          </select>
-          <Input placeholder="Name e.g. .highlight" value={newClassName} onChange={e => setNewClassName(e.target.value)} onKeyDown={e => e.key === 'Enter' && addClass()} className="text-xs h-8 flex-1" />
-          <Button size="sm" className="h-8" onClick={addClass}><Plus className="w-3.5 h-3.5" /></Button>
-        </div>
-      </div>
-
-      <div className="space-y-4">
-        {Object.keys(classes).map(name => {
-          const cls = classes[name] || {}
-          const type = cls.type || 'text'
-          
-          return (
-            <div key={name} className="border border-foreground/10 p-3 rounded-lg bg-background shadow-sm">
-              <div className="flex items-center justify-between mb-2 pb-2 border-b border-foreground/10">
-                <div className="flex items-center gap-2">
-                  <span className="font-mono text-sm font-bold">{name}</span>
-                  <span className="text-[9px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground uppercase tracking-wider">{type}</span>
-                </div>
-                <Button variant="ghost" size="icon" className="h-6 w-6 text-destructive" onClick={() => removeClass(name)}><Trash2 className="w-3.5 h-3.5" /></Button>
-              </div>
-              <div className="space-y-2">
-                
-                {type === 'text' && (
-                  <>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <Label className="text-[10px] uppercase text-muted-foreground">Color</Label>
-                        <Input type="color" className="h-6 w-full p-0 border-0" value={cls.color || '#000000'} onChange={e => updateClass(name, 'color', e.target.value)} />
-                      </div>
-                      <div>
-                        <Label className="text-[10px] uppercase text-muted-foreground">Background</Label>
-                        <Input type="color" className="h-6 w-full p-0 border-0" value={cls.background || '#ffffff'} onChange={e => updateClass(name, 'background', e.target.value)} />
-                      </div>
-                    </div>
-                    <div>
-                      <Label className="text-[10px] uppercase text-muted-foreground">Underline</Label>
-                      <select className="w-full h-7 border rounded text-[10px]" value={cls.textDecoration || 'none'} onChange={e => updateClass(name, 'textDecoration', e.target.value)}>
-                        <option value="none">None</option>
-                        <option value="underline">Underline</option>
-                        <option value="line-through">Line Through</option>
-                      </select>
-                    </div>
-                    <div>
-                      <Label className="text-[10px] uppercase text-muted-foreground">Letter Spacing (px)</Label>
-                      <Input type="number" className="h-7 text-[10px]" value={cls.letterSpacing ?? ''} onChange={e => updateClass(name, 'letterSpacing', parseFloat(e.target.value))} placeholder="0" />
-                    </div>
-                    <div>
-                      <Label className="text-[10px] uppercase text-muted-foreground">Text Transform</Label>
-                      <select className="w-full h-7 border rounded text-[10px]" value={cls.textTransform || 'none'} onChange={e => updateClass(name, 'textTransform', e.target.value)}>
-                        <option value="none">None</option>
-                        <option value="uppercase">Uppercase</option>
-                        <option value="lowercase">Lowercase</option>
-                        <option value="capitalize">Capitalize</option>
-                      </select>
-                    </div>
-                  </>
-                )}
-
-                {type === 'image' && (
-                  <>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <Label className="text-[10px] uppercase text-muted-foreground">Mask</Label>
-                        <select className="w-full h-7 border rounded text-[10px]" value={cls.mask || 'none'} onChange={e => updateClass(name, 'mask', e.target.value)}>
-                          <option value="none">None</option>
-                          <option value="circle">Circle</option>
-                          <option value="pill">Pill</option>
-                          <option value="rounded">Rounded</option>
-                          <option value="soft">Soft</option>
-                        </select>
-                      </div>
-                      <div>
-                        <Label className="text-[10px] uppercase text-muted-foreground">Radius</Label>
-                        <Input type="number" className="h-7 text-[10px]" value={cls.borderRadius ?? ''} onChange={e => updateClass(name, 'borderRadius', parseInt(e.target.value))} placeholder="0" />
-                      </div>
-                    </div>
-                    <div className="pt-1">
-                      <Label className="text-[10px] uppercase text-muted-foreground mb-1 block">Filters</Label>
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <Label className="text-[9px]">Brightness %</Label>
-                          <Input type="number" className="h-6 text-[10px]" value={cls.filters?.brightness ?? ''} placeholder="100" 
-                            onChange={e => updateClass(name, 'filters', { ...(cls.filters || {}), brightness: parseInt(e.target.value) })} />
-                        </div>
-                        <div>
-                          <Label className="text-[9px]">Contrast %</Label>
-                          <Input type="number" className="h-6 text-[10px]" value={cls.filters?.contrast ?? ''} placeholder="100" 
-                            onChange={e => updateClass(name, 'filters', { ...(cls.filters || {}), contrast: parseInt(e.target.value) })} />
-                        </div>
-                        <div>
-                          <Label className="text-[9px]">Saturate %</Label>
-                          <Input type="number" className="h-6 text-[10px]" value={cls.filters?.saturate ?? ''} placeholder="100" 
-                            onChange={e => updateClass(name, 'filters', { ...(cls.filters || {}), saturate: parseInt(e.target.value) })} />
-                        </div>
-                        <div>
-                          <Label className="text-[9px]">Sepia %</Label>
-                          <Input type="number" className="h-6 text-[10px]" value={cls.filters?.sepia ?? ''} placeholder="0" 
-                            onChange={e => updateClass(name, 'filters', { ...(cls.filters || {}), sepia: parseInt(e.target.value) })} />
-                        </div>
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                {type === 'shape' && (
-                  <>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <Label className="text-[10px] uppercase text-muted-foreground">Fill</Label>
-                        <Input type="color" className="h-6 w-full p-0 border-0" value={cls.fill || '#6366f1'} onChange={e => updateClass(name, 'fill', e.target.value)} />
-                      </div>
-                      <div>
-                        <Label className="text-[10px] uppercase text-muted-foreground">Stroke</Label>
-                        <Input type="color" className="h-6 w-full p-0 border-0" value={cls.stroke || '#000000'} onChange={e => updateClass(name, 'stroke', e.target.value)} />
-                      </div>
-                      <div>
-                        <Label className="text-[10px] uppercase text-muted-foreground">Stroke W.</Label>
-                        <Input type="number" className="h-7 text-[10px]" value={cls.strokeWidth ?? ''} onChange={e => updateClass(name, 'strokeWidth', parseInt(e.target.value))} placeholder="0" />
-                      </div>
-                      <div>
-                        <Label className="text-[10px] uppercase text-muted-foreground">Radius</Label>
-                        <Input type="number" className="h-7 text-[10px]" value={cls.borderRadius ?? ''} onChange={e => updateClass(name, 'borderRadius', parseInt(e.target.value))} placeholder="0" />
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                {type === 'gradient' && (
-                  <>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <Label className="text-[10px] uppercase text-muted-foreground">Type</Label>
-                        <select className="w-full h-7 border rounded text-[10px]" value={cls.gradientType || 'linear'} onChange={e => updateClass(name, 'gradientType', e.target.value)}>
-                          <option value="linear">Linear</option>
-                          <option value="radial">Radial</option>
-                        </select>
-                      </div>
-                      <div>
-                        <Label className="text-[10px] uppercase text-muted-foreground">Angle</Label>
-                        <Input type="number" className="h-7 text-[10px]" value={cls.angle ?? 90} onChange={e => updateClass(name, 'angle', parseInt(e.target.value))} placeholder="90" />
-                      </div>
-                    </div>
-                  </>
-                )}
-
-              </div>
-            </div>
-          )
-        })}
-        {Object.keys(classes).length === 0 && (
-          <p className="text-xs text-muted-foreground text-center py-4">No custom classes defined. Create one to use special inline styles.</p>
-        )}
-      </div>
-    </div>
-  )
-}
