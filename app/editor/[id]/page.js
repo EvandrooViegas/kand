@@ -918,6 +918,10 @@ function Editor() {
         if (cls.textTransform) css += `text-transform: ${cls.textTransform} !important; `;
         if (cls.textDecoration) css += `text-decoration: ${cls.textDecoration} !important; `;
         if (cls.textShadow?.enabled) css += `text-shadow: ${cls.textShadow.offsetX||0}px ${cls.textShadow.offsetY||0}px ${cls.textShadow.blur||0}px ${cls.textShadow.color||'#000'} !important; `;
+        if (cls.paddingX || cls.paddingY) css += `padding: ${cls.paddingY||0}px ${cls.paddingX||0}px !important; `;
+        if (cls.borderRadius) css += `border-radius: ${cls.borderRadius}px !important; `;
+        if (cls.boxShadow?.enabled) css += `box-shadow: ${cls.boxShadow.offsetX||0}px ${cls.boxShadow.offsetY||0}px ${cls.boxShadow.blur||0}px ${cls.boxShadow.color||'#000'} !important; `;
+        css += `box-decoration-break: clone; -webkit-box-decoration-break: clone; `;
         css += `}\n`;
       }
     }
@@ -2004,6 +2008,44 @@ function ClassesPanel({ canvas, setCanvas }) {
                         <option value="lowercase">Lowercase</option>
                         <option value="capitalize">Capitalize</option>
                       </select>
+                    </div>
+                    {/* Padding & Corner Radius */}
+                    <div className="grid grid-cols-3 gap-2">
+                      <div>
+                        <Label className="text-[10px] uppercase text-muted-foreground">Pad X (px)</Label>
+                        <Input type="number" className="h-7 text-[10px]" value={cls.paddingX ?? ''} onChange={e => updateClass(name, 'paddingX', parseInt(e.target.value))} placeholder="0" />
+                      </div>
+                      <div>
+                        <Label className="text-[10px] uppercase text-muted-foreground">Pad Y (px)</Label>
+                        <Input type="number" className="h-7 text-[10px]" value={cls.paddingY ?? ''} onChange={e => updateClass(name, 'paddingY', parseInt(e.target.value))} placeholder="0" />
+                      </div>
+                      <div>
+                        <Label className="text-[10px] uppercase text-muted-foreground">Radius</Label>
+                        <Input type="number" className="h-7 text-[10px]" value={cls.borderRadius ?? ''} onChange={e => updateClass(name, 'borderRadius', parseInt(e.target.value))} placeholder="0" />
+                      </div>
+                    </div>
+                    {/* Background Box Shadow */}
+                    <div className="pt-2 border-t border-foreground/10">
+                      <div className="flex items-center justify-between mb-2">
+                        <Label className="text-[10px] uppercase font-bold">Bg Shadow</Label>
+                        <Switch checked={!!cls.boxShadow?.enabled} onCheckedChange={(v) => updateClass(name, 'boxShadow', { ...(cls.boxShadow || {}), enabled: v })} />
+                      </div>
+                      {cls.boxShadow?.enabled && (
+                        <div className="space-y-2">
+                          <div className="grid grid-cols-3 gap-2">
+                            <div><Label className="text-[9px]">Offset X</Label><Input type="number" className="h-6 text-[10px]" value={cls.boxShadow.offsetX || 0} onChange={(e) => updateClass(name, 'boxShadow', { ...cls.boxShadow, offsetX: parseInt(e.target.value) || 0 })} /></div>
+                            <div><Label className="text-[9px]">Offset Y</Label><Input type="number" className="h-6 text-[10px]" value={cls.boxShadow.offsetY || 0} onChange={(e) => updateClass(name, 'boxShadow', { ...cls.boxShadow, offsetY: parseInt(e.target.value) || 0 })} /></div>
+                            <div><Label className="text-[9px]">Blur</Label><Input type="number" className="h-6 text-[10px]" value={cls.boxShadow.blur || 0} onChange={(e) => updateClass(name, 'boxShadow', { ...cls.boxShadow, blur: parseInt(e.target.value) || 0 })} /></div>
+                          </div>
+                          <div>
+                            <Label className="text-[9px]">Color</Label>
+                            <div className="flex gap-2">
+                              <Input type="color" className="w-10 p-0 h-6 border-0" value={(cls.boxShadow.color || '#000000').slice(0, 7)} onChange={(e) => updateClass(name, 'boxShadow', { ...cls.boxShadow, color: e.target.value })} />
+                              <Input className="h-6 text-[10px]" value={cls.boxShadow.color || '#000000'} onChange={(e) => updateClass(name, 'boxShadow', { ...cls.boxShadow, color: e.target.value })} />
+                            </div>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   </>
                 )}
