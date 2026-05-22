@@ -14,11 +14,17 @@ import {
   ArrowLeft, Type, Image as ImageIcon, Trash2, Save, Play, Code2, Copy, Check,
   Square, Circle, ChevronUp, ChevronDown, ChevronsUp, ChevronsDown, Upload,
   Link as LinkIcon, Palette, Plus, X, Moon, Sun, Italic, Underline, Bold,
-  AlignLeft, AlignCenter, AlignRight, Sparkles, Wand2, GripVertical, Undo2, Redo2
+  AlignLeft, AlignCenter, AlignRight, Sparkles, Wand2, GripVertical, Undo2, Redo2,
+  ZoomIn, ZoomOut, Maximize2
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { v4 as uuidv4 } from 'uuid'
-import { KandMark } from '@/components/logo'
+import { KandLogo, KandMark } from '@/components/logo'
+
+const BEBAS = { fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.01em' }
+const MIN_ZOOM = 0.08
+const MAX_ZOOM = 4
+const ZOOM_STEP = 0.1
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable'
 import { parseStyledText, renderStyledText, resolveCanvasClass } from '@/lib/styleParser'
 import { createElement } from 'react'
@@ -241,6 +247,8 @@ function Editor() {
   const [selectedId, setSelectedId] = useState(null)
   const [editingId, setEditingId] = useState(null)
   const [scale, setScale] = useState(0.5)
+  const userZoomRef = useRef(false)
+  const canvasViewportRef = useRef(null)
   const canvasRef = useRef(null)
   const editorRef = useRef(null)
   const hasInitializedRef = useRef(false)
@@ -496,18 +504,42 @@ function Editor() {
     })
   }, [id])
 
+  const fitCanvasToView = useCallback(() => {
+    if (!canvas) return
+    const el = canvasViewportRef.current
+    const pad = 48
+    const vw = el ? el.clientWidth - pad : window.innerWidth - 720
+    const vh = el ? el.clientHeight - pad : window.innerHeight - 180
+    const sx = vw / canvas.width
+    const sy = vh / canvas.height
+    setScale(Math.min(sx, sy, 1))
+    userZoomRef.current = false
+  }, [canvas?.width, canvas?.height])
+
   useEffect(() => {
     if (!canvas) return
     const updateScale = () => {
-      const w = window.innerWidth - 720
-      const h = window.innerHeight - 180
-      const sx = w / canvas.width, sy = h / canvas.height
-      setScale(Math.min(sx, sy, 0.7))
+      if (userZoomRef.current) return
+      fitCanvasToView()
     }
     updateScale()
     window.addEventListener('resize', updateScale)
     return () => window.removeEventListener('resize', updateScale)
-  }, [canvas?.width, canvas?.height])
+  }, [canvas, fitCanvasToView])
+
+  useLayoutEffect(() => {
+    const el = canvasViewportRef.current
+    if (!el || !canvas) return
+    const onWheel = (e) => {
+      if (!e.ctrlKey && !e.metaKey) return
+      e.preventDefault()
+      userZoomRef.current = true
+      const factor = e.deltaY < 0 ? 1 + ZOOM_STEP : 1 - ZOOM_STEP
+      setScale((s) => Math.min(MAX_ZOOM, Math.max(MIN_ZOOM, s * factor)))
+    }
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => el.removeEventListener('wheel', onWheel)
+  }, [canvas])
 
   useEffect(() => {
     if (!canvas) return
@@ -1033,7 +1065,7 @@ function Editor() {
               left: Math.max(8, Math.min(window.innerWidth - 500, selectionRect.left + selectionRect.width / 2 - 250)),
               zIndex: 99999
             }}
-            className="bg-card shadow-2xl border border-foreground/10 rounded-xl px-2 py-1.5 flex gap-0.5 items-center"
+            className="bg-card shadow-[6px_6px_0_0_rgba(0,0,0,0.85)] dark:shadow-[6px_6px_0_0_rgba(212,255,0,0.3)] border-2 border-foreground/90 rounded-xl px-2 py-1.5 flex gap-0.5 items-center"
             onPointerDown={(e) => e.preventDefault()}
           >
             {/* Class selector — always shown, all classes */}
@@ -1127,52 +1159,75 @@ function Editor() {
 
       
       {isDraggingOverBase && (
-        <div className="absolute inset-0 z-[100] bg-primary/20 border-4 border-primary border-dashed flex items-center justify-center pointer-events-none transition-all">
-          <div className="bg-background px-8 py-6 rounded-xl shadow-2xl flex flex-col items-center">
-            <Upload className="w-12 h-12 text-primary mb-3 animate-bounce" />
-            <h2 className="text-xl font-bold">Drop images to upload</h2>
+        <div className="absolute inset-0 z-[100] bg-[#D4FF00]/15 border-4 border-dashed border-foreground/90 flex items-center justify-center pointer-events-none transition-all">
+          <div className="bg-card border-2 border-foreground/90 px-8 py-6 rounded-2xl shadow-[8px_8px_0_0_rgba(0,0,0,0.85)] dark:shadow-[8px_8px_0_0_rgba(212,255,0,0.35)] flex flex-col items-center">
+            <Upload className="w-12 h-12 text-foreground mb-3 animate-bounce" />
+            <h2 className="text-2xl" style={BEBAS}>DROP IMAGES</h2>
+            <p className="text-xs uppercase tracking-widest text-foreground/60 mt-1">Upload to your session library</p>
           </div>
         </div>
       )}
       <div ref={measureRef} aria-hidden="true" style={{ position: 'fixed', visibility: 'hidden', pointerEvents: 'none', left: -99999, top: -99999, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }} />
-      <div className="border-b-2 border-foreground/90 bg-[#FAF7F2] dark:bg-[#0E0D0B] px-4 py-2.5 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => router.push('/')}><ArrowLeft className="w-4 h-4" /></Button>
-          <div className="text-foreground"><KandMark size={28} /></div>
-          <Input value={canvas.name} onChange={(e) => setCanvas({ ...canvas, name: e.target.value })} className="w-64 font-medium border-foreground/20" />
+      <header className="border-b-2 border-foreground/90 bg-[#FAF7F2] dark:bg-[#0E0D0B] px-4 py-3 flex items-center justify-between shrink-0 z-20">
+        <div className="flex items-center gap-3 min-w-0">
+          <Button variant="ghost" size="icon" className="hover:bg-[#D4FF00] hover:text-foreground shrink-0" onClick={() => router.push('/')} title="Back to studio"><ArrowLeft className="w-4 h-4" /></Button>
+          <KandLogo size={30} />
+          <div className="hidden sm:inline-flex items-center gap-2 px-2.5 py-0.5 border border-foreground/80 rounded-full text-[10px] font-semibold uppercase tracking-widest shrink-0">
+            <span className="w-1.5 h-1.5 rounded-full bg-[#9AB800] animate-pulse" />
+            Editor
+          </div>
+          <Input
+            value={canvas.name}
+            onChange={(e) => setCanvas({ ...canvas, name: e.target.value })}
+            className="w-48 sm:w-64 font-semibold border-2 border-foreground/20 rounded-lg bg-card focus-visible:ring-[#D4FF00]"
+          />
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="ghost" size="icon" onClick={undo} disabled={historyRef.current.past.length === 0} title="Undo (Ctrl+Z)"><Undo2 className="w-4 h-4" /></Button>
-          <Button variant="ghost" size="icon" onClick={redo} disabled={historyRef.current.future.length === 0} title="Redo (Ctrl+Y)"><Redo2 className="w-4 h-4" /></Button>
-          <div className="w-px h-6 bg-border mx-1" />
+        <div className="flex items-center gap-1.5 sm:gap-2">
+          <Button variant="ghost" size="icon" className="hover:bg-[#D4FF00] hover:text-foreground" onClick={undo} disabled={historyRef.current.past.length === 0} title="Undo (Ctrl+Z)"><Undo2 className="w-4 h-4" /></Button>
+          <Button variant="ghost" size="icon" className="hover:bg-[#D4FF00] hover:text-foreground" onClick={redo} disabled={historyRef.current.future.length === 0} title="Redo (Ctrl+Y)"><Redo2 className="w-4 h-4" /></Button>
+          <div className="w-px h-6 bg-foreground/20 mx-0.5 hidden sm:block" />
+          <div className="flex items-center gap-0.5 border-2 border-foreground/20 rounded-lg bg-card px-0.5">
+            <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-[#D4FF00] hover:text-foreground" onClick={() => { userZoomRef.current = true; setScale((s) => Math.min(MAX_ZOOM, s * (1 + ZOOM_STEP))) }} title="Zoom in (Ctrl+scroll)"><ZoomIn className="w-3.5 h-3.5" /></Button>
+            <span className="text-[10px] font-mono w-10 text-center tabular-nums text-foreground/80">{Math.round(scale * 100)}%</span>
+            <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-[#D4FF00] hover:text-foreground" onClick={() => { userZoomRef.current = true; setScale((s) => Math.max(MIN_ZOOM, s * (1 - ZOOM_STEP))) }} title="Zoom out (Ctrl+scroll)"><ZoomOut className="w-3.5 h-3.5" /></Button>
+            <Button variant="ghost" size="icon" className="h-8 w-8 hover:bg-[#D4FF00] hover:text-foreground" onClick={fitCanvasToView} title="Fit to view"><Maximize2 className="w-3.5 h-3.5" /></Button>
+          </div>
+          <div className="w-px h-6 bg-foreground/20 mx-0.5 hidden sm:block" />
           <ThemeToggle />
-          <Button variant="outline" size="sm" onClick={() => setApiDialog(true)}><Code2 className="w-4 h-4 mr-2" />API</Button>
-          <Button variant="outline" size="sm" onClick={() => setRenderDialog(true)}><Play className="w-4 h-4 mr-2" />Test Render</Button>
-          <Button size="sm" onClick={save} disabled={!hasChanges} className={!hasChanges ? "bg-muted text-muted-foreground" : ""}><Save className="w-4 h-4 mr-2" />{hasChanges ? 'Save' : 'Saved'}</Button>
+          <Button variant="outline" size="sm" className="hidden md:inline-flex border-2 border-foreground/30 rounded-full font-semibold" onClick={() => setApiDialog(true)}><Code2 className="w-4 h-4 mr-1.5" />API</Button>
+          <Button variant="outline" size="sm" className="hidden lg:inline-flex border-2 border-foreground/30 rounded-full font-semibold" onClick={() => setRenderDialog(true)}><Play className="w-4 h-4 mr-1.5" />Render</Button>
+          <Button
+            size="sm"
+            onClick={save}
+            disabled={!hasChanges}
+            className={`rounded-full px-5 font-semibold ${hasChanges ? 'bg-foreground text-background hover:bg-foreground/85' : 'bg-muted text-muted-foreground'}`}
+          >
+            <Save className="w-4 h-4 mr-1.5" />{hasChanges ? 'Save' : 'Saved'}
+          </Button>
         </div>
-      </div>
+      </header>
 
       <ResizablePanelGroup direction="horizontal" className="flex-1 min-h-0">
         <ResizablePanel defaultSize={18} minSize={14} maxSize={32} className="min-w-0">
         <Tabs defaultValue="design" className="h-full w-full border-r-2 border-foreground/90 bg-card flex flex-col min-h-0">
-          <TabsList className="grid grid-cols-2 rounded-none border-b-2 border-foreground/90 h-11 bg-background">
+          <TabsList className="grid grid-cols-2 rounded-none border-b-2 border-foreground/90 h-11 bg-[#FAF7F2] dark:bg-[#0E0D0B] p-0">
             <TabsTrigger value="design" className="rounded-none data-[state=active]:bg-card data-[state=active]:border-b-2 data-[state=active]:border-[#D4FF00] font-bold tracking-widest text-xs uppercase">Design</TabsTrigger>
             <TabsTrigger value="classes" className="rounded-none data-[state=active]:bg-card data-[state=active]:border-b-2 data-[state=active]:border-[#D4FF00] font-bold tracking-widest text-xs uppercase">Classes</TabsTrigger>
           </TabsList>
           
           <TabsContent value="design" className="flex-1 flex flex-col p-3 m-0 space-y-1 min-h-0">
-            <p className="text-xs font-semibold uppercase text-muted-foreground mb-2 tracking-wide">Add Elements</p>
+            <p className="text-lg leading-none mb-2" style={BEBAS}>ADD</p>
           <div className="space-y-1.5">
-            <Button variant="outline" className="w-full justify-start" onClick={addText}><Type className="w-4 h-4 mr-2" /> Add Text</Button>
-            <Button variant="outline" className="w-full justify-start" onClick={openImageDialog}><ImageIcon className="w-4 h-4 mr-2" /> Add Image</Button>
-            <Button variant="outline" className="w-full justify-start" onClick={addGradient}><Palette className="w-4 h-4 mr-2" /> Add Gradient</Button>
+            <Button variant="outline" className="w-full justify-start border-2 border-foreground/25 hover:bg-[#D4FF00] hover:text-foreground hover:border-foreground/90" onClick={addText}><Type className="w-4 h-4 mr-2" /> Text</Button>
+            <Button variant="outline" className="w-full justify-start border-2 border-foreground/25 hover:bg-[#D4FF00] hover:text-foreground hover:border-foreground/90" onClick={openImageDialog}><ImageIcon className="w-4 h-4 mr-2" /> Image</Button>
+            <Button variant="outline" className="w-full justify-start border-2 border-foreground/25 hover:bg-[#D4FF00] hover:text-foreground hover:border-foreground/90" onClick={addGradient}><Palette className="w-4 h-4 mr-2" /> Gradient</Button>
             <div className="grid grid-cols-2 gap-1.5">
-              <Button variant="outline" size="sm" onClick={() => addShape('rect')}><Square className="w-4 h-4 mr-1" /> Rect</Button>
-              <Button variant="outline" size="sm" onClick={() => addShape('ellipse')}><Circle className="w-4 h-4 mr-1" /> Circle</Button>
+              <Button variant="outline" size="sm" className="border-2 border-foreground/25 hover:bg-[#D4FF00] hover:text-foreground" onClick={() => addShape('rect')}><Square className="w-4 h-4 mr-1" /> Rect</Button>
+              <Button variant="outline" size="sm" className="border-2 border-foreground/25 hover:bg-[#D4FF00] hover:text-foreground" onClick={() => addShape('ellipse')}><Circle className="w-4 h-4 mr-1" /> Circle</Button>
             </div>
           </div>
-          <div className={`mt-5 pt-4 border-t flex-col ${sessionImages.length > 0 ? 'flex-[0.5]' : 'flex-1'} min-h-0 flex`}>
-            <p className="text-xs font-semibold uppercase text-muted-foreground mb-2 tracking-wide">Layers</p>
+          <div className={`mt-5 pt-4 border-t-2 border-foreground/15 flex-col ${sessionImages.length > 0 ? 'flex-[0.5]' : 'flex-1'} min-h-0 flex`}>
+            <p className="text-lg leading-none mb-2" style={BEBAS}>LAYERS</p>
             <div className="flex-1 overflow-y-auto space-y-1">
               {(canvas.nodes || []).slice().reverse().map((n) => (
                 <div key={n.id}
@@ -1183,7 +1238,7 @@ function Editor() {
                   onDrop={(e) => { e.preventDefault(); const id = e.dataTransfer.getData('text/plain'); setDragOverId(null); reorderByDrag(id, n.id) }}
                   onDragEnd={() => setDragOverId(null)}
                   onClick={() => setSelectedId(n.id)}
-                  className={`flex items-center gap-2 px-2 py-1.5 rounded cursor-grab active:cursor-grabbing text-sm transition relative ${selectedId === n.id ? 'bg-primary/10 text-primary' : 'hover:bg-muted'} ${dragOverId === n.id ? 'border-t-2 border-[#9AB800]' : ''}`}>
+                  className={`flex items-center gap-2 px-2 py-1.5 rounded-lg border-2 cursor-grab active:cursor-grabbing text-sm transition relative ${selectedId === n.id ? 'bg-[#D4FF00]/40 border-foreground/90 font-semibold' : 'border-transparent hover:bg-foreground/5 hover:border-foreground/20'} ${dragOverId === n.id ? 'border-t-2 border-[#9AB800]' : ''}`}>
                   <GripVertical className="w-3 h-3 text-muted-foreground opacity-60" />
                   {layerIcon(n)}
                   <span className="truncate flex-1">{layerLabel(n)}</span>
@@ -1194,10 +1249,10 @@ function Editor() {
           </div>
 
           {sessionImages.length > 0 && (
-            <div className="mt-3 pt-3 border-t flex-[0.5] min-h-0 flex flex-col">
-              <p className="text-xs font-semibold uppercase text-muted-foreground mb-2 tracking-wide flex items-center justify-between">
-                <span>Dropped Images</span>
-                <span className="bg-muted text-muted-foreground text-[10px] px-1.5 py-0.5 rounded">{sessionImages.length}</span>
+            <div className="mt-3 pt-3 border-t-2 border-foreground/15 flex-[0.5] min-h-0 flex flex-col">
+              <p className="text-lg leading-none mb-2 flex items-center justify-between" style={BEBAS}>
+                <span>ASSETS</span>
+                <span className="bg-[#D4FF00] text-foreground text-[10px] px-1.5 py-0.5 rounded-full border border-foreground/90 font-sans font-bold">{sessionImages.length}</span>
               </p>
               <div className="flex-1 overflow-y-auto grid grid-cols-2 gap-2 content-start pr-1 pb-2">
                 {sessionImages.map((src, i) => (
@@ -1218,16 +1273,18 @@ function Editor() {
         </Tabs>
         </ResizablePanel>
 
-        <ResizableHandle withHandle className="bg-border" />
+        <ResizableHandle withHandle className="bg-foreground/20 w-0.5" />
 
         <ResizablePanel defaultSize={58} minSize={35} className="min-w-0">
-        <div className="h-full w-full overflow-auto flex items-center justify-center p-6"
-          style={{ background: 'repeating-conic-gradient(hsl(var(--muted)) 0% 25%, hsl(var(--background)) 0% 50%) 50% / 24px 24px' }}
+        <div
+          ref={canvasViewportRef}
+          className="h-full w-full overflow-auto flex items-center justify-center p-6 bg-[#FAF7F2] dark:bg-[#0E0D0B]"
+          style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, hsl(var(--foreground) / 0.08) 1px, transparent 0)', backgroundSize: '20px 20px' }}
           onMouseDown={() => setSelectedId(null)}
           onDragOver={(e) => { e.preventDefault(); if (e.dataTransfer.types.includes('Files')) setIsDraggingOverBase(true); }}
           onDragLeave={(e) => { if (e.currentTarget === e.target) setIsDraggingOverBase(false); }}
           onDrop={(e) => { e.preventDefault(); setIsDraggingOverBase(false); handleRootDrop(e); }}>
-          <div ref={canvasRef} className="relative shadow-2xl"
+          <div ref={canvasRef} className="relative border-2 border-foreground/90 shadow-[8px_8px_0_0_rgba(0,0,0,0.88)] dark:shadow-[8px_8px_0_0_rgba(212,255,0,0.28)]"
             style={{ width: canvas.width * scale, height: canvas.height * scale, background: canvas.background || '#ffffff', filter: canvasColorFilter }}>
             <div style={{ width: canvas.width, height: canvas.height, transform: `scale(${scale})`, transformOrigin: 'top left', position: 'relative' }}>
               {/* Clipped content — nodes only visible inside the paper */}
@@ -1422,19 +1479,19 @@ function Editor() {
         </div>
         </ResizablePanel>
 
-        <ResizableHandle withHandle className="bg-border" />
+        <ResizableHandle withHandle className="bg-foreground/20 w-0.5" />
 
         <ResizablePanel defaultSize={24} minSize={16} maxSize={40} className="min-w-0">
-        <div className="h-full border-l bg-card p-4 overflow-y-auto">
+        <div className="h-full border-l-2 border-foreground/90 bg-card p-4 overflow-y-auto">
           {!selected ? (
             <CanvasSettingsPanel canvas={canvas} setCanvas={setCanvas} />
           ) : (
             <div>
-              <div className="flex items-center justify-between mb-3">
-                <p className="text-xs font-semibold uppercase text-muted-foreground tracking-wide">
-                  {selected.type === 'text' ? 'Text' : selected.type === 'image' ? 'Image' : selected.type === 'gradient' ? 'Gradient' : 'Shape'} Properties
+              <div className="flex items-center justify-between mb-3 pb-3 border-b-2 border-foreground/15">
+                <p className="text-2xl leading-none" style={BEBAS}>
+                  {selected.type === 'text' ? 'TEXT' : selected.type === 'image' ? 'IMAGE' : selected.type === 'gradient' ? 'GRADIENT' : 'SHAPE'}
                 </p>
-                <Button variant="ghost" size="icon" onClick={() => deleteNode(selected.id)}><Trash2 className="w-4 h-4" /></Button>
+                <Button variant="ghost" size="icon" className="hover:bg-destructive hover:text-destructive-foreground" onClick={() => deleteNode(selected.id)} title="Delete layer"><Trash2 className="w-4 h-4" /></Button>
               </div>
 
               <div className="flex gap-1 mb-3 pb-3 border-b">
@@ -1610,14 +1667,15 @@ const CANVAS_PRESETS = [
 function CanvasSettingsPanel({ canvas, setCanvas }) {
   return (
     <div>
-      <p className="text-xs font-semibold uppercase text-muted-foreground mb-3 tracking-wide">Canvas Settings</p>
+      <p className="text-2xl leading-none mb-1" style={BEBAS}>CANVAS</p>
+      <p className="text-[11px] uppercase tracking-widest text-foreground/60 mb-4">Size · background · color mode</p>
       <div className="space-y-3">
         <div>
-          <Label className="text-xs mb-1 block">Size Presets</Label>
+          <Label className="text-[11px] uppercase tracking-widest font-semibold text-foreground/70 mb-1.5 block">Presets</Label>
           <div className="flex gap-1.5 overflow-x-auto pb-2 scrollbar-hide">
             {CANVAS_PRESETS.map((p) => (
               <button key={p.label} onClick={() => setCanvas({ ...canvas, width: p.w, height: p.h })}
-                className="whitespace-nowrap px-2 py-1 bg-muted hover:bg-muted/80 rounded text-[10px] font-medium transition">
+                className="whitespace-nowrap px-2.5 py-1 bg-card border-2 border-foreground/25 hover:bg-[#D4FF00] hover:border-foreground/90 rounded-full text-[10px] font-semibold uppercase tracking-wide transition">
                 {p.label}
               </button>
             ))}
