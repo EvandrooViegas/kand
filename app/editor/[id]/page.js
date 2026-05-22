@@ -15,8 +15,14 @@ import {
   Square, Circle, ChevronUp, ChevronDown, ChevronsUp, ChevronsDown, Upload,
   Link as LinkIcon, Palette, Plus, X, Moon, Sun, Italic, Underline, Bold,
   AlignLeft, AlignCenter, AlignRight, Sparkles, Wand2, GripVertical, Undo2, Redo2,
-  ZoomIn, ZoomOut, Maximize2
+  ZoomIn, ZoomOut, Maximize2, Folder, Unlink, ChevronRight, Group
 } from 'lucide-react'
+import {
+  applyGroupLayoutToNodes, normalizeGroupGaps, sortNodeIdsByLayout,
+  getGroupBounds, removeNodeFromAllGroups,
+  insertNodeIdIntoGroup, removeNodeIdFromGroup, reorderGroupNodeIds, moveNodeIdInGroup,
+} from '@/lib/groups'
+import { applyPatchWithReflow } from '@/lib/flowLayout'
 import { toast } from 'sonner'
 import { v4 as uuidv4 } from 'uuid'
 import { KandLogo, KandMark } from '@/components/logo'
@@ -239,6 +245,14 @@ function maskRadius(node) {
 
 const DEFAULT_FILTERS = { brightness: 100, contrast: 100, saturate: 100, grayscale: 0, blur: 0, sepia: 0, hueRotate: 0, opacity: 100 }
 
+function nodeLayerLabel(n) {
+  if (n.dynamic_key) return `{${n.dynamic_key}}`
+  if (n.type === 'text') return plainTextFromStyled(n.text || '') || 'Empty text'
+  if (n.type === 'image') return 'Image'
+  if (n.type === 'gradient') return 'Gradient'
+  return n.shape === 'ellipse' ? 'Circle' : 'Rectangle'
+}
+
 function ThemeToggle() {
   const { theme, setTheme } = useTheme()
   const [mounted, setMounted] = useState(false)
@@ -300,7 +314,10 @@ function Editor() {
     setCanvasState(next)
     setHistoryTick(t => t + 1)
   }
-  const [selectedId, setSelectedId] = useState(null)
+  const [selectedIds, setSelectedIds] = useState([])
+  const [selectedGroupId, setSelectedGroupId] = useState(null)
+  const [expandedGroups, setExpandedGroups] = useState({})
+  const primarySelectedId = selectedIds[selectedIds.length - 1] ?? null
   const [editingId, setEditingId] = useState(null)
   const [scale, setScale] = useState(0.5)
   const userZoomRef = useRef(false)
@@ -321,6 +338,8 @@ function Editor() {
   const fileInputRef = useRef(null)
   const measureRef = useRef(null)
   const [dragOverId, setDragOverId] = useState(null)
+  const [layerDropTarget, setLayerDropTarget] = useState(null)
+  const [layerDragSource, setLayerDragSource] = useState(null)
   const [sessionImages, setSessionImages] = useState([])
   const [isDraggingOverBase, setIsDraggingOverBase] = useState(false)
   const [snapLines, setSnapLines] = useState([])
@@ -622,16 +641,252 @@ function Editor() {
         return
       }
 
-      if (!selectedId) return
-      if (e.key === 'Delete' || e.key === 'Backspace') { e.preventDefault(); deleteNode(selectedId) }
+      if (selectedIds.length === 0) return
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        e.preventDefault()
+        selectedIds.forEach((nid) => deleteNode(nid, true))
+        setSelectedIds([])
+        setSelectedGroupId(null)
+      }
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [selectedId])
+  }, [selectedIds])
 
-  const selected = canvas?.nodes?.find((n) => n.id === selectedId)
-  const updateNode = (nodeId, patch, skipHistory = false) => setCanvas((c) => ({ ...c, nodes: c.nodes.map((n) => (n.id === nodeId ? { ...n, ...patch } : n)) }), skipHistory)
-  const deleteNode = (nodeId) => { setCanvas((c) => ({ ...c, nodes: c.nodes.filter((n) => n.id !== nodeId) })); setSelectedId(null) }
+  const groups = canvas?.groups || []
+  const selectedGroup = selectedGroupId ? groups.find((g) => g.id === selectedGroupId) : null
+  const selected = primarySelectedId ? canvas?.nodes?.find((n) => n.id === primarySelectedId) : null
+
+  const clearSelection = () => {
+    setSelectedIds([])
+    setSelectedGroupId(null)
+  }
+
+  const selectLayer = (nodeId, e) => {
+    if (e?.ctrlKey || e?.metaKey) {
+      setSelectedGroupId(null)
+      setSelectedIds((prev) => (prev.includes(nodeId) ? prev.filter((id) => id !== nodeId) : [...prev, nodeId]))
+      return
+    }
+    if (e?.shiftKey && selectedIds.length > 0) {
+      setSelectedGroupId(null)
+      setSelectedIds((prev) => (prev.includes(nodeId) ? prev : [...prev, nodeId]))
+      return
+    }
+    setSelectedGroupId(null)
+    setSelectedIds([nodeId])
+  }
+
+  const selectGroup = (groupId) => {
+    const g = groups.find((gr) => gr.id === groupId)
+    if (!g) return
+    setSelectedGroupId(groupId)
+    setSelectedIds([...g.nodeIds])
+  }
+
+  const toggleGroupExpanded = (groupId) => {
+    setExpandedGroups((prev) => ({ ...prev, [groupId]: !prev[groupId] }))
+  }
+
+  const stripNodesFromOtherGroups = (groupsList, nodeIds, exceptGroupId) =>
+    (groupsList || [])
+      .map((g) => {
+        if (g.id === exceptGroupId) return g
+        const nodeIdsFiltered = g.nodeIds.filter((id) => !nodeIds.includes(id))
+        return { ...g, nodeIds: nodeIdsFiltered, gaps: normalizeGroupGaps({ ...g, nodeIds: nodeIdsFiltered }) }
+      })
+      .filter((g) => g.nodeIds.length >= 2)
+
+  const createGroupFromSelection = () => {
+    const ids = selectedIds.filter((id) => canvas.nodes?.some((n) => n.id === id))
+    if (ids.length < 2) return toast.error('Select at least 2 layers (Ctrl+click in the list)')
+    const layout = 'horizontal'
+    const sorted = sortNodeIdsByLayout(ids, canvas.nodes, layout)
+    const groupId = uuidv4()
+    const newGroup = {
+      id: groupId,
+      name: `Group ${groups.length + 1}`,
+      nodeIds: sorted,
+      layout,
+      gaps: sorted.slice(0, -1).map(() => ({ gapX: 16, gapY: 0 })),
+    }
+    setCanvas((c) => {
+      let nextGroups = stripNodesFromOtherGroups(c.groups || [], sorted, groupId)
+      nextGroups = [...nextGroups, newGroup]
+      let nodes = c.nodes.map((n) => {
+        if (sorted.includes(n.id)) return { ...n, groupId }
+        const stillGrouped = nextGroups.some((g) => g.nodeIds.includes(n.id))
+        if (n.groupId && !stillGrouped) return { ...n, groupId: undefined }
+        return n
+      })
+      nodes = applyGroupLayoutToNodes(nodes, newGroup)
+      return { ...c, groups: nextGroups, nodes }
+    })
+    setSelectedGroupId(groupId)
+    setSelectedIds([...sorted])
+    toast.success('Grouped')
+  }
+
+  const ungroupById = (groupId) => {
+    setCanvas((c) => ({
+      ...c,
+      groups: (c.groups || []).filter((g) => g.id !== groupId),
+      nodes: c.nodes.map((n) => (n.groupId === groupId ? { ...n, groupId: undefined } : n)),
+    }))
+    if (selectedGroupId === groupId) setSelectedGroupId(null)
+    toast.success('Ungrouped')
+  }
+
+  const updateGroup = (groupId, patch) => {
+    setCanvas((c) => {
+      const g = (c.groups || []).find((gr) => gr.id === groupId)
+      if (!g) return c
+      let updated = { ...g, ...patch }
+      if (patch.nodeIds) updated.nodeIds = patch.nodeIds
+      updated.gaps = normalizeGroupGaps(updated)
+      const nodes = applyGroupLayoutToNodes(c.nodes, updated)
+      return {
+        ...c,
+        groups: (c.groups || []).map((gr) => (gr.id === groupId ? updated : gr)),
+        nodes,
+      }
+    })
+  }
+
+  const moveGroupMember = (groupId, nodeId, direction) => {
+    const g = groups.find((gr) => gr.id === groupId)
+    if (!g) return
+    const updated = moveNodeIdInGroup(g, nodeId, direction)
+    updateGroup(groupId, { nodeIds: updated.nodeIds, gaps: updated.gaps })
+  }
+
+  const addNodeToGroup = (groupId, nodeId, beforeNodeId = null) => {
+    setCanvas((c) => {
+      let nextGroups = stripNodesFromOtherGroups(c.groups || [], [nodeId], groupId)
+      const gi = nextGroups.findIndex((gr) => gr.id === groupId)
+      if (gi === -1) return c
+      const updated = insertNodeIdIntoGroup(nextGroups[gi], nodeId, beforeNodeId)
+      nextGroups[gi] = updated
+      let nodes = c.nodes.map((n) => {
+        if (n.id === nodeId) return { ...n, groupId }
+        const still = nextGroups.some((gr) => gr.nodeIds.includes(n.id))
+        if (n.groupId && !still) return { ...n, groupId: undefined }
+        return n
+      })
+      nodes = applyGroupLayoutToNodes(nodes, updated)
+      return { ...c, groups: nextGroups, nodes }
+    })
+    toast.success('Added to group')
+  }
+
+  const removeNodeFromGroupById = (groupId, nodeId) => {
+    setCanvas((c) => {
+      const g = (c.groups || []).find((gr) => gr.id === groupId)
+      if (!g) return c
+      const reduced = removeNodeIdFromGroup(g, nodeId)
+      let nextGroups = (c.groups || [])
+        .map((gr) => (gr.id === groupId ? reduced : gr))
+        .filter((gr) => gr.nodeIds.length >= 2)
+      let nodes = c.nodes.map((n) => (n.id === nodeId ? { ...n, groupId: undefined } : n))
+      const remaining = nextGroups.find((gr) => gr.id === groupId)
+      if (remaining) nodes = applyGroupLayoutToNodes(nodes, remaining)
+      return { ...c, groups: nextGroups, nodes }
+    })
+    toast.success('Removed from group')
+  }
+
+  const reorderGroupMember = (groupId, draggedId, beforeNodeId) => {
+    const g = groups.find((gr) => gr.id === groupId)
+    if (!g || draggedId === beforeNodeId) return
+    const nodeIds = reorderGroupNodeIds(g.nodeIds, draggedId, beforeNodeId)
+    updateGroup(groupId, { nodeIds })
+  }
+
+  const handleLayerDragStart = (nodeId, fromGroupId, e) => {
+    e.dataTransfer.setData('text/plain', nodeId)
+    if (fromGroupId) e.dataTransfer.setData('application/x-kand-from-group', fromGroupId)
+    e.dataTransfer.effectAllowed = 'move'
+    setLayerDragSource({ nodeId, fromGroupId: fromGroupId || null })
+  }
+
+  const handleLayerDragEnd = () => {
+    setLayerDragSource(null)
+    setLayerDropTarget(null)
+    setDragOverId(null)
+  }
+
+  const layerDropActive = (target) => {
+    if (!layerDropTarget || !target) return false
+    if (layerDropTarget.type !== target.type) return false
+    if (target.groupId != null && layerDropTarget.groupId !== target.groupId) return false
+    if (target.nodeId != null && layerDropTarget.nodeId !== target.nodeId) return false
+    return true
+  }
+
+  const handleLayerDropEvent = (e, target) => {
+    e.preventDefault()
+    e.stopPropagation()
+    const draggedId = e.dataTransfer.getData('text/plain')
+    if (!draggedId || !target) return
+    const fromGroupId = e.dataTransfer.getData('application/x-kand-from-group') || null
+
+    if (target.type === 'group-add') {
+      if (fromGroupId === target.groupId) {
+        const g = groups.find((gr) => gr.id === target.groupId)
+        if (g && g.nodeIds[g.nodeIds.length - 1] !== draggedId) {
+          reorderGroupMember(target.groupId, draggedId, null)
+        }
+      } else {
+        addNodeToGroup(target.groupId, draggedId, null)
+      }
+    } else if (target.type === 'group-before') {
+      if (fromGroupId === target.groupId) {
+        reorderGroupMember(target.groupId, draggedId, target.nodeId)
+      } else {
+        addNodeToGroup(target.groupId, draggedId, target.nodeId)
+      }
+    } else if (target.type === 'ungroup') {
+      if (fromGroupId) removeNodeFromGroupById(fromGroupId, draggedId)
+    } else if (target.type === 'ungrouped-before' && target.nodeId) {
+      if (fromGroupId) removeNodeFromGroupById(fromGroupId, draggedId)
+      reorderByDrag(draggedId, target.nodeId)
+    }
+    setLayerDropTarget(null)
+    setDragOverId(null)
+  }
+
+  const updateGroupGap = (groupId, gapIndex, key, value) => {
+    setCanvas((c) => {
+      const g = (c.groups || []).find((gr) => gr.id === groupId)
+      if (!g) return c
+      const gaps = normalizeGroupGaps(g)
+      gaps[gapIndex] = { ...gaps[gapIndex], [key]: typeof value === 'number' ? value : 0 }
+      const updated = { ...g, gaps }
+      const nodes = applyGroupLayoutToNodes(c.nodes, updated)
+      return {
+        ...c,
+        groups: (c.groups || []).map((gr) => (gr.id === groupId ? updated : gr)),
+        nodes,
+      }
+    })
+  }
+
+  const updateNode = (nodeId, patch, skipHistory = false) => {
+    setCanvas((c) => ({
+      ...c,
+      nodes: applyPatchWithReflow(c.nodes, nodeId, patch, c.groups || []),
+    }), skipHistory)
+  }
+  const deleteNode = (nodeId, skipClear = false) => {
+    setCanvas((c) => ({
+      ...c,
+      nodes: c.nodes.filter((n) => n.id !== nodeId),
+      groups: removeNodeFromAllGroups(c.groups, nodeId),
+    }))
+    if (!skipClear) {
+      setSelectedIds((prev) => prev.filter((id) => id !== nodeId))
+    }
+  }
 
   const moveNode = (nodeId, direction) => {
     setCanvas((c) => {
@@ -678,7 +933,9 @@ function Editor() {
       el.style.fontFamily = `'${n.fontFamily || 'Inter'}', sans-serif`
       el.style.fontWeight = String(n.fontWeight || 400)
       el.style.fontStyle = n.fontStyle === 'italic' ? 'italic' : 'normal'
-      el.style.lineHeight = '1.2'
+      el.style.lineHeight = String(n.lineHeight ?? 1.2)
+      el.style.textAlign = n.textAlign || 'left'
+      el.style.letterSpacing = `${n.letterSpacing || 0}px`
       el.style.whiteSpace = 'pre-wrap'
       el.style.wordBreak = 'break-word'
       el.innerHTML = (n.text && n.text.length > 0) ? tagsToHtml(n.text) : 'M'
@@ -686,10 +943,15 @@ function Editor() {
       if (h !== n.height) updates.push({ id: n.id, height: h })
     }
     if (updates.length) {
-      setCanvas((c) => ({ ...c, nodes: c.nodes.map((n) => {
-        const u = updates.find((x) => x.id === n.id)
-        return u ? { ...n, height: u.height } : n
-      }) }))
+      setCanvas((c) => {
+        let nodes = c.nodes
+        for (const u of updates) {
+          const prev = nodes.find((n) => n.id === u.id)
+          if (!prev) continue
+          nodes = applyPatchWithReflow(nodes, u.id, { height: u.height }, c.groups || [])
+        }
+        return { ...c, nodes }
+      })
     }
   }, [canvas?.nodes, tagsToHtml])
 
@@ -703,7 +965,7 @@ function Editor() {
       textShadow: { enabled: false, offsetX: 0, offsetY: 4, blur: 12, color: '#00000055' },
     }
     setCanvas((c) => ({ ...c, nodes: [...(c.nodes || []), newNode] }))
-    setSelectedId(newNode.id)
+    setSelectedIds([newNode.id])
   }
 
   const addShape = (shape) => {
@@ -714,7 +976,7 @@ function Editor() {
       borderRadius: shape === 'rect' ? 0 : 9999,
     }
     setCanvas((c) => ({ ...c, nodes: [...(c.nodes || []), newNode] }))
-    setSelectedId(newNode.id)
+    setSelectedIds([newNode.id])
   }
 
   const addGradient = () => {
@@ -726,7 +988,7 @@ function Editor() {
       width: 600, height: 400, borderRadius: 24,
     }
     setCanvas((c) => ({ ...c, nodes: [...(c.nodes || []), newNode] }))
-    setSelectedId(newNode.id)
+    setSelectedIds([newNode.id])
   }
 
   const openImageDialog = () => { setImageUrl(''); setImageDialog(true) }
@@ -739,7 +1001,7 @@ function Editor() {
         filters: { ...DEFAULT_FILTERS },
       }
       setCanvas((c) => ({ ...c, nodes: [...(c.nodes || []), newNode] }))
-      setSelectedId(newNode.id)
+      setSelectedIds([newNode.id])
       setImageDialog(false)
     }
     const img = new Image()
@@ -827,8 +1089,27 @@ function Editor() {
 
   const dragState = useRef(null)
   const handleMouseDown = (e, node, mode = 'move') => {
-    e.stopPropagation(); e.preventDefault(); setSelectedId(node.id)
-    dragState.current = { nodeId: node.id, startX: e.clientX, startY: e.clientY, orig: { x: node.x, y: node.y, width: node.width, height: node.height, maxWidth: node.maxWidth || node.width, maxHeight: node.maxHeight || node.height, rotation: node.rotation || 0 }, mode, initialCanvas: canvasRefObj.current, hasMoved: false }
+    e.stopPropagation(); e.preventDefault()
+    if (!selectedIds.includes(node.id)) setSelectedIds([node.id])
+    const c = canvasRefObj.current
+    const group = node.groupId ? (c?.groups || []).find((g) => g.id === node.groupId) : null
+    const moveIds = group ? group.nodeIds.filter((id) => c?.nodes?.some((n) => n.id === id)) : [node.id]
+    const origPositions = moveIds.map((id) => {
+      const n = c?.nodes?.find((nd) => nd.id === id)
+      return n ? { id, x: n.x, y: n.y, width: n.width, height: n.height } : null
+    }).filter(Boolean)
+    const lead = origPositions.find((p) => p.id === node.id) || origPositions[0]
+    dragState.current = {
+      nodeId: node.id,
+      moveIds,
+      origPositions,
+      startX: e.clientX,
+      startY: e.clientY,
+      orig: { x: lead.x, y: lead.y, width: lead.width, height: lead.height, maxWidth: node.maxWidth || node.width, maxHeight: node.maxHeight || node.height, rotation: node.rotation || 0 },
+      mode,
+      initialCanvas: c,
+      hasMoved: false,
+    }
     const onMove = (e) => {
       const ds = dragState.current; if (!ds) return
       const dx = (e.clientX - ds.startX) / scale, dy = (e.clientY - ds.startY) / scale
@@ -840,7 +1121,14 @@ function Editor() {
         const { v, h } = collectSnapTargets(canvasRefObj.current?.nodes, ds.nodeId, canvas.width, canvas.height)
         const { x: newX, y: newY, lines } = snapMovePosition(rawX, rawY, nodeW, nodeH, v, h)
         setSnapLines(lines)
-        updateNode(ds.nodeId, { x: newX, y: newY }, true)
+        const deltaX = newX - ds.orig.x
+        const deltaY = newY - ds.orig.y
+        const idsToMove = ds.moveIds || [ds.nodeId]
+        const origMap = new Map((ds.origPositions || []).map((p) => [p.id, p]))
+        idsToMove.forEach((id) => {
+          const o = origMap.get(id)
+          if (o) updateNode(id, { x: Math.round(o.x + deltaX), y: Math.round(o.y + deltaY) }, true)
+        })
         ds.hasMoved = true
       }
       else if (ds.mode === 'resize') {
@@ -1054,13 +1342,7 @@ function Editor() {
     return base
   }
 
-  const layerLabel = (n) => {
-    if (n.dynamic_key) return `{${n.dynamic_key}}`
-    if (n.type === 'text') return plainTextFromStyled(n.text || '') || 'Empty text'
-    if (n.type === 'image') return 'Image'
-    if (n.type === 'gradient') return 'Gradient'
-    return n.shape === 'ellipse' ? 'Circle' : 'Rectangle'
-  }
+  const layerLabel = nodeLayerLabel
 
   const fontMeta = selected?.type === 'text' ? (FONT_META[selected.fontFamily] || FONT_META['Inter']) : null
 
@@ -1075,7 +1357,7 @@ function Editor() {
         const bg = cls.background || cls.backgroundColor;
         const py = typeof cls.paddingY === 'number' ? cls.paddingY : 0
         const px = typeof cls.paddingX === 'number' ? cls.paddingX : 0
-        const showBgBox = isVisibleBackground(bg) && (px > 0 || py > 0)
+        const showBgBox = isVisibleBackground(bg) && (px !== 0 || py !== 0)
         if (cls.fontWeight) css += `font-weight: ${cls.fontWeight} !important; `;
         if (cls.fontStyle) css += `font-style: ${cls.fontStyle} !important; `;
         if (cls.letterSpacing) css += `letter-spacing: ${cls.letterSpacing}px !important; `;
@@ -1286,24 +1568,90 @@ function Editor() {
             </div>
           </div>
           <div className={`mt-5 pt-4 border-t-2 border-foreground/15 flex-col ${sessionImages.length > 0 ? 'flex-[0.5]' : 'flex-1'} min-h-0 flex`}>
-            <p className="text-lg leading-none mb-2" style={BEBAS}>LAYERS</p>
+            <div className="flex items-center justify-between mb-2 gap-1">
+              <p className="text-lg leading-none" style={BEBAS}>LAYERS</p>
+              {selectedIds.length >= 2 && (
+                <Button type="button" size="sm" variant="outline" className="h-7 text-[10px] px-2 border-2" onClick={createGroupFromSelection}>
+                  <Group className="w-3 h-3 mr-1" />Group
+                </Button>
+              )}
+            </div>
+            <p className="text-[9px] text-muted-foreground mb-2">Ctrl+click to multi-select. Drag into groups for HTML flow.</p>
             <div className="flex-1 overflow-y-auto space-y-1">
-              {(canvas.nodes || []).slice().reverse().map((n) => (
+              {groups.map((g) => {
+                const expanded = expandedGroups[g.id] !== false
+                const nodeMap = new Map((canvas.nodes || []).map((n) => [n.id, n]))
+                const addTarget = { type: 'group-add', groupId: g.id }
+                return (
+                  <div key={g.id} className="rounded-lg border-2 border-foreground/20 overflow-hidden">
+                    <div
+                      className={`flex items-center gap-1.5 px-2 py-1.5 cursor-pointer text-sm ${selectedGroupId === g.id ? 'bg-[#D4FF00]/50' : 'bg-muted/40 hover:bg-muted/60'} ${layerDropActive(addTarget) ? 'ring-2 ring-inset ring-[#9AB800]' : ''}`}
+                      onClick={() => selectGroup(g.id)}
+                      onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setLayerDropTarget(addTarget) }}
+                      onDragLeave={(e) => { e.stopPropagation(); if (layerDropTarget?.type === 'group-add' && layerDropTarget?.groupId === g.id) setLayerDropTarget(null) }}
+                      onDrop={(e) => handleLayerDropEvent(e, addTarget)}
+                    >
+                      <button type="button" className="p-0.5" onClick={(e) => { e.stopPropagation(); toggleGroupExpanded(g.id) }}>
+                        {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+                      </button>
+                      <Folder className="w-3.5 h-3.5 shrink-0 text-foreground/70" />
+                      <span className="flex-1 truncate font-semibold text-xs">{g.name}</span>
+                      <span className="text-[10px] text-muted-foreground">{g.nodeIds.length}</span>
+                      <Button type="button" variant="ghost" size="icon" className="h-6 w-6 shrink-0" title="Ungroup" onClick={(e) => { e.stopPropagation(); ungroupById(g.id) }}>
+                        <Unlink className="w-3 h-3" />
+                      </Button>
+                    </div>
+                    {expanded && g.nodeIds.map((nid) => {
+                      const n = nodeMap.get(nid)
+                      if (!n) return null
+                      const beforeTarget = { type: 'group-before', groupId: g.id, nodeId: nid }
+                      return (
+                        <div key={nid}
+                          draggable
+                          onDragStart={(e) => handleLayerDragStart(nid, g.id, e)}
+                          onDragEnd={handleLayerDragEnd}
+                          onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setLayerDropTarget(beforeTarget) }}
+                          onDragLeave={(e) => { e.stopPropagation(); if (layerDropActive(beforeTarget)) setLayerDropTarget(null) }}
+                          onDrop={(e) => handleLayerDropEvent(e, beforeTarget)}
+                          onClick={(e) => { e.stopPropagation(); selectLayer(nid, e) }}
+                          className={`flex items-center gap-2 pl-4 pr-2 py-1.5 border-t border-foreground/10 cursor-grab active:cursor-grabbing text-sm relative ${selectedIds.includes(nid) ? 'bg-[#D4FF00]/30 font-medium' : 'hover:bg-foreground/5'} ${layerDropActive(beforeTarget) ? 'border-t-2 border-[#9AB800]' : ''}`}>
+                          <GripVertical className="w-3 h-3 text-muted-foreground opacity-50 shrink-0" />
+                          <LayerPreview node={n} />
+                          <span className={`flex-1 min-w-0 truncate text-xs`}>{layerLabel(n)}</span>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )
+              })}
+              {layerDragSource?.fromGroupId && (
+                <div
+                  className={`rounded-lg border-2 border-dashed px-2 py-2 text-[10px] text-center text-muted-foreground transition ${layerDropActive({ type: 'ungroup' }) ? 'border-[#9AB800] bg-[#D4FF00]/20 text-foreground' : 'border-foreground/25'}`}
+                  onDragOver={(e) => { e.preventDefault(); setLayerDropTarget({ type: 'ungroup' }) }}
+                  onDragLeave={() => { if (layerDropTarget?.type === 'ungroup') setLayerDropTarget(null) }}
+                  onDrop={(e) => handleLayerDropEvent(e, { type: 'ungroup' })}
+                >
+                  Drop here to remove from group
+                </div>
+              )}
+              {(canvas.nodes || []).slice().reverse().filter((n) => !n.groupId).map((n) => {
+                const beforeTarget = { type: 'ungrouped-before', nodeId: n.id }
+                return (
                 <div key={n.id}
                   draggable
-                  onDragStart={(e) => { e.dataTransfer.setData('text/plain', n.id); e.dataTransfer.effectAllowed = 'move' }}
-                  onDragOver={(e) => { e.preventDefault(); if (dragOverId !== n.id) setDragOverId(n.id) }}
-                  onDragLeave={(e) => { if (dragOverId === n.id) setDragOverId(null) }}
-                  onDrop={(e) => { e.preventDefault(); const id = e.dataTransfer.getData('text/plain'); setDragOverId(null); reorderByDrag(id, n.id) }}
-                  onDragEnd={() => setDragOverId(null)}
-                  onClick={() => setSelectedId(n.id)}
-                  className={`flex items-center gap-2.5 px-2 py-2 rounded-lg border-2 cursor-grab active:cursor-grabbing text-sm transition relative ${selectedId === n.id ? 'bg-[#D4FF00]/40 border-foreground/90 font-semibold' : 'border-transparent hover:bg-foreground/5 hover:border-foreground/20'} ${dragOverId === n.id ? 'border-t-2 border-[#9AB800]' : ''}`}>
+                  onDragStart={(e) => handleLayerDragStart(n.id, null, e)}
+                  onDragOver={(e) => { e.preventDefault(); setLayerDropTarget(beforeTarget); if (dragOverId !== n.id) setDragOverId(n.id) }}
+                  onDragLeave={(e) => { if (dragOverId === n.id) setDragOverId(null); if (layerDropActive(beforeTarget)) setLayerDropTarget(null) }}
+                  onDrop={(e) => handleLayerDropEvent(e, beforeTarget)}
+                  onDragEnd={handleLayerDragEnd}
+                  onClick={(e) => selectLayer(n.id, e)}
+                  className={`flex items-center gap-2.5 px-2 py-2 rounded-lg border-2 cursor-grab active:cursor-grabbing text-sm transition relative ${selectedIds.includes(n.id) ? 'bg-[#D4FF00]/40 border-foreground/90 font-semibold' : 'border-transparent hover:bg-foreground/5 hover:border-foreground/20'} ${layerDropActive(beforeTarget) || dragOverId === n.id ? 'border-t-2 border-[#9AB800]' : ''}`}>
                   <GripVertical className="w-3 h-3 text-muted-foreground opacity-60 shrink-0" />
                   <LayerPreview node={n} />
                   <span className={`flex-1 min-w-0 ${n.type === 'text' ? 'text-xs leading-snug line-clamp-2' : 'truncate'}`}>{layerLabel(n)}</span>
                   {n.dynamic_key && <span className="text-[10px] bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 rounded shrink-0">DYN</span>}
                 </div>
-              ))}
+              )})}
             </div>
           </div>
 
@@ -1339,7 +1687,7 @@ function Editor() {
           ref={canvasViewportRef}
           className="h-full w-full overflow-auto flex items-center justify-center p-6 bg-[#FAF7F2] dark:bg-[#0E0D0B]"
           style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, hsl(var(--foreground) / 0.08) 1px, transparent 0)', backgroundSize: '20px 20px' }}
-          onMouseDown={() => setSelectedId(null)}
+          onMouseDown={() => clearSelection()}
           onDragOver={(e) => { e.preventDefault(); if (e.dataTransfer.types.includes('Files')) setIsDraggingOverBase(true); }}
           onDragLeave={(e) => { if (e.currentTarget === e.target) setIsDraggingOverBase(false); }}
           onDrop={(e) => { e.preventDefault(); setIsDraggingOverBase(false); handleRootDrop(e); }}>
@@ -1350,7 +1698,7 @@ function Editor() {
               <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none' }}>
               {(canvas.nodes || []).map((node) => (
                 <div key={node.id} style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
-                  {selectedId === node.id && (node.maxWidth || node.maxHeight) && (
+                  {selectedIds.includes(node.id) && (node.maxWidth || node.maxHeight) && (
                     <div style={{
                       position: 'absolute', left: node.x, top: node.y,
                       width: node.maxWidth || node.width, height: node.maxHeight || node.height,
@@ -1360,7 +1708,7 @@ function Editor() {
                       // Simpler: don't rotate the max box, or rotate it with the same center.
                     }} />
                   )}
-                  {selectedId === node.id && (node.maxWidth || node.maxHeight) && (
+                  {selectedIds.includes(node.id) && (node.maxWidth || node.maxHeight) && (
                     <div style={{
                       position: 'absolute', left: node.x, top: node.y,
                       width: node.maxWidth || node.width, height: node.maxHeight || node.height,
@@ -1385,14 +1733,14 @@ function Editor() {
                       const elements = document.elementsFromPoint(e.clientX, e.clientY)
                       const nodeIds = elements.map(el => el.getAttribute('data-node-id')).filter(Boolean)
                       if (nodeIds.length > 1) {
-                        const currentIdx = nodeIds.indexOf(selectedId)
-                        if (currentIdx !== -1 && currentIdx + 1 < nodeIds.length) setSelectedId(nodeIds[currentIdx + 1])
-                        else setSelectedId(nodeIds[0])
+                        const currentIdx = nodeIds.indexOf(primarySelectedId)
+                        if (currentIdx !== -1 && currentIdx + 1 < nodeIds.length) selectLayer(nodeIds[currentIdx + 1])
+                        else selectLayer(nodeIds[0])
                       } else {
-                        setSelectedId(node.id)
+                        selectLayer(node.id)
                       }
                     } else {
-                      setSelectedId(node.id) 
+                      selectLayer(node.id) 
                     }
                   }}
                   onDoubleClick={(e) => {
@@ -1423,53 +1771,64 @@ function Editor() {
               <div style={{ position: 'absolute', inset: 0, overflow: 'visible', pointerEvents: 'none' }}>
               
               {/* Selection Overlay (handles drag, resize, rotate, and stays on top!) */}
-              {selectedId && canvas.nodes?.find(n => n.id === selectedId) && editingId !== selectedId && (
-                (() => {
-                  const node = canvas.nodes.find(n => n.id === selectedId)
-                  return (
-                    <div style={{
-                      position: 'absolute', left: node.x, top: node.y, width: node.width, height: node.height,
-                      transform: `rotate(${node.rotation || 0}deg)`, transformOrigin: 'center center',
-                      outline: '3px solid #6366f1', outlineOffset: 2,
-                      pointerEvents: 'none', zIndex: 50,
-                    }}>
-                      {/* Drag overlay - catches clicks for dragging even if node is behind */}
-                      <div 
-                        data-node-id={node.id}
-                        onMouseDown={(e) => handleMouseDown(e, node, 'move')}
-                        onDoubleClick={(e) => {
-                          e.stopPropagation()
-                          if (node.type === 'text') setEditingId(node.id)
-                        }}
-                        onClick={(e) => { 
-                          e.stopPropagation(); 
-                          if (e.altKey) {
-                            const elements = document.elementsFromPoint(e.clientX, e.clientY)
-                            const nodeIds = elements.map(el => el.getAttribute('data-node-id')).filter(Boolean)
-                            if (nodeIds.length > 1) {
-                              const currentIdx = nodeIds.indexOf(selectedId)
-                              if (currentIdx !== -1 && currentIdx + 1 < nodeIds.length) setSelectedId(nodeIds[currentIdx + 1])
-                              else setSelectedId(nodeIds[0])
-                            } else {
-                              setSelectedId(node.id)
-                            }
-                          }
-                        }}
-                        style={{ position: 'absolute', inset: 0, pointerEvents: 'auto', cursor: 'move' }} 
-                      />
+              {selectedGroupId && (() => {
+                const g = groups.find((gr) => gr.id === selectedGroupId)
+                const bounds = g ? getGroupBounds(canvas.nodes, g) : null
+                if (!bounds) return null
+                return (
+                  <div style={{
+                    position: 'absolute', left: bounds.x - 4, top: bounds.y - 4,
+                    width: bounds.width + 8, height: bounds.height + 8,
+                    border: '2px dashed #9AB800', pointerEvents: 'none', zIndex: 40,
+                  }} />
+                )
+              })()}
 
-                      {/* Resize handle */}
-                      <div onMouseDown={(e) => handleMouseDown(e, node, 'resize')}
-                        style={{ position: 'absolute', right: -8, bottom: -8, width: 20, height: 20, background: '#6366f1', borderRadius: 4, cursor: 'nwse-resize', border: '2px solid white', pointerEvents: 'auto' }} />
-                      
-                      {/* Rotate handle */}
-                      <div onMouseDown={(e) => handleMouseDown(e, node, 'rotate')}
-                        style={{ position: 'absolute', left: '50%', top: -36, width: 16, height: 16, marginLeft: -8, background: '#fff', borderRadius: '50%', cursor: 'grab', border: '2px solid #6366f1', pointerEvents: 'auto' }} />
-                      <div style={{ position: 'absolute', left: '50%', top: -20, width: 2, height: 20, marginLeft: -1, background: '#6366f1', pointerEvents: 'none' }} />
-                    </div>
-                  )
-                })()
-              )}
+              {selectedIds.filter((id) => canvas.nodes?.some((n) => n.id === id) && editingId !== id).map((sid) => {
+                const node = canvas.nodes.find((n) => n.id === sid)
+                if (!node) return null
+                const isPrimary = sid === primarySelectedId
+                return (
+                  <div key={sid} style={{
+                    position: 'absolute', left: node.x, top: node.y, width: node.width, height: node.height,
+                    transform: `rotate(${node.rotation || 0}deg)`, transformOrigin: 'center center',
+                    outline: isPrimary ? '3px solid #6366f1' : '2px dashed #6366f1',
+                    outlineOffset: 2,
+                    pointerEvents: 'none', zIndex: isPrimary ? 50 : 45,
+                  }}>
+                    <div
+                      data-node-id={node.id}
+                      onMouseDown={(e) => handleMouseDown(e, node, 'move')}
+                      onDoubleClick={(e) => {
+                        e.stopPropagation()
+                        if (node.type === 'text') setEditingId(node.id)
+                      }}
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        if (e.altKey) {
+                          const elements = document.elementsFromPoint(e.clientX, e.clientY)
+                          const nodeIds = elements.map((el) => el.getAttribute('data-node-id')).filter(Boolean)
+                          if (nodeIds.length > 1) {
+                            const currentIdx = nodeIds.indexOf(primarySelectedId)
+                            if (currentIdx !== -1 && currentIdx + 1 < nodeIds.length) selectLayer(nodeIds[currentIdx + 1])
+                            else selectLayer(nodeIds[0])
+                          } else selectLayer(node.id)
+                        }
+                      }}
+                      style={{ position: 'absolute', inset: 0, pointerEvents: 'auto', cursor: 'move' }}
+                    />
+                    {isPrimary && (
+                      <>
+                        <div onMouseDown={(e) => handleMouseDown(e, node, 'resize')}
+                          style={{ position: 'absolute', right: -8, bottom: -8, width: 20, height: 20, background: '#6366f1', borderRadius: 4, cursor: 'nwse-resize', border: '2px solid white', pointerEvents: 'auto' }} />
+                        <div onMouseDown={(e) => handleMouseDown(e, node, 'rotate')}
+                          style={{ position: 'absolute', left: '50%', top: -36, width: 16, height: 16, marginLeft: -8, background: '#fff', borderRadius: '50%', cursor: 'grab', border: '2px solid #6366f1', pointerEvents: 'auto' }} />
+                        <div style={{ position: 'absolute', left: '50%', top: -20, width: 2, height: 20, marginLeft: -1, background: '#6366f1', pointerEvents: 'none' }} />
+                      </>
+                    )}
+                  </div>
+                )
+              })}
               
               {editingId && canvas.nodes?.find(n => n.id === editingId) && (
                 (() => {
@@ -1549,7 +1908,24 @@ function Editor() {
 
         <ResizablePanel defaultSize={24} minSize={16} maxSize={40} className="min-w-0">
         <div className="h-full border-l-2 border-foreground/90 bg-card p-4 overflow-y-auto">
-          {!selected ? (
+          {selectedGroup ? (
+            <GroupPropertiesPanel
+              group={selectedGroup}
+              nodes={canvas.nodes}
+              selectedIds={selectedIds}
+              updateGroup={updateGroup}
+              updateGroupGap={updateGroupGap}
+              ungroupById={ungroupById}
+              moveGroupMember={moveGroupMember}
+            />
+          ) : selectedIds.length > 1 ? (
+            <div className="space-y-3">
+              <p className="text-2xl leading-none" style={BEBAS}>{selectedIds.length} SELECTED</p>
+              <p className="text-sm text-muted-foreground">Ctrl+click layers to add or remove from selection.</p>
+              <Button className="w-full" onClick={createGroupFromSelection}><Group className="w-4 h-4 mr-2" />Create group</Button>
+              <Button variant="outline" className="w-full" onClick={clearSelection}>Clear selection</Button>
+            </div>
+          ) : !selected ? (
             <CanvasSettingsPanel canvas={canvas} setCanvas={setCanvas} />
           ) : (
             <div>
@@ -2203,6 +2579,109 @@ function GradientProperties({ node, updateNode }) {
   )
 }
 
+function GroupPropertiesPanel({ group, nodes, selectedIds, updateGroup, updateGroupGap, ungroupById, moveGroupMember }) {
+  const gaps = normalizeGroupGaps(group)
+  const nodeMap = new Map(nodes.map((n) => [n.id, n]))
+  const orderNodeId = selectedIds?.length === 1 && group.nodeIds.includes(selectedIds[0]) ? selectedIds[0] : null
+  const orderIdx = orderNodeId != null ? group.nodeIds.indexOf(orderNodeId) : -1
+
+  return (
+    <div className="space-y-3">
+      <div className="flex items-center justify-between pb-3 border-b-2 border-foreground/15">
+        <p className="text-2xl leading-none flex items-center gap-2" style={BEBAS}>
+          <Folder className="w-5 h-5" /> GROUP
+        </p>
+        <Button variant="ghost" size="icon" className="hover:bg-destructive hover:text-destructive-foreground" onClick={() => ungroupById(group.id)} title="Ungroup">
+          <Unlink className="w-4 h-4" />
+        </Button>
+      </div>
+
+      <div>
+        <Label className="text-xs">Group name</Label>
+        <Input value={group.name} onChange={(e) => updateGroup(group.id, { name: e.target.value })} />
+      </div>
+
+      <div>
+        <Label className="text-xs">Stack direction</Label>
+        <select
+          className="w-full h-10 border rounded-md px-3 text-sm bg-background"
+          value={group.layout || 'horizontal'}
+          onChange={(e) => updateGroup(group.id, { layout: e.target.value })}
+        >
+          <option value="horizontal">Horizontal (gap X between items)</option>
+          <option value="vertical">Vertical (gap Y between items)</option>
+        </select>
+      </div>
+
+      {orderNodeId && (
+        <div className="flex gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="flex-1 border-2"
+            disabled={orderIdx <= 0}
+            onClick={() => moveGroupMember(group.id, orderNodeId, 'up')}
+          >
+            Move earlier
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="flex-1 border-2"
+            disabled={orderIdx < 0 || orderIdx >= group.nodeIds.length - 1}
+            onClick={() => moveGroupMember(group.id, orderNodeId, 'down')}
+          >
+            Move later
+          </Button>
+        </div>
+      )}
+
+      <div className="pt-2 border-t border-foreground/15 space-y-3">
+        <p className="text-[11px] uppercase tracking-widest font-semibold text-foreground/70">Spacing between items</p>
+        <p className="text-[10px] text-muted-foreground">Each gap can differ. First item stays anchored; others reflow.</p>
+        {gaps.map((gap, i) => {
+          const a = nodeMap.get(group.nodeIds[i])
+          const b = nodeMap.get(group.nodeIds[i + 1])
+          const labelA = a ? nodeLayerLabel(a).slice(0, 12) : '?'
+          const labelB = b ? nodeLayerLabel(b).slice(0, 12) : '?'
+          return (
+            <div key={i} className="p-2 rounded-lg border border-foreground/15 bg-muted/20 space-y-2">
+              <p className="text-[10px] font-mono text-muted-foreground truncate">{labelA} → {labelB}</p>
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label className="text-[10px]">Gap X (px)</Label>
+                  <Input
+                    type="number"
+                    min={0}
+                    step={1}
+                    value={gap.gapX ?? 0}
+                    onChange={(e) => updateGroupGap(group.id, i, 'gapX', e.target.value === '' ? 0 : Number(e.target.value))}
+                  />
+                </div>
+                <div>
+                  <Label className="text-[10px]">Gap Y (px)</Label>
+                  <Input
+                    type="number"
+                    step={1}
+                    value={gap.gapY ?? 0}
+                    onChange={(e) => updateGroupGap(group.id, i, 'gapY', e.target.value === '' ? 0 : Number(e.target.value))}
+                  />
+                </div>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+
+      <Button variant="outline" className="w-full" onClick={() => ungroupById(group.id)}>
+        <Unlink className="w-4 h-4 mr-2" />Ungroup all
+      </Button>
+    </div>
+  )
+}
+
 export default Editor
 
 function ClassesPanel({ canvas, setCanvas }) {
@@ -2331,7 +2810,7 @@ function ClassesPanel({ canvas, setCanvas }) {
                         <Input type="number" min={0} step={1} className="h-7 text-[10px]" value={cls.paddingX ?? ''} onChange={e => {
                           if (e.target.value === '') { updateClass(name, 'paddingX', undefined); return }
                           const v = Number(e.target.value)
-                          if (!Number.isNaN(v)) updateClass(name, 'paddingX', Math.max(0, v))
+                          if (!Number.isNaN(v) && v >= 0) updateClass(name, 'paddingX', v)
                         }} placeholder="0" />
                       </div>
                       <div>
@@ -2339,7 +2818,7 @@ function ClassesPanel({ canvas, setCanvas }) {
                         <Input type="number" min={0} step={1} className="h-7 text-[10px]" value={cls.paddingY ?? ''} onChange={e => {
                           if (e.target.value === '') { updateClass(name, 'paddingY', undefined); return }
                           const v = Number(e.target.value)
-                          if (!Number.isNaN(v)) updateClass(name, 'paddingY', Math.max(0, v))
+                          if (!Number.isNaN(v) && v >= 0) updateClass(name, 'paddingY', v)
                         }} placeholder="0" />
                       </div>
                       <div>
