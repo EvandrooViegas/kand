@@ -1140,7 +1140,10 @@ function Editor() {
 
         <div className="flex-1 overflow-auto flex items-center justify-center p-6"
           style={{ background: 'repeating-conic-gradient(hsl(var(--muted)) 0% 25%, hsl(var(--background)) 0% 50%) 50% / 24px 24px' }}
-          onMouseDown={() => setSelectedId(null)}>
+          onMouseDown={() => setSelectedId(null)}
+          onDragOver={(e) => { e.preventDefault(); if (e.dataTransfer.types.includes('Files')) setIsDraggingOverBase(true); }}
+          onDragLeave={(e) => { if (e.currentTarget === e.target) setIsDraggingOverBase(false); }}
+          onDrop={(e) => { e.preventDefault(); setIsDraggingOverBase(false); handleRootDrop(e); }}>
           <div ref={canvasRef} className="relative shadow-2xl"
             style={{ width: canvas.width * scale, height: canvas.height * scale, background: canvas.background || '#ffffff', filter: canvasColorFilter }}>
             <div style={{ width: canvas.width, height: canvas.height, transform: `scale(${scale})`, transformOrigin: 'top left', position: 'relative' }}>
@@ -1285,6 +1288,26 @@ function Editor() {
                       onKeyDown={(e) => {
                         e.stopPropagation()
                         if (e.key === 'Escape') { setEditingId(null); setSelectionRect(null); }
+                      }}
+                      onPaste={(e) => {
+                        e.preventDefault()
+                        const text = e.clipboardData.getData('text/plain')
+                        if (!text) return
+                        // Clear any existing content and just set plain text
+                        editorRef.current.innerHTML = ''
+                        const textNode = document.createTextNode(text)
+                        editorRef.current.appendChild(textNode)
+                        
+                        // Move cursor to end
+                        const range = document.createRange()
+                        range.setStart(textNode, text.length)
+                        range.collapse(true)
+                        const sel = window.getSelection()
+                        sel.removeAllRanges()
+                        sel.addRange(range)
+                        
+                        // Update the node - convert to simple text without any formatting
+                        updateNode(enode.id, { text: text })
                       }}
                     />
                   )
@@ -1665,19 +1688,49 @@ function TextProperties({ node, updateNode, meta, canvas, editorRef, savedRangeR
           <Label className="text-xs">Font Size</Label>
           <Input type="number" value={node.fontSize || 48} onChange={(e) => updateNode(node.id, { fontSize: parseInt(e.target.value) || 48 })} />
         </div>
-        <div>
-          <Label className="text-xs">Weight</Label>
-          <select className="w-full h-10 border rounded-md px-3 text-sm bg-background" value={node.fontWeight || 400} onChange={(e) => updateNode(node.id, { fontWeight: parseInt(e.target.value) })}>
-            {weights.map((w) => <option key={w} value={w}>{w} {WEIGHT_LABELS[w] ? `· ${WEIGHT_LABELS[w]}` : ''}</option>)}
-          </select>
+      </div>
+      <div className="space-y-2">
+        <Label className="text-xs">Font Weight</Label>
+        <div className="flex flex-wrap gap-1">
+          {weights.map((w) => (
+            <Button 
+              key={w}
+              variant={node.fontWeight === w ? 'default' : 'outline'} 
+              size="sm" 
+              className="text-xs"
+              onClick={() => updateNode(node.id, { fontWeight: w })}
+            >
+              {WEIGHT_LABELS[w] || w}
+            </Button>
+          ))}
         </div>
       </div>
       <div className="flex items-center gap-2">
-        <Button variant={node.fontStyle === 'italic' ? 'default' : 'outline'} size="sm" disabled={!supportsItalic}
-          onClick={() => updateNode(node.id, { fontStyle: node.fontStyle === 'italic' ? 'normal' : 'italic' })}>
-          <Italic className="w-3.5 h-3.5 mr-1" /> Italic
+        <Button 
+          variant={node.fontStyle === 'italic' ? 'default' : 'outline'} 
+          size="sm" 
+          disabled={!supportsItalic}
+          onClick={() => updateNode(node.id, { fontStyle: node.fontStyle === 'italic' ? 'normal' : 'italic' })}
+          title={supportsItalic ? 'Toggle italic' : 'Italic not supported'}
+        >
+          <Italic className="w-3.5 h-3.5" />
         </Button>
-        {!supportsItalic && <span className="text-xs text-muted-foreground">No italic for this font</span>}
+        <Button 
+          variant={node.textDecoration === 'underline' ? 'default' : 'outline'} 
+          size="sm"
+          onClick={() => updateNode(node.id, { textDecoration: node.textDecoration === 'underline' ? 'none' : 'underline' })}
+          title="Toggle underline"
+        >
+          <Underline className="w-3.5 h-3.5" />
+        </Button>
+        <Button 
+          variant={node.textDecoration === 'line-through' ? 'default' : 'outline'} 
+          size="sm"
+          onClick={() => updateNode(node.id, { textDecoration: node.textDecoration === 'line-through' ? 'none' : 'line-through' })}
+          title="Toggle strikethrough"
+        >
+          <span className="text-xs font-bold">S</span>
+        </Button>
       </div>
       <div>
         <Label className="text-xs">Color</Label>
