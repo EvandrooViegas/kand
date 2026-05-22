@@ -19,8 +19,80 @@ import {
 import { toast } from 'sonner'
 import { v4 as uuidv4 } from 'uuid'
 import { KandMark } from '@/components/logo'
+import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable'
 import { parseStyledText, renderStyledText, resolveCanvasClass } from '@/lib/styleParser'
 import { createElement } from 'react'
+
+const SNAP_THRESHOLD = 8
+
+function collectSnapTargets(nodes, excludeId, canvasW, canvasH) {
+  const v = [0, canvasW / 2, canvasW]
+  const h = [0, canvasH / 2, canvasH]
+  for (const n of nodes || []) {
+    if (n.id === excludeId) continue
+    v.push(n.x, n.x + n.width / 2, n.x + n.width)
+    h.push(n.y, n.y + n.height / 2, n.y + n.height)
+  }
+  return { v, h }
+}
+
+function snapMovePosition(rawX, rawY, w, h, targetsV, targetsH, threshold = SNAP_THRESHOLD) {
+  let newX = rawX
+  let newY = rawY
+  const lines = []
+  const xEdges = [
+    { get: () => newX, set: (v) => { newX = v } },
+    { get: () => newX + w / 2, set: (v) => { newX = v - w / 2 } },
+    { get: () => newX + w, set: (v) => { newX = v - w } },
+  ]
+  const yEdges = [
+    { get: () => newY, set: (v) => { newY = v } },
+    { get: () => newY + h / 2, set: (v) => { newY = v - h / 2 } },
+    { get: () => newY + h, set: (v) => { newY = v - h } },
+  ]
+  for (const edge of xEdges) {
+    for (const pos of targetsV) {
+      if (Math.abs(edge.get() - pos) < threshold) {
+        edge.set(pos)
+        if (!lines.some((l) => l.type === 'v' && l.pos === pos)) lines.push({ type: 'v', pos })
+        break
+      }
+    }
+  }
+  for (const edge of yEdges) {
+    for (const pos of targetsH) {
+      if (Math.abs(edge.get() - pos) < threshold) {
+        edge.set(pos)
+        if (!lines.some((l) => l.type === 'h' && l.pos === pos)) lines.push({ type: 'h', pos })
+        break
+      }
+    }
+  }
+  return { x: Math.round(newX), y: Math.round(newY), lines }
+}
+
+function snapResizeBox(x, y, w, h, targetsV, targetsH, threshold = SNAP_THRESHOLD) {
+  let nx = x
+  let ny = y
+  let nw = w
+  let nh = h
+  const lines = []
+  const right = x + w
+  const bottom = y + h
+  for (const pos of targetsV) {
+    if (Math.abs(right - pos) < threshold) { nw = pos - x; if (!lines.some((l) => l.type === 'v' && l.pos === pos)) lines.push({ type: 'v', pos }); break }
+  }
+  for (const pos of targetsH) {
+    if (Math.abs(bottom - pos) < threshold) { nh = pos - y; if (!lines.some((l) => l.type === 'h' && l.pos === pos)) lines.push({ type: 'h', pos }); break }
+  }
+  for (const pos of targetsV) {
+    if (Math.abs(x - pos) < threshold) { const delta = pos - x; nx = pos; nw = w - delta; if (!lines.some((l) => l.type === 'v' && l.pos === pos)) lines.push({ type: 'v', pos }); break }
+  }
+  for (const pos of targetsH) {
+    if (Math.abs(y - pos) < threshold) { const delta = pos - y; ny = pos; nh = h - delta; if (!lines.some((l) => l.type === 'h' && l.pos === pos)) lines.push({ type: 'h', pos }); break }
+  }
+  return { x: Math.round(nx), y: Math.round(ny), w: Math.max(20, Math.round(nw)), h: Math.max(20, Math.round(nh)), lines }
+}
 
 // Font config (mirrors lib/fonts.js)
 const FONT_META = {
@@ -571,15 +643,31 @@ function Editor() {
 
   const openImageDialog = () => { setImageUrl(''); setImageDialog(true) }
   const insertImageNode = (src) => {
-    const newNode = {
-      id: uuidv4(), type: 'image',
-      x: Math.round((canvas.width - 500) / 2), y: Math.round((canvas.height - 500) / 2),
-      width: 500, height: 500, src, borderRadius: 0, mask: 'none',
-      filters: { ...DEFAULT_FILTERS },
+    const placeNode = (width, height, aspectRatio) => {
+      const newNode = {
+        id: uuidv4(), type: 'image',
+        x: Math.round((canvas.width - width) / 2), y: Math.round((canvas.height - height) / 2),
+        width, height, aspectRatio, src, borderRadius: 0, mask: 'none',
+        filters: { ...DEFAULT_FILTERS },
+      }
+      setCanvas((c) => ({ ...c, nodes: [...(c.nodes || []), newNode] }))
+      setSelectedId(newNode.id)
+      setImageDialog(false)
     }
-    setCanvas((c) => ({ ...c, nodes: [...(c.nodes || []), newNode] }))
-    setSelectedId(newNode.id)
-    setImageDialog(false)
+    const img = new Image()
+    img.onload = () => {
+      const nw = img.naturalWidth || 1
+      const nh = img.naturalHeight || 1
+      const aspect = nw / nh
+      const maxDim = 500
+      let w = maxDim
+      let h = maxDim
+      if (aspect >= 1) { w = maxDim; h = Math.round(maxDim / aspect) }
+      else { h = maxDim; w = Math.round(maxDim * aspect) }
+      placeNode(w, h, aspect)
+    }
+    img.onerror = () => placeNode(500, 500, 1)
+    img.src = src
   }
   const addImageByUrl = () => { if (!imageUrl.trim()) return toast.error('Enter an image URL'); insertImageNode(imageUrl.trim()) }
   const uploadFile = async (file) => {
@@ -657,100 +745,90 @@ function Editor() {
       const ds = dragState.current; if (!ds) return
       const dx = (e.clientX - ds.startX) / scale, dy = (e.clientY - ds.startY) / scale
       if (ds.mode === 'move') {
-        let rawX = Math.round(ds.orig.x + dx)
-        let rawY = Math.round(ds.orig.y + dy)
+        const rawX = Math.round(ds.orig.x + dx)
+        const rawY = Math.round(ds.orig.y + dy)
         const nodeW = ds.orig.width
         const nodeH = ds.orig.height
-        const centerXV = rawX + nodeW / 2
-        const centerYV = rawY + nodeH / 2
-        
-        let newX = rawX
-        let newY = rawY
-        const lines = []
-        const SNAP = 8
-        const cCenterX = canvas.width / 2
-        const cCenterY = canvas.height / 2
-        
-        if (Math.abs(centerXV - cCenterX) < SNAP) { newX = cCenterX - nodeW / 2; lines.push({ type: 'v', pos: cCenterX }) }
-        if (Math.abs(centerYV - cCenterY) < SNAP) { newY = cCenterY - nodeH / 2; lines.push({ type: 'h', pos: cCenterY }) }
-        if (Math.abs(rawX) < SNAP) { newX = 0; lines.push({ type: 'v', pos: 0 }) }
-        if (Math.abs(rawY) < SNAP) { newY = 0; lines.push({ type: 'h', pos: 0 }) }
-        if (Math.abs(rawX + nodeW - canvas.width) < SNAP) { newX = canvas.width - nodeW; lines.push({ type: 'v', pos: canvas.width }) }
-        if (Math.abs(rawY + nodeH - canvas.height) < SNAP) { newY = canvas.height - nodeH; lines.push({ type: 'h', pos: canvas.height }) }
-
-        // We do not check other nodes if they are not loaded yet or to keep it fast, 
-        // but since nodes are few, we can iterate:
-        for (const n of canvas.nodes || []) {
-           if (n.id === ds.nodeId) continue
-           const nCenterX = n.x + n.width / 2
-           const nCenterY = n.y + n.height / 2
-           if (Math.abs(centerXV - nCenterX) < SNAP && !lines.find(l => l.type === 'v' && l.pos === nCenterX)) { newX = nCenterX - nodeW / 2; lines.push({ type: 'v', pos: nCenterX }) }
-           if (Math.abs(centerYV - nCenterY) < SNAP && !lines.find(l => l.type === 'h' && l.pos === nCenterY)) { newY = nCenterY - nodeH / 2; lines.push({ type: 'h', pos: nCenterY }) }
-           if (Math.abs(rawX - n.x) < SNAP) { newX = n.x; lines.push({ type: 'v', pos: n.x }) }
-           if (Math.abs(rawY - n.y) < SNAP) { newY = n.y; lines.push({ type: 'h', pos: n.y }) }
-           if (Math.abs(rawX + nodeW - (n.x + n.width)) < SNAP) { newX = n.x + n.width - nodeW; lines.push({ type: 'v', pos: n.x + n.width }) }
-           if (Math.abs(rawY + nodeH - (n.y + n.height)) < SNAP) { newY = n.y + n.height - nodeH; lines.push({ type: 'h', pos: n.y + n.height }) }
-        }
-
+        const { v, h } = collectSnapTargets(canvasRefObj.current?.nodes, ds.nodeId, canvas.width, canvas.height)
+        const { x: newX, y: newY, lines } = snapMovePosition(rawX, rawY, nodeW, nodeH, v, h)
         setSnapLines(lines)
-        updateNode(ds.nodeId, { x: newX, y: newY }, true) // skip history
+        updateNode(ds.nodeId, { x: newX, y: newY }, true)
         ds.hasMoved = true
       }
       else if (ds.mode === 'resize') {
-        const isText = canvasRefObj.current?.nodes?.find((n) => n.id === ds.nodeId)?.type === 'text'
-        const n = canvasRefObj.current?.nodes?.find((n) => n.id === ds.nodeId)
-        
+        const n = canvasRefObj.current?.nodes?.find((nd) => nd.id === ds.nodeId)
+        const isText = n?.type === 'text'
+        const isImage = n?.type === 'image'
+        const lockAspect = isImage && (n?.aspectRatio || (ds.orig.width && ds.orig.height))
+        const aspect = lockAspect ? (n?.aspectRatio || ds.orig.width / ds.orig.height) : null
+
         const angle = (ds.orig.rotation || 0) * (Math.PI / 180)
         const u = { x: Math.cos(angle), y: Math.sin(angle) }
         const v = { x: -Math.sin(angle), y: Math.cos(angle) }
-        
+
         const cx = ds.orig.x + ds.orig.width / 2
         const cy = ds.orig.y + ds.orig.height / 2
-        
+
         const TL = {
-           x: cx - (ds.orig.width/2)*u.x - (ds.orig.height/2)*v.x,
-           y: cy - (ds.orig.width/2)*u.y - (ds.orig.height/2)*v.y
+          x: cx - (ds.orig.width / 2) * u.x - (ds.orig.height / 2) * v.x,
+          y: cy - (ds.orig.width / 2) * u.y - (ds.orig.height / 2) * v.y,
         }
-        
+
         const BR = {
-           x: cx + (ds.orig.width/2)*u.x + (ds.orig.height/2)*v.x,
-           y: cy + (ds.orig.width/2)*u.y + (ds.orig.height/2)*v.y
+          x: cx + (ds.orig.width / 2) * u.x + (ds.orig.height / 2) * v.x,
+          y: cy + (ds.orig.width / 2) * u.y + (ds.orig.height / 2) * v.y,
         }
-        
+
         const newBR = { x: BR.x + dx, y: BR.y + dy }
         const diag = { x: newBR.x - TL.x, y: newBR.y - TL.y }
-        
+
         let rawW = diag.x * u.x + diag.y * u.y
         let rawH = diag.x * v.x + diag.y * v.y
-        
-        rawW = Math.max(isText ? 40 : 20, Math.round(rawW))
-        rawH = Math.max(20, Math.round(rawH))
-        
+
+        if (lockAspect && aspect && Math.abs(angle) < 0.01) {
+          const scale = Math.max(
+            Math.abs(rawW) / ds.orig.width,
+            Math.abs(rawH) / ds.orig.height
+          )
+          rawW = Math.max(isText ? 40 : 20, Math.round(ds.orig.width * scale))
+          rawH = Math.max(20, Math.round(rawW / aspect))
+        } else {
+          rawW = Math.max(isText ? 40 : 20, Math.round(rawW))
+          rawH = Math.max(20, Math.round(rawH))
+        }
+
         if (n?.maxWidth) rawW = Math.min(rawW, n.maxWidth)
         if (n?.maxHeight) rawH = Math.min(rawH, n.maxHeight)
 
-        const lines = []
-        const SNAP = 8
+        let newX = ds.orig.x
+        let newY = ds.orig.y
+        let lines = []
+
         if (Math.abs(angle) < 0.01) {
-           const rightEdge = ds.orig.x + rawW
-           const bottomEdge = ds.orig.y + rawH
-           if (Math.abs(rightEdge - canvas.width) < SNAP) { rawW = canvas.width - ds.orig.x; lines.push({ type: 'v', pos: canvas.width }) }
-           if (Math.abs(bottomEdge - canvas.height) < SNAP) { rawH = canvas.height - ds.orig.y; lines.push({ type: 'h', pos: canvas.height }) }
-           
-           for (const peer of canvasRefObj.current?.nodes || []) {
-              if (peer.id === ds.nodeId) continue
-              if (Math.abs(rightEdge - peer.x) < SNAP) { rawW = peer.x - ds.orig.x; lines.push({ type: 'v', pos: peer.x }) }
-              if (Math.abs(rightEdge - (peer.x + peer.width)) < SNAP) { rawW = (peer.x + peer.width) - ds.orig.x; lines.push({ type: 'v', pos: peer.x + peer.width }) }
-              if (!isText && Math.abs(bottomEdge - peer.y) < SNAP) { rawH = peer.y - ds.orig.y; lines.push({ type: 'h', pos: peer.y }) }
-              if (!isText && Math.abs(bottomEdge - (peer.y + peer.height)) < SNAP) { rawH = (peer.y + peer.height) - ds.orig.y; lines.push({ type: 'h', pos: peer.y + peer.height }) }
-           }
+          const { v: targetsV, h: targetsH } = collectSnapTargets(
+            canvasRefObj.current?.nodes,
+            ds.nodeId,
+            canvas.width,
+            canvas.height
+          )
+          const snapped = snapResizeBox(ds.orig.x, ds.orig.y, rawW, isText ? ds.orig.height : rawH, targetsV, targetsH)
+          newX = snapped.x
+          newY = snapped.y
+          rawW = snapped.w
+          rawH = isText ? ds.orig.height : snapped.h
+          if (lockAspect && aspect) {
+            rawH = Math.max(20, Math.round(rawW / aspect))
+          }
+          lines = snapped.lines
         }
         setSnapLines(lines)
 
-        const newCx = TL.x + (rawW/2)*u.x + (rawH/2)*v.x
-        const newCy = TL.y + (rawW/2)*u.y + (rawH/2)*v.y
-        const newX = Math.round(newCx - rawW/2)
-        const newY = Math.round(newCy - rawH/2)
+        const newCx = TL.x + (rawW / 2) * u.x + (rawH / 2) * v.x
+        const newCy = TL.y + (rawW / 2) * u.y + (rawH / 2) * v.y
+        if (Math.abs(angle) >= 0.01) {
+          newX = Math.round(newCx - rawW / 2)
+          newY = Math.round(newCy - rawH / 2)
+        }
 
         if (isText) {
           updateNode(ds.nodeId, { x: newX, y: newY, width: rawW }, true)
@@ -830,7 +908,7 @@ function Editor() {
     const base = {
       position: 'absolute', left: node.x, top: node.y, width: node.width, height: node.height,
       cursor: 'move', pointerEvents: 'auto',
-      outline: selectedId === node.id ? '3px solid #6366f1' : 'none', outlineOffset: 2,
+      outline: 'none',
       display: node.type === 'text' ? 'block' : 'flex', alignItems: node.type === 'text' ? 'normal' : 'center',
       justifyContent: node.textAlign === 'center' ? 'center' : node.textAlign === 'right' ? 'flex-end' : 'flex-start',
       overflow: node.type === 'text' ? 'visible' : 'hidden', userSelect: 'none', whiteSpace: 'pre-wrap',
@@ -1074,8 +1152,9 @@ function Editor() {
         </div>
       </div>
 
-      <div className="flex-1 flex overflow-hidden">
-        <Tabs defaultValue="design" className="w-64 border-r-2 border-foreground/90 bg-card flex flex-col">
+      <ResizablePanelGroup direction="horizontal" className="flex-1 min-h-0">
+        <ResizablePanel defaultSize={18} minSize={14} maxSize={32} className="min-w-0">
+        <Tabs defaultValue="design" className="h-full w-full border-r-2 border-foreground/90 bg-card flex flex-col min-h-0">
           <TabsList className="grid grid-cols-2 rounded-none border-b-2 border-foreground/90 h-11 bg-background">
             <TabsTrigger value="design" className="rounded-none data-[state=active]:bg-card data-[state=active]:border-b-2 data-[state=active]:border-[#D4FF00] font-bold tracking-widest text-xs uppercase">Design</TabsTrigger>
             <TabsTrigger value="classes" className="rounded-none data-[state=active]:bg-card data-[state=active]:border-b-2 data-[state=active]:border-[#D4FF00] font-bold tracking-widest text-xs uppercase">Classes</TabsTrigger>
@@ -1137,8 +1216,12 @@ function Editor() {
             <ClassesPanel canvas={canvas} setCanvas={setCanvas} />
           </TabsContent>
         </Tabs>
+        </ResizablePanel>
 
-        <div className="flex-1 overflow-auto flex items-center justify-center p-6"
+        <ResizableHandle withHandle className="bg-border" />
+
+        <ResizablePanel defaultSize={58} minSize={35} className="min-w-0">
+        <div className="h-full w-full overflow-auto flex items-center justify-center p-6"
           style={{ background: 'repeating-conic-gradient(hsl(var(--muted)) 0% 25%, hsl(var(--background)) 0% 50%) 50% / 24px 24px' }}
           onMouseDown={() => setSelectedId(null)}
           onDragOver={(e) => { e.preventDefault(); if (e.dataTransfer.types.includes('Files')) setIsDraggingOverBase(true); }}
@@ -1147,6 +1230,8 @@ function Editor() {
           <div ref={canvasRef} className="relative shadow-2xl"
             style={{ width: canvas.width * scale, height: canvas.height * scale, background: canvas.background || '#ffffff', filter: canvasColorFilter }}>
             <div style={{ width: canvas.width, height: canvas.height, transform: `scale(${scale})`, transformOrigin: 'top left', position: 'relative' }}>
+              {/* Clipped content — nodes only visible inside the paper */}
+              <div style={{ position: 'absolute', inset: 0, overflow: 'hidden', pointerEvents: 'none' }}>
               {(canvas.nodes || []).map((node) => (
                 <div key={node.id} style={{ position: 'absolute', left: 0, top: 0, width: '100%', height: '100%', pointerEvents: 'none' }}>
                   {selectedId === node.id && (node.maxWidth || node.maxHeight) && (
@@ -1202,13 +1287,17 @@ function Editor() {
                   style={{...nodeBoxStyle(node), opacity: editingId === node.id ? 0 : 1}}>
                   {node.type === 'text' ? renderStyledText(parseStyledText(node.text || '', canvas.classes || {}), createElement) :
                    node.type === 'image' && node.src ? (
-                    <img src={node.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', filter: buildFilterCss(node.filters) }} draggable={false} />
+                    <img src={node.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain', objectPosition: 'center', filter: buildFilterCss(node.filters) }} draggable={false} />
                    ) :
                    node.type === 'image' ? <div style={{ width: '100%', height: '100%', background: '#e5e7eb' }} /> : null}
                   {/* Handles and Drag surface are now moved to the Selection Overlay below */}
                 </div>
                 </div>
               ))}
+              </div>
+
+              {/* Unclipped overlay — selection outline & handles visible outside paper (Canva-style) */}
+              <div style={{ position: 'absolute', inset: 0, overflow: 'visible', pointerEvents: 'none' }}>
               
               {/* Selection Overlay (handles drag, resize, rotate, and stays on top!) */}
               {selectedId && canvas.nodes?.find(n => n.id === selectedId) && editingId !== selectedId && (
@@ -1218,7 +1307,8 @@ function Editor() {
                     <div style={{
                       position: 'absolute', left: node.x, top: node.y, width: node.width, height: node.height,
                       transform: `rotate(${node.rotation || 0}deg)`, transformOrigin: 'center center',
-                      pointerEvents: 'none', zIndex: 50 // Handles and drag surface are always on top!
+                      outline: '3px solid #6366f1', outlineOffset: 2,
+                      pointerEvents: 'none', zIndex: 50,
                     }}>
                       {/* Drag overlay - catches clicks for dragging even if node is behind */}
                       <div 
@@ -1326,11 +1416,16 @@ function Editor() {
                   ...(line.type === 'v' ? { left: line.pos, top: 0, bottom: 0, width: 1 } : { top: line.pos, left: 0, right: 0, height: 1 })
                 }} />
               ))}
+              </div>
             </div>
           </div>
         </div>
+        </ResizablePanel>
 
-        <div className="w-80 border-l bg-card p-4 overflow-y-auto">
+        <ResizableHandle withHandle className="bg-border" />
+
+        <ResizablePanel defaultSize={24} minSize={16} maxSize={40} className="min-w-0">
+        <div className="h-full border-l bg-card p-4 overflow-y-auto">
           {!selected ? (
             <CanvasSettingsPanel canvas={canvas} setCanvas={setCanvas} />
           ) : (
@@ -1366,8 +1461,18 @@ function Editor() {
                 <div className="grid grid-cols-2 gap-2 pt-3 border-t">
                   <div><Label className="text-xs">X</Label><Input type="number" value={selected.x} onChange={(e) => updateNode(selected.id, { x: parseInt(e.target.value) || 0 })} /></div>
                   <div><Label className="text-xs">Y</Label><Input type="number" value={selected.y} onChange={(e) => updateNode(selected.id, { y: parseInt(e.target.value) || 0 })} /></div>
-                  <div><Label className="text-xs">Width</Label><Input type="number" value={selected.width} onChange={(e) => updateNode(selected.id, { width: parseInt(e.target.value) || 0 })} /></div>
-                  <div><Label className="text-xs">Height</Label><Input type="number" value={selected.height} onChange={(e) => updateNode(selected.id, { height: parseInt(e.target.value) || 0 })} /></div>
+                  <div><Label className="text-xs">Width</Label><Input type="number" value={selected.width} onChange={(e) => {
+                    const w = parseInt(e.target.value) || 0
+                    if (selected.type === 'image' && selected.aspectRatio) {
+                      updateNode(selected.id, { width: w, height: Math.max(20, Math.round(w / selected.aspectRatio)) })
+                    } else updateNode(selected.id, { width: w })
+                  }} /></div>
+                  <div><Label className="text-xs">Height</Label><Input type="number" value={selected.height} onChange={(e) => {
+                    const h = parseInt(e.target.value) || 0
+                    if (selected.type === 'image' && selected.aspectRatio) {
+                      updateNode(selected.id, { height: h, width: Math.max(20, Math.round(h * selected.aspectRatio)) })
+                    } else updateNode(selected.id, { height: h })
+                  }} /></div>
                   <div><Label className="text-xs text-pink-500">Max Width</Label><Input type="number" placeholder="none" value={selected.maxWidth || ''} onChange={(e) => updateNode(selected.id, { maxWidth: parseInt(e.target.value) || undefined })} /></div>
                   <div><Label className="text-xs text-pink-500">Max Height</Label><Input type="number" placeholder="none" value={selected.maxHeight || ''} onChange={(e) => updateNode(selected.id, { maxHeight: parseInt(e.target.value) || undefined })} /></div>
                   <div><Label className="text-xs">Rotation °</Label><Input type="number" value={selected.rotation || 0} onChange={(e) => updateNode(selected.id, { rotation: parseInt(e.target.value) || 0 })} /></div>
@@ -1392,7 +1497,8 @@ function Editor() {
             </div>
           )}
         </div>
-      </div>
+        </ResizablePanel>
+      </ResizablePanelGroup>
 
       {/* Add Image dialog */}
       <Dialog open={imageDialog} onOpenChange={setImageDialog}>
