@@ -26,7 +26,7 @@ const MIN_ZOOM = 0.08
 const MAX_ZOOM = 4
 const ZOOM_STEP = 0.1
 import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from '@/components/ui/resizable'
-import { parseStyledText, renderStyledText, resolveCanvasClass } from '@/lib/styleParser'
+import { parseStyledText, renderStyledText, resolveCanvasClass, isVisibleBackground, splitTokensByNewlines } from '@/lib/styleParser'
 import { createElement } from 'react'
 
 const SNAP_THRESHOLD = 8
@@ -144,6 +144,62 @@ const MASK_PRESETS = [
   { value: 'pill', label: 'Pill' },
   { value: 'circle', label: 'Circle' },
 ]
+
+function plainTextFromStyled(text = '') {
+  const walk = (tokens) => tokens.map((t) => {
+    if (typeof t === 'string') return t
+    if (t?.children?.length) return walk(t.children)
+    return ''
+  }).join('')
+  return walk(parseStyledText(text || '', {})).replace(/\s+/g, ' ').trim()
+}
+
+function LayerPreview({ node }) {
+  if (node.type === 'image' && node.src) {
+    return (
+      <div className="w-11 h-11 shrink-0 rounded-md border-2 border-foreground/20 overflow-hidden bg-muted">
+        <img src={node.src} alt="" className="w-full h-full object-cover" draggable={false} />
+      </div>
+    )
+  }
+  if (node.type === 'text') {
+    const preview = plainTextFromStyled(node.text || '') || 'Text'
+    return (
+      <div
+        className="w-11 h-11 shrink-0 rounded-md border-2 border-foreground/20 bg-background flex items-center justify-center p-1 overflow-hidden"
+        style={{ fontFamily: `'${node.fontFamily || 'Inter'}', sans-serif`, color: node.color || '#111' }}
+      >
+        <span className="text-[7px] leading-[1.1] text-center line-clamp-4 font-medium w-full break-words">
+          {preview.slice(0, 48)}
+        </span>
+      </div>
+    )
+  }
+  if (node.type === 'gradient') {
+    return (
+      <div
+        className="w-11 h-11 shrink-0 rounded-md border-2 border-foreground/20"
+        style={{ backgroundImage: buildGradientCssClient(node) }}
+      />
+    )
+  }
+  if (node.type === 'shape') {
+    return (
+      <div
+        className="w-11 h-11 shrink-0 border-2 border-foreground/20"
+        style={{
+          background: node.fill || '#6366f1',
+          borderRadius: node.shape === 'ellipse' ? '50%' : Math.min(8, (node.borderRadius || 0) / 4 + 2),
+        }}
+      />
+    )
+  }
+  return (
+    <div className="w-11 h-11 shrink-0 rounded-md border-2 border-foreground/20 bg-muted flex items-center justify-center">
+      <Square className="w-4 h-4 text-muted-foreground" />
+    </div>
+  )
+}
 
 function buildGradientCssClient(node) {
   const stops = (node.stops || [{ color: '#6366f1', position: 0, alpha: 100 }, { color: '#ec4899', position: 100, alpha: 100 }])
@@ -998,17 +1054,13 @@ function Editor() {
     return base
   }
 
-  const layerIcon = (n) =>
-    n.type === 'text' ? <Type className="w-3.5 h-3.5" /> :
-    n.type === 'image' ? <ImageIcon className="w-3.5 h-3.5" /> :
-    n.type === 'gradient' ? <Palette className="w-3.5 h-3.5" /> :
-    n.shape === 'ellipse' ? <Circle className="w-3.5 h-3.5" /> : <Square className="w-3.5 h-3.5" />
-  const layerLabel = (n) =>
-    n.dynamic_key ? `{${n.dynamic_key}}` :
-    n.type === 'text' ? ((n.text || '').slice(0, 18) || 'Text') :
-    n.type === 'image' ? 'Image' :
-    n.type === 'gradient' ? 'Gradient' :
-    n.shape === 'ellipse' ? 'Circle' : 'Rectangle'
+  const layerLabel = (n) => {
+    if (n.dynamic_key) return `{${n.dynamic_key}}`
+    if (n.type === 'text') return plainTextFromStyled(n.text || '') || 'Empty text'
+    if (n.type === 'image') return 'Image'
+    if (n.type === 'gradient') return 'Gradient'
+    return n.shape === 'ellipse' ? 'Circle' : 'Rectangle'
+  }
 
   const fontMeta = selected?.type === 'text' ? (FONT_META[selected.fontFamily] || FONT_META['Inter']) : null
 
@@ -1021,17 +1073,24 @@ function Editor() {
         css += `${selector} { `;
         if (cls.color) css += `color: ${cls.color} !important; `;
         const bg = cls.background || cls.backgroundColor;
-        if (bg) css += `background-color: ${bg} !important; `;
+        const py = typeof cls.paddingY === 'number' ? cls.paddingY : 0
+        const px = typeof cls.paddingX === 'number' ? cls.paddingX : 0
+        const showBgBox = isVisibleBackground(bg) && (px > 0 || py > 0)
         if (cls.fontWeight) css += `font-weight: ${cls.fontWeight} !important; `;
         if (cls.fontStyle) css += `font-style: ${cls.fontStyle} !important; `;
         if (cls.letterSpacing) css += `letter-spacing: ${cls.letterSpacing}px !important; `;
         if (cls.textTransform) css += `text-transform: ${cls.textTransform} !important; `;
         if (cls.textDecoration) css += `text-decoration: ${cls.textDecoration} !important; `;
         if (cls.textShadow?.enabled) css += `text-shadow: ${cls.textShadow.offsetX||0}px ${cls.textShadow.offsetY||0}px ${cls.textShadow.blur||0}px ${cls.textShadow.color||'#000'} !important; `;
-        if (cls.paddingX || cls.paddingY) css += `padding: ${cls.paddingY||0}px ${cls.paddingX||0}px !important; `;
-        if (cls.borderRadius) css += `border-radius: ${cls.borderRadius}px !important; `;
-        if (cls.boxShadow?.enabled) css += `box-shadow: ${cls.boxShadow.offsetX||0}px ${cls.boxShadow.offsetY||0}px ${cls.boxShadow.blur||0}px ${cls.boxShadow.color||'#000'} !important; `;
-        css += `box-decoration-break: clone; -webkit-box-decoration-break: clone; `;
+        if (showBgBox) {
+          css += `background-color: ${bg} !important; `
+          css += `padding: ${py}px ${px}px !important; `
+          css += `line-height: 1 !important; `
+          if (cls.borderRadius != null) css += `border-radius: ${cls.borderRadius}px !important; `;
+          if (cls.boxShadow?.enabled) css += `box-shadow: ${cls.boxShadow.offsetX||0}px ${cls.boxShadow.offsetY||0}px ${cls.boxShadow.blur||0}px ${cls.boxShadow.color||'#000'} !important; `;
+        }
+        css += `display: inline !important; vertical-align: baseline !important; line-height: inherit !important; `;
+        css += `box-decoration-break: clone !important; -webkit-box-decoration-break: clone !important; `;
         css += `}\n`;
       }
     }
@@ -1238,11 +1297,11 @@ function Editor() {
                   onDrop={(e) => { e.preventDefault(); const id = e.dataTransfer.getData('text/plain'); setDragOverId(null); reorderByDrag(id, n.id) }}
                   onDragEnd={() => setDragOverId(null)}
                   onClick={() => setSelectedId(n.id)}
-                  className={`flex items-center gap-2 px-2 py-1.5 rounded-lg border-2 cursor-grab active:cursor-grabbing text-sm transition relative ${selectedId === n.id ? 'bg-[#D4FF00]/40 border-foreground/90 font-semibold' : 'border-transparent hover:bg-foreground/5 hover:border-foreground/20'} ${dragOverId === n.id ? 'border-t-2 border-[#9AB800]' : ''}`}>
-                  <GripVertical className="w-3 h-3 text-muted-foreground opacity-60" />
-                  {layerIcon(n)}
-                  <span className="truncate flex-1">{layerLabel(n)}</span>
-                  {n.dynamic_key && <span className="text-[10px] bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 rounded">DYN</span>}
+                  className={`flex items-center gap-2.5 px-2 py-2 rounded-lg border-2 cursor-grab active:cursor-grabbing text-sm transition relative ${selectedId === n.id ? 'bg-[#D4FF00]/40 border-foreground/90 font-semibold' : 'border-transparent hover:bg-foreground/5 hover:border-foreground/20'} ${dragOverId === n.id ? 'border-t-2 border-[#9AB800]' : ''}`}>
+                  <GripVertical className="w-3 h-3 text-muted-foreground opacity-60 shrink-0" />
+                  <LayerPreview node={n} />
+                  <span className={`flex-1 min-w-0 ${n.type === 'text' ? 'text-xs leading-snug line-clamp-2' : 'truncate'}`}>{layerLabel(n)}</span>
+                  {n.dynamic_key && <span className="text-[10px] bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 rounded shrink-0">DYN</span>}
                 </div>
               ))}
             </div>
@@ -1284,7 +1343,7 @@ function Editor() {
           onDragOver={(e) => { e.preventDefault(); if (e.dataTransfer.types.includes('Files')) setIsDraggingOverBase(true); }}
           onDragLeave={(e) => { if (e.currentTarget === e.target) setIsDraggingOverBase(false); }}
           onDrop={(e) => { e.preventDefault(); setIsDraggingOverBase(false); handleRootDrop(e); }}>
-          <div ref={canvasRef} className="relative border-2 border-foreground/90 shadow-[8px_8px_0_0_rgba(0,0,0,0.88)] dark:shadow-[8px_8px_0_0_rgba(212,255,0,0.28)]"
+          <div ref={canvasRef} className="relative border-2 border-foreground/90 shadow-md"
             style={{ width: canvas.width * scale, height: canvas.height * scale, background: canvas.background || '#ffffff', filter: canvasColorFilter }}>
             <div style={{ width: canvas.width, height: canvas.height, transform: `scale(${scale})`, transformOrigin: 'top left', position: 'relative' }}>
               {/* Clipped content — nodes only visible inside the paper */}
@@ -1342,7 +1401,14 @@ function Editor() {
                   }}
                    className={node.className ? (node.className.startsWith('.') ? node.className.slice(1) : node.className) : ''}
                   style={{...nodeBoxStyle(node), opacity: editingId === node.id ? 0 : 1}}>
-                  {node.type === 'text' ? renderStyledText(parseStyledText(node.text || '', canvas.classes || {}), createElement) :
+                  {node.type === 'text' ? (() => {
+                    const lines = splitTokensByNewlines(parseStyledText(node.text || '', canvas.classes || {}))
+                    return lines.map((lineTokens, i) => (
+                      <div key={i} style={{ width: '100%', whiteSpace: 'pre-wrap', lineHeight: node.lineHeight || 1.2, textAlign: node.textAlign || 'left' }}>
+                        {renderStyledText(lineTokens, createElement, { canvasClasses: canvas.classes || {} })}
+                      </div>
+                    ))
+                  })() :
                    node.type === 'image' && node.src ? (
                     <img src={node.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain', objectPosition: 'center', filter: buildFilterCss(node.filters) }} draggable={false} />
                    ) :
@@ -1794,6 +1860,19 @@ function TextProperties({ node, updateNode, meta, canvas, editorRef, savedRangeR
 
   return (
     <>
+      <div>
+        <Label className="text-[11px] uppercase tracking-widest font-semibold text-foreground/70 mb-1.5 block">Content</Label>
+        <Textarea
+          rows={5}
+          className="text-sm resize-y min-h-[100px] font-normal leading-relaxed border-2 border-foreground/20 focus-visible:ring-[#D4FF00]"
+          style={{ fontFamily: `'${node.fontFamily || 'Inter'}', sans-serif` }}
+          value={plainTextFromStyled(node.text || '')}
+          onChange={(e) => updateNode(node.id, { text: e.target.value })}
+          placeholder="Enter text…"
+        />
+        <p className="text-[10px] text-muted-foreground mt-1.5">Edits plain text here. Double-click the layer on canvas for inline styles and classes.</p>
+      </div>
+
       <div className="space-y-3 bg-muted/30 border p-3 rounded-lg">
         {/* Whole Node Class dropdown */}
         <div className="space-y-1">
@@ -2202,7 +2281,26 @@ function ClassesPanel({ canvas, setCanvas }) {
                       </div>
                       <div>
                         <Label className="text-[10px] uppercase text-muted-foreground">Background</Label>
-                        <Input type="color" className="h-6 w-full p-0 border-0" value={cls.background || '#ffffff'} onChange={e => updateClass(name, 'background', e.target.value)} />
+                        <div className="flex gap-1 items-center">
+                          <Input
+                            type="color"
+                            className="h-6 flex-1 p-0 border-0 min-w-0"
+                            disabled={!isVisibleBackground(cls.background || cls.backgroundColor)}
+                            value={isVisibleBackground(cls.background || cls.backgroundColor) ? (cls.background || cls.backgroundColor) : '#D4FF00'}
+                            onChange={e => updateClass(name, 'background', e.target.value)}
+                          />
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            className="h-6 px-2 text-[10px] shrink-0"
+                            onClick={() => updateClass(name, 'background', undefined)}
+                            title="Remove background (invisible at 0 padding)"
+                          >
+                            None
+                          </Button>
+                        </div>
+                        <p className="text-[9px] text-muted-foreground mt-0.5">Pad 0 hides the box. Use 1+ for a visible highlight.</p>
                       </div>
                     </div>
                     <div>
@@ -2230,11 +2328,19 @@ function ClassesPanel({ canvas, setCanvas }) {
                     <div className="grid grid-cols-3 gap-2">
                       <div>
                         <Label className="text-[10px] uppercase text-muted-foreground">Pad X (px)</Label>
-                        <Input type="number" className="h-7 text-[10px]" value={cls.paddingX ?? ''} onChange={e => updateClass(name, 'paddingX', parseInt(e.target.value))} placeholder="0" />
+                        <Input type="number" min={0} step={1} className="h-7 text-[10px]" value={cls.paddingX ?? ''} onChange={e => {
+                          if (e.target.value === '') { updateClass(name, 'paddingX', undefined); return }
+                          const v = Number(e.target.value)
+                          if (!Number.isNaN(v)) updateClass(name, 'paddingX', Math.max(0, v))
+                        }} placeholder="0" />
                       </div>
                       <div>
                         <Label className="text-[10px] uppercase text-muted-foreground">Pad Y (px)</Label>
-                        <Input type="number" className="h-7 text-[10px]" value={cls.paddingY ?? ''} onChange={e => updateClass(name, 'paddingY', parseInt(e.target.value))} placeholder="0" />
+                        <Input type="number" min={0} step={1} className="h-7 text-[10px]" value={cls.paddingY ?? ''} onChange={e => {
+                          if (e.target.value === '') { updateClass(name, 'paddingY', undefined); return }
+                          const v = Number(e.target.value)
+                          if (!Number.isNaN(v)) updateClass(name, 'paddingY', Math.max(0, v))
+                        }} placeholder="0" />
                       </div>
                       <div>
                         <Label className="text-[10px] uppercase text-muted-foreground">Radius</Label>
