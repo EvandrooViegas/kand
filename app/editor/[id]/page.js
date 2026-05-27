@@ -37,11 +37,11 @@ import { createElement } from 'react'
 
 const SNAP_THRESHOLD = 8
 
-function collectSnapTargets(nodes, excludeId, canvasW, canvasH) {
+function collectSnapTargets(nodes, excludeIds = [], canvasW, canvasH) {
   const v = [0, canvasW / 2, canvasW]
   const h = [0, canvasH / 2, canvasH]
   for (const n of nodes || []) {
-    if (n.id === excludeId) continue
+    if (excludeIds.includes(n.id)) continue
     v.push(n.x, n.x + n.width / 2, n.x + n.width)
     h.push(n.y, n.y + n.height / 2, n.y + n.height)
   }
@@ -253,6 +253,33 @@ function nodeLayerLabel(n) {
   return n.shape === 'ellipse' ? 'Circle' : 'Rectangle'
 }
 
+function isValidHex(hex) {
+  return /^#[0-9A-F]{6}$/i.test(hex) || /^#[0-9A-F]{3}$/i.test(hex)
+}
+
+function ColorInput({ value, onChange, className = '' }) {
+  const safeHex = isValidHex(value) ? value : '#000000'
+  return (
+    <div className={`flex items-center gap-2 ${className}`}>
+      <div className="relative w-8 h-8 rounded border border-input shrink-0 overflow-hidden bg-white dark:bg-black">
+        <input 
+          type="color" 
+          className="absolute -inset-2 w-12 h-12 cursor-pointer opacity-0" 
+          value={safeHex} 
+          onChange={(e) => onChange(e.target.value)} 
+        />
+        <div className="w-full h-full pointer-events-none" style={{ backgroundColor: value || 'transparent' }} />
+      </div>
+      <Input 
+        className="h-8 text-xs font-mono" 
+        value={value} 
+        onChange={(e) => onChange(e.target.value)} 
+        placeholder="Hex, rgb(), hsl()"
+      />
+    </div>
+  )
+}
+
 function ThemeToggle() {
   const { theme, setTheme } = useTheme()
   const [mounted, setMounted] = useState(false)
@@ -273,6 +300,7 @@ function Editor() {
   const [hasChanges, setHasChanges] = useState(false)
   const savedCanvasRef = useRef(null)
   const historyRef = useRef({ past: [], future: [] })
+  const clipboardRef = useRef([])
   const [, setHistoryTick] = useState(0)
   const canvasRefObj = useRef(canvasState)
   canvasRefObj.current = canvasState
@@ -304,6 +332,7 @@ function Editor() {
     if (historyRef.current.past.length === 0) return
     const prev = historyRef.current.past.pop()
     historyRef.current.future.push(canvasRefObj.current)
+    canvasRefObj.current = prev
     setCanvasState(prev)
     setHistoryTick(t => t + 1)
   }
@@ -311,6 +340,7 @@ function Editor() {
     if (historyRef.current.future.length === 0) return
     const next = historyRef.current.future.pop()
     historyRef.current.past.push(canvasRefObj.current)
+    canvasRefObj.current = next
     setCanvasState(next)
     setHistoryTick(t => t + 1)
   }
@@ -629,6 +659,31 @@ function Editor() {
     const handler = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
       
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
+        if (selectedIds.length > 0) {
+          clipboardRef.current = (canvasState?.nodes || []).filter(n => selectedIds.includes(n.id))
+          toast.success(`${clipboardRef.current.length} copied`)
+        }
+        return
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
+        if (clipboardRef.current && clipboardRef.current.length > 0) {
+          const newNodes = clipboardRef.current.map(n => ({
+            ...n,
+            id: uuidv4(),
+            groupId: undefined,
+            x: n.x + 20,
+            y: n.y + 20
+          }))
+          setCanvas(c => ({ ...c, nodes: [...(c.nodes || []), ...newNodes] }))
+          setSelectedIds(newNodes.map(n => n.id))
+          setSelectedGroupId(null)
+          e.preventDefault()
+        }
+        return
+      }
+
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
         if (e.shiftKey) redo()
         else undo()
@@ -651,7 +706,7 @@ function Editor() {
     }
     window.addEventListener('keydown', handler)
     return () => window.removeEventListener('keydown', handler)
-  }, [selectedIds])
+  }, [selectedIds, canvasState])
 
   const groups = canvas?.groups || []
   const selectedGroup = selectedGroupId ? groups.find((g) => g.id === selectedGroupId) : null
@@ -1118,12 +1173,12 @@ function Editor() {
         const rawY = Math.round(ds.orig.y + dy)
         const nodeW = ds.orig.width
         const nodeH = ds.orig.height
-        const { v, h } = collectSnapTargets(canvasRefObj.current?.nodes, ds.nodeId, canvas.width, canvas.height)
+        const idsToMove = ds.moveIds || [ds.nodeId]
+        const { v, h } = collectSnapTargets(canvasRefObj.current?.nodes, idsToMove, canvas.width, canvas.height)
         const { x: newX, y: newY, lines } = snapMovePosition(rawX, rawY, nodeW, nodeH, v, h)
         setSnapLines(lines)
         const deltaX = newX - ds.orig.x
         const deltaY = newY - ds.orig.y
-        const idsToMove = ds.moveIds || [ds.nodeId]
         const origMap = new Map((ds.origPositions || []).map((p) => [p.id, p]))
         idsToMove.forEach((id) => {
           const o = origMap.get(id)
@@ -1183,7 +1238,7 @@ function Editor() {
         if (Math.abs(angle) < 0.01) {
           const { v: targetsV, h: targetsH } = collectSnapTargets(
             canvasRefObj.current?.nodes,
-            ds.nodeId,
+            [ds.nodeId],
             canvas.width,
             canvas.height
           )
@@ -1440,36 +1495,12 @@ function Editor() {
 
             {/* Color — small swatch + native color picker + hex input */}
             <div className="flex items-center gap-1" title="Text color">
-              <label className="w-5 h-5 rounded border cursor-pointer flex-shrink-0 relative overflow-hidden block" style={{ background: textFormat.color || nodeColor }}>
-                <input
-                  type="color"
-                  value={textFormat.color && /^#[0-9a-fA-F]{3,6}$/.test(textFormat.color) ? (textFormat.color.length === 4 ? '#' + textFormat.color[1] + textFormat.color[1] + textFormat.color[2] + textFormat.color[2] + textFormat.color[3] + textFormat.color[3] : textFormat.color) : '#000000'}
-                  className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-                  onPointerDown={(e) => e.stopPropagation()}
-                  onChange={(e) => {
-                    const val = e.target.value;
-                    setTextFormat(prev => ({ ...prev, color: val }));
-                    applyAdHocStyle('color', val);
-                  }}
-                />
-              </label>
-              <input
-                type="text"
-                maxLength={7}
-                placeholder={nodeColor}
-                value={textFormat.color || ''}
-                className="w-[68px] h-7 text-[10px] border rounded bg-background px-1.5 font-mono"
-                onPointerDown={(e) => e.stopPropagation()}
-                onKeyDown={(e) => {
-                  e.stopPropagation();
-                  if (e.key === 'Enter') {
-                    const v = e.target.value.trim();
-                    if (/^#[0-9a-fA-F]{3,6}$/.test(v)) { applyAdHocStyle('color', v); }
-                  }
-                }}
-                onChange={(e) => {
-                  const v = e.target.value.trim();
-                  setTextFormat(prev => ({ ...prev, color: v }));
+              <ColorInput
+                className="w-32"
+                value={textFormat.color || nodeColor || '#000000'}
+                onChange={(val) => {
+                  setTextFormat(prev => ({ ...prev, color: val }));
+                  applyAdHocStyle('color', val);
                 }}
               />
             </div>
@@ -1979,7 +2010,7 @@ function Editor() {
 
                 {selected.type !== 'text' && (
                   <div className="pt-3 border-t">
-                    <Label className="text-xs mb-1">Class Name</Label>
+                    <Label className="text-xs">Class Name</Label>
                     <Input placeholder="e.g. .highlight" value={selected.className || ''} onChange={(e) => updateNode(selected.id, { className: e.target.value })} />
                     <p className="text-xs text-muted-foreground mt-1">Link this node to a custom class.</p>
                   </div>
@@ -2129,10 +2160,7 @@ function CanvasSettingsPanel({ canvas, setCanvas }) {
         </div>
         <div>
           <Label className="text-xs">Background</Label>
-          <div className="flex gap-2">
-            <Input type="color" className="w-14 p-1 h-10" value={canvas.background || '#ffffff'} onChange={(e) => setCanvas({ ...canvas, background: e.target.value })} />
-            <Input value={canvas.background || '#ffffff'} onChange={(e) => setCanvas({ ...canvas, background: e.target.value })} />
-          </div>
+          <ColorInput value={canvas.background || '#ffffff'} onChange={(val) => setCanvas({ ...canvas, background: val })} />
         </div>
         <div>
           <Label className="text-xs flex items-center gap-2"><Wand2 className="w-3 h-3" />Color Mode</Label>
@@ -2353,10 +2381,7 @@ function TextProperties({ node, updateNode, meta, canvas, editorRef, savedRangeR
       </div>
       <div>
         <Label className="text-xs">Color</Label>
-        <div className="flex gap-2">
-          <Input type="color" className="w-14 p-1 h-10" value={node.color || '#000000'} onChange={(e) => updateNode(node.id, { color: e.target.value })} />
-          <Input value={node.color || '#000000'} onChange={(e) => updateNode(node.id, { color: e.target.value })} />
-        </div>
+        <ColorInput value={node.color || '#000000'} onChange={(val) => updateNode(node.id, { color: val })} />
       </div>
       <div>
         <Label className="text-xs">Alignment</Label>
@@ -2404,11 +2429,8 @@ function TextProperties({ node, updateNode, meta, canvas, editorRef, savedRangeR
               <Input type="number" value={ts.blur || 0} onChange={(e) => updateNode(node.id, { textShadow: { ...ts, blur: parseInt(e.target.value) || 0 } })} />
             </div>
             <div>
-              <Label className="text-xs">Shadow Color</Label>
-              <div className="flex gap-2">
-                <Input type="color" className="w-14 p-1 h-10" value={(ts.color || '#000000').slice(0, 7)} onChange={(e) => updateNode(node.id, { textShadow: { ...ts, color: e.target.value } })} />
-                <Input value={ts.color || '#000000'} onChange={(e) => updateNode(node.id, { textShadow: { ...ts, color: e.target.value } })} />
-              </div>
+              <Label className="text-[10px]">Shadow Color</Label>
+              <ColorInput value={ts.color || '#000000'} onChange={(val) => updateNode(node.id, { textShadow: { ...ts, color: val } })} />
               <p className="text-xs text-muted-foreground mt-1">Use 8-digit hex (e.g. #00000080) for transparency.</p>
             </div>
           </div>
@@ -2477,13 +2499,12 @@ function ShapeProperties({ node, updateNode }) {
     <>
       <div>
         <Label className="text-xs">Fill Color</Label>
-        <div className="flex gap-2">
-          <Input type="color" className="w-14 p-1 h-10" value={node.fill || '#6366f1'} onChange={(e) => updateNode(node.id, { fill: e.target.value })} />
-          <Input value={node.fill || '#6366f1'} onChange={(e) => updateNode(node.id, { fill: e.target.value })} />
-        </div>
+        <ColorInput value={node.fill || '#6366f1'} onChange={(val) => updateNode(node.id, { fill: val })} />
       </div>
       <div className="grid grid-cols-2 gap-2">
-        <div><Label className="text-xs">Stroke</Label><Input type="color" className="w-full p-1 h-10" value={node.stroke || '#000000'} onChange={(e) => updateNode(node.id, { stroke: e.target.value })} /></div>
+        <div><Label className="text-xs">Stroke</Label>
+          <ColorInput value={node.stroke || '#000000'} onChange={(val) => updateNode(node.id, { stroke: val })} />
+        </div>
         <div><Label className="text-xs">Stroke Width</Label><Input type="number" value={node.strokeWidth || 0} onChange={(e) => updateNode(node.id, { strokeWidth: parseInt(e.target.value) || 0 })} /></div>
       </div>
       {node.shape === 'rect' && (
@@ -2547,12 +2568,11 @@ function GradientProperties({ node, updateNode }) {
         <div className="space-y-2">
           {stops.map((stop, i) => (
             <div key={i} className="space-y-1 bg-muted/30 p-2 rounded border">
-              <div className="flex items-center gap-1.5">
-                <Input type="color" className="w-10 h-8 p-1 shrink-0" value={stop.color} onChange={(e) => updateStop(i, { color: e.target.value })} />
-                <Input value={stop.color} onChange={(e) => updateStop(i, { color: e.target.value })} className="text-xs font-mono h-8" />
-                <Input type="number" min={0} max={100} value={stop.position} onChange={(e) => updateStop(i, { position: Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) })} className="w-14 h-8" />
-                <span className="text-xs text-muted-foreground">%</span>
-                <Button variant="ghost" size="icon" className="h-7 w-7 shrink-0" onClick={() => removeStop(i)}><X className="w-3.5 h-3.5" /></Button>
+              <div className="flex items-center gap-2 mb-2">
+                <ColorInput className="flex-1" value={stop.color} onChange={(val) => updateStop(i, { color: val })} />
+                <div className="w-16"><Input type="number" className="h-8 text-xs px-1" value={stop.position} onChange={(e) => updateStop(i, { position: parseInt(e.target.value) || 0 })} /></div>
+                <div className="w-16"><Input type="number" className="h-8 text-xs px-1" value={stop.alpha ?? 100} onChange={(e) => updateStop(i, { alpha: parseInt(e.target.value) || 0 })} /></div>
+                <Button variant="ghost" size="icon" className="w-6 h-6 text-muted-foreground hover:text-red-400 shrink-0" onClick={() => removeStop(i)}><Trash2 className="w-3 h-3" /></Button>
               </div>
               <div className="flex items-center gap-2 px-1">
                 <Label className="text-[10px] uppercase text-muted-foreground w-10">Alpha</Label>
@@ -2754,33 +2774,25 @@ function ClassesPanel({ canvas, setCanvas }) {
                 {type === 'text' && (
                   <>
                     <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <Label className="text-[10px] uppercase text-muted-foreground">Color</Label>
-                        <Input type="color" className="h-6 w-full p-0 border-0" value={cls.color || '#000000'} onChange={e => updateClass(name, 'color', e.target.value)} />
+                      <div><Label className="text-[10px]">Text Color</Label>
+                        <ColorInput value={cls.color || '#000000'} onChange={val => updateClass(name, 'color', val)} />
                       </div>
-                      <div>
-                        <Label className="text-[10px] uppercase text-muted-foreground">Background</Label>
-                        <div className="flex gap-1 items-center">
-                          <Input
-                            type="color"
-                            className="h-6 flex-1 p-0 border-0 min-w-0"
-                            disabled={!isVisibleBackground(cls.background || cls.backgroundColor)}
-                            value={isVisibleBackground(cls.background || cls.backgroundColor) ? (cls.background || cls.backgroundColor) : '#D4FF00'}
-                            onChange={e => updateClass(name, 'background', e.target.value)}
-                          />
-                          <Button
-                            type="button"
-                            variant="outline"
-                            size="sm"
-                            className="h-6 px-2 text-[10px] shrink-0"
-                            onClick={() => updateClass(name, 'background', undefined)}
-                            title="Remove background (invisible at 0 padding)"
-                          >
-                            None
-                          </Button>
-                        </div>
-                        <p className="text-[9px] text-muted-foreground mt-0.5">Pad 0 hides the box. Use 1+ for a visible highlight.</p>
+                      <div><Label className="text-[10px]">Background</Label>
+                        <ColorInput value={cls.background || cls.backgroundColor || '#transparent'} onChange={val => updateClass(name, 'background', val)} />
                       </div>
+                    </div>
+                    <div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="h-6 px-2 text-[10px] shrink-0"
+                        onClick={() => updateClass(name, 'background', undefined)}
+                        title="Remove background (invisible at 0 padding)"
+                      >
+                        None
+                      </Button>
+                      <p className="text-[9px] text-muted-foreground mt-0.5">Pad 0 hides the box. Use 1+ for a visible highlight.</p>
                     </div>
                     <div>
                       <Label className="text-[10px] uppercase text-muted-foreground">Underline</Label>
@@ -2840,11 +2852,8 @@ function ClassesPanel({ canvas, setCanvas }) {
                             <div><Label className="text-[9px]">Blur</Label><Input type="number" className="h-6 text-[10px]" value={cls.boxShadow.blur || 0} onChange={(e) => updateClass(name, 'boxShadow', { ...cls.boxShadow, blur: parseInt(e.target.value) || 0 })} /></div>
                           </div>
                           <div>
-                            <Label className="text-[9px]">Color</Label>
-                            <div className="flex gap-2">
-                              <Input type="color" className="w-10 p-0 h-6 border-0" value={(cls.boxShadow.color || '#000000').slice(0, 7)} onChange={(e) => updateClass(name, 'boxShadow', { ...cls.boxShadow, color: e.target.value })} />
-                              <Input className="h-6 text-[10px]" value={cls.boxShadow.color || '#000000'} onChange={(e) => updateClass(name, 'boxShadow', { ...cls.boxShadow, color: e.target.value })} />
-                            </div>
+                            <Label className="text-[10px]">Shadow Color</Label>
+                            <ColorInput value={(cls.boxShadow.color || '#000000').slice(0, 7)} onChange={(val) => updateClass(name, 'boxShadow', { ...cls.boxShadow, color: val })} />
                           </div>
                         </div>
                       )}
@@ -2900,14 +2909,12 @@ function ClassesPanel({ canvas, setCanvas }) {
 
                 {type === 'shape' && (
                   <>
-                    <div className="grid grid-cols-2 gap-2">
-                      <div>
-                        <Label className="text-[10px] uppercase text-muted-foreground">Fill</Label>
-                        <Input type="color" className="h-6 w-full p-0 border-0" value={cls.fill || '#6366f1'} onChange={e => updateClass(name, 'fill', e.target.value)} />
+                    <div className="grid grid-cols-2 gap-2 mt-2">
+                      <div><Label className="text-[10px]">Fill Color</Label>
+                        <ColorInput value={cls.fill || '#6366f1'} onChange={val => updateClass(name, 'fill', val)} />
                       </div>
-                      <div>
-                        <Label className="text-[10px] uppercase text-muted-foreground">Stroke</Label>
-                        <Input type="color" className="h-6 w-full p-0 border-0" value={cls.stroke || '#000000'} onChange={e => updateClass(name, 'stroke', e.target.value)} />
+                      <div><Label className="text-[10px]">Stroke Color</Label>
+                        <ColorInput value={cls.stroke || '#000000'} onChange={val => updateClass(name, 'stroke', val)} />
                       </div>
                       <div>
                         <Label className="text-[10px] uppercase text-muted-foreground">Stroke W.</Label>
