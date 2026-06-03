@@ -37,18 +37,7 @@ function buildFilterCssClient(filters) {
   return `brightness(${f.brightness}%) contrast(${f.contrast}%) saturate(${f.saturate}%) grayscale(${f.grayscale}%) sepia(${f.sepia}%) hue-rotate(${f.hueRotate}deg) blur(${f.blur}px) opacity(${f.opacity}%)`
 }
 
-function maskRadiusClient(node) {
-  const w = node.width, h = node.height
-  switch (node.mask) {
-    case 'circle': return Math.max(w, h)
-    case 'pill': return Math.min(w, h) / 2
-    case 'rounded': return Math.min(w, h) * 0.15
-    case 'soft': return Math.min(w, h) * 0.08
-    case 'square':
-    case 'none':
-    default: return node.borderRadius || 0
-  }
-}
+// maskRadiusClient removed
 
 function CanvasPreview({ canvas }) {
   const w = canvas.width || 1080
@@ -82,7 +71,17 @@ function CanvasPreview({ canvas }) {
             style = { ...base, backgroundImage: buildGradientCssClient(n),
               borderRadius: n.shape === 'ellipse' ? Math.max(n.width, n.height) : (n.borderRadius || 0) }
           } else if (n.type === 'image') {
-            style = { ...base, borderRadius: maskRadiusClient(n) }
+            const br = n.borderRadius || 0
+            const cL = n.cropLeft || 0
+            const cR = n.cropRight || 0
+            const cT = n.cropTop || 0
+            const cB = n.cropBottom || 0
+            const hasClip = cL > 0 || cR > 0 || cT > 0 || cB > 0
+            style = {
+              ...base,
+              borderRadius: br,
+              ...(hasClip ? { clipPath: `inset(${cT}% ${cR}% ${cB}% ${cL}% round ${br}px)` } : {}),
+            }
           }
           return (
             <div key={n.id} style={style}>

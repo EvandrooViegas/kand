@@ -15,11 +15,11 @@ import {
   Square, Circle, ChevronUp, ChevronDown, ChevronsUp, ChevronsDown, Upload,
   Link as LinkIcon, Palette, Plus, X, Moon, Sun, Italic, Underline, Bold,
   AlignLeft, AlignCenter, AlignRight, Sparkles, Wand2, GripVertical, Undo2, Redo2,
-  ZoomIn, ZoomOut, Maximize2, Folder, Unlink, ChevronRight, Group
+  ZoomIn, ZoomOut, Maximize2, Folder, Unlink, ChevronRight, Group, Crop
 } from 'lucide-react'
 import {
   applyGroupLayoutToNodes, normalizeGroupGaps, sortNodeIdsByLayout,
-  getGroupBounds, removeNodeFromAllGroups,
+  getGroupBounds, removeNodeFromAllGroups, getNodeEffectiveDimensions,
   insertNodeIdIntoGroup, removeNodeIdFromGroup, reorderGroupNodeIds, moveNodeIdInGroup,
 } from '@/lib/groups'
 import { applyPatchWithReflow } from '@/lib/flowLayout'
@@ -143,13 +143,7 @@ const GRADIENT_PRESETS = [
   { name: 'Fade Out', stops: [{ color: '#000000', position: 0, alpha: 0 }, { color: '#000000', position: 100, alpha: 80 }], angle: 180 },
 ]
 
-const MASK_PRESETS = [
-  { value: 'none', label: 'None' },
-  { value: 'rounded', label: 'Rounded' },
-  { value: 'soft', label: 'Soft' },
-  { value: 'pill', label: 'Pill' },
-  { value: 'circle', label: 'Circle' },
-]
+// MASK_PRESETS removed
 
 function plainTextFromStyled(text = '') {
   const walk = (tokens) => tokens.map((t) => {
@@ -230,18 +224,7 @@ function buildFilterCss(filters) {
   return `brightness(${f.brightness}%) contrast(${f.contrast}%) saturate(${f.saturate}%) grayscale(${f.grayscale}%) sepia(${f.sepia}%) hue-rotate(${f.hueRotate}deg) blur(${f.blur}px) opacity(${f.opacity}%)`
 }
 
-function maskRadius(node) {
-  const w = node.width, h = node.height
-  switch (node.mask) {
-    case 'circle': return Math.max(w, h)
-    case 'pill': return Math.min(w, h) / 2
-    case 'rounded': return Math.min(w, h) * 0.15
-    case 'soft': return Math.min(w, h) * 0.08
-    case 'square':
-    case 'none':
-    default: return node.borderRadius || 0
-  }
-}
+// maskRadius removed
 
 const DEFAULT_FILTERS = { brightness: 100, contrast: 100, saturate: 100, grayscale: 0, blur: 0, sepia: 0, hueRotate: 0, opacity: 100 }
 
@@ -349,6 +332,7 @@ function Editor() {
   const [expandedGroups, setExpandedGroups] = useState({})
   const primarySelectedId = selectedIds[selectedIds.length - 1] ?? null
   const [editingId, setEditingId] = useState(null)
+  const [cropModeNodeId, setCropModeNodeId] = useState(null)
   const [scale, setScale] = useState(0.5)
   const userZoomRef = useRef(false)
   const canvasViewportRef = useRef(null)
@@ -715,9 +699,11 @@ function Editor() {
   const clearSelection = () => {
     setSelectedIds([])
     setSelectedGroupId(null)
+    setCropModeNodeId(null)
   }
 
   const selectLayer = (nodeId, e) => {
+    setCropModeNodeId(null)
     if (e?.ctrlKey || e?.metaKey) {
       setSelectedGroupId(null)
       setSelectedIds((prev) => (prev.includes(nodeId) ? prev.filter((id) => id !== nodeId) : [...prev, nodeId]))
@@ -757,13 +743,21 @@ function Editor() {
     if (ids.length < 2) return toast.error('Select at least 2 layers (Ctrl+click in the list)')
     const layout = 'horizontal'
     const sorted = sortNodeIdsByLayout(ids, canvas.nodes, layout)
+    const firstNode = canvas.nodes.find(n => n.id === sorted[0])
+    const firstDims = firstNode ? getNodeEffectiveDimensions(firstNode) : { offsetX: 0, offsetY: 0 }
     const groupId = uuidv4()
     const newGroup = {
       id: groupId,
       name: `Group ${groups.length + 1}`,
       nodeIds: sorted,
       layout,
-      gaps: sorted.slice(0, -1).map(() => ({ gapX: 16, gapY: 0 })),
+      align: 'left',
+      gaps: sorted.slice(0, -1).map(() => ({ gapX: 0, gapY: 0 })),
+      // Store the stable cross-axis origin so reflows never drift the group position.
+      // For horizontal: originY = group's top visible edge.
+      // For vertical: originX = group's left visible edge.
+      originX: firstNode ? firstNode.x + firstDims.offsetX : 0,
+      originY: firstNode ? firstNode.y + firstDims.offsetY : 0,
     }
     setCanvas((c) => {
       let nextGroups = stripNodesFromOtherGroups(c.groups || [], sorted, groupId)
@@ -799,6 +793,30 @@ function Editor() {
       let updated = { ...g, ...patch }
       if (patch.nodeIds) updated.nodeIds = patch.nodeIds
       updated.gaps = normalizeGroupGaps(updated)
+
+      // When the user explicitly changes layout direction or alignment,
+      // recompute the stable origin from the current first node position.
+      const structuralChange = patch.layout != null || patch.align != null
+      if (structuralChange) {
+        const firstNode = c.nodes.find(n => n.id === updated.nodeIds[0])
+        if (firstNode) {
+          const dims = getNodeEffectiveDimensions(firstNode)
+          updated.originX = firstNode.x + dims.offsetX
+          updated.originY = firstNode.y + dims.offsetY
+        }
+      }
+
+      // When nodeIds are reordered, update origin to reflect the new first node
+      if (patch.nodeIds && updated.align !== 'free') {
+        const newFirstId = updated.nodeIds[0]
+        const newFirst = c.nodes.find(n => n.id === newFirstId)
+        if (newFirst) {
+          const dims = getNodeEffectiveDimensions(newFirst)
+          updated.originX = newFirst.x + dims.offsetX
+          updated.originY = newFirst.y + dims.offsetY
+        }
+      }
+
       const nodes = applyGroupLayoutToNodes(c.nodes, updated)
       return {
         ...c,
@@ -941,6 +959,7 @@ function Editor() {
     if (!skipClear) {
       setSelectedIds((prev) => prev.filter((id) => id !== nodeId))
     }
+    if (nodeId === cropModeNodeId) setCropModeNodeId(null)
   }
 
   const moveNode = (nodeId, direction) => {
@@ -963,13 +982,20 @@ function Editor() {
   const reorderByDrag = (draggedId, targetId) => {
     if (!draggedId || !targetId || draggedId === targetId) return
     setCanvas((c) => {
+      // The layer panel renders nodes in reverse order (top of panel = last in array).
+      // We work in that reversed (visual) order so "insert before target" means
+      // the dragged item appears above the target row in the panel.
       const visual = c.nodes.slice().reverse()
       const dragIdx = visual.findIndex((n) => n.id === draggedId)
-      const tgtIdx = visual.findIndex((n) => n.id === targetId)
-      if (dragIdx === -1 || tgtIdx === -1) return c
+      if (dragIdx === -1) return c
       const [item] = visual.splice(dragIdx, 1)
+      // Re-find target after removal (index may have shifted)
       const newTgt = visual.findIndex((n) => n.id === targetId)
-      visual.splice(newTgt, 0, item)
+      if (newTgt === -1) {
+        visual.push(item)
+      } else {
+        visual.splice(newTgt, 0, item)
+      }
       return { ...c, nodes: visual.reverse() }
     })
   }
@@ -1052,7 +1078,7 @@ function Editor() {
       const newNode = {
         id: uuidv4(), type: 'image',
         x: Math.round((canvas.width - width) / 2), y: Math.round((canvas.height - height) / 2),
-        width, height, aspectRatio, src, borderRadius: 0, mask: 'none',
+        width, height, aspectRatio, src, borderRadius: 0, cropLeft: 0, cropRight: 0, cropTop: 0, cropBottom: 0,
         filters: { ...DEFAULT_FILTERS },
       }
       setCanvas((c) => ({ ...c, nodes: [...(c.nodes || []), newNode] }))
@@ -1160,7 +1186,19 @@ function Editor() {
       origPositions,
       startX: e.clientX,
       startY: e.clientY,
-      orig: { x: lead.x, y: lead.y, width: lead.width, height: lead.height, maxWidth: node.maxWidth || node.width, maxHeight: node.maxHeight || node.height, rotation: node.rotation || 0 },
+      orig: {
+        x: lead.x,
+        y: lead.y,
+        width: lead.width,
+        height: lead.height,
+        maxWidth: node.maxWidth || node.width,
+        maxHeight: node.maxHeight || node.height,
+        rotation: node.rotation || 0,
+        cropLeft: node.cropLeft || 0,
+        cropRight: node.cropRight || 0,
+        cropTop: node.cropTop || 0,
+        cropBottom: node.cropBottom || 0,
+      },
       mode,
       initialCanvas: c,
       hasMoved: false,
@@ -1190,8 +1228,14 @@ function Editor() {
         const n = canvasRefObj.current?.nodes?.find((nd) => nd.id === ds.nodeId)
         const isText = n?.type === 'text'
         const isImage = n?.type === 'image'
-        const lockAspect = isImage && (n?.aspectRatio || (ds.orig.width && ds.orig.height))
-        const aspect = lockAspect ? (n?.aspectRatio || ds.orig.width / ds.orig.height) : null
+        
+        const cL = isImage ? (ds.orig.cropLeft || 0) : 0
+        const cR = isImage ? (ds.orig.cropRight || 0) : 0
+        const cT = isImage ? (ds.orig.cropTop || 0) : 0
+        const cB = isImage ? (ds.orig.cropBottom || 0) : 0
+
+        const visibleFactorX = (100 - cL - cR) / 100
+        const visibleFactorY = (100 - cT - cB) / 100
 
         const angle = (ds.orig.rotation || 0) * (Math.PI / 180)
         const u = { x: Math.cos(angle), y: Math.sin(angle) }
@@ -1205,27 +1249,40 @@ function Editor() {
           y: cy - (ds.orig.width / 2) * u.y - (ds.orig.height / 2) * v.y,
         }
 
-        const BR = {
-          x: cx + (ds.orig.width / 2) * u.x + (ds.orig.height / 2) * v.x,
-          y: cy + (ds.orig.width / 2) * u.y + (ds.orig.height / 2) * v.y,
+        // Stationary cropped top-left anchor:
+        const croppedTL = {
+          x: TL.x + (ds.orig.width * cL / 100) * u.x + (ds.orig.height * cT / 100) * v.x,
+          y: TL.y + (ds.orig.width * cL / 100) * u.y + (ds.orig.height * cT / 100) * v.y,
         }
 
-        const newBR = { x: BR.x + dx, y: BR.y + dy }
-        const diag = { x: newBR.x - TL.x, y: newBR.y - TL.y }
+        // Original cropped bottom-right handle:
+        const croppedBR = {
+          x: TL.x + (ds.orig.width * (100 - cR) / 100) * u.x + (ds.orig.height * (100 - cB) / 100) * v.x,
+          y: TL.y + (ds.orig.width * (100 - cR) / 100) * u.y + (ds.orig.height * (100 - cB) / 100) * v.y,
+        }
 
-        let rawW = diag.x * u.x + diag.y * u.y
-        let rawH = diag.x * v.x + diag.y * v.y
+        const newCroppedBR = { x: croppedBR.x + dx, y: croppedBR.y + dy }
+        const diagCropped = { x: newCroppedBR.x - croppedTL.x, y: newCroppedBR.y - croppedTL.y }
 
-        if (lockAspect && aspect && Math.abs(angle) < 0.01) {
-          const scale = Math.max(
-            Math.abs(rawW) / ds.orig.width,
-            Math.abs(rawH) / ds.orig.height
-          )
-          rawW = Math.max(isText ? 40 : 20, Math.round(ds.orig.width * scale))
+        let newVisibleW = diagCropped.x * u.x + diagCropped.y * u.y
+        let newVisibleH = diagCropped.x * v.x + diagCropped.y * v.y
+
+        // Limit minimum visible size to 20px
+        newVisibleW = Math.max(20, newVisibleW)
+        newVisibleH = Math.max(20, newVisibleH)
+
+        let rawW = Math.round(newVisibleW / visibleFactorX)
+        let rawH = Math.round(newVisibleH / visibleFactorY)
+
+        const lockAspect = isImage && (n?.aspectRatio || (ds.orig.width && ds.orig.height))
+        const aspect = lockAspect ? (n?.aspectRatio || ds.orig.width / ds.orig.height) : null
+
+        if (lockAspect && aspect) {
+          const scaleFactor = Math.max(rawW / ds.orig.width, rawH / ds.orig.height)
+          rawW = Math.max(isText ? 40 : 20, Math.round(ds.orig.width * scaleFactor))
           rawH = Math.max(20, Math.round(rawW / aspect))
-        } else {
-          rawW = Math.max(isText ? 40 : 20, Math.round(rawW))
-          rawH = Math.max(20, Math.round(rawH))
+          newVisibleW = rawW * visibleFactorX
+          newVisibleH = rawH * visibleFactorY
         }
 
         if (n?.maxWidth) rawW = Math.min(rawW, n.maxWidth)
@@ -1235,7 +1292,7 @@ function Editor() {
         let newY = ds.orig.y
         let lines = []
 
-        if (Math.abs(angle) < 0.01) {
+        if (Math.abs(angle) < 0.01 && !isImage) {
           const { v: targetsV, h: targetsH } = collectSnapTargets(
             canvasRefObj.current?.nodes,
             [ds.nodeId],
@@ -1251,12 +1308,14 @@ function Editor() {
             rawH = Math.max(20, Math.round(rawW / aspect))
           }
           lines = snapped.lines
-        }
-        setSnapLines(lines)
-
-        const newCx = TL.x + (rawW / 2) * u.x + (rawH / 2) * v.x
-        const newCy = TL.y + (rawW / 2) * u.y + (rawH / 2) * v.y
-        if (Math.abs(angle) >= 0.01) {
+          setSnapLines(lines)
+        } else {
+          const newTL = {
+            x: croppedTL.x - (rawW * cL / 100) * u.x - (rawH * cT / 100) * v.x,
+            y: croppedTL.y - (rawW * cL / 100) * u.y - (rawH * cT / 100) * v.y,
+          }
+          const newCx = newTL.x + (rawW / 2) * u.x + (rawH / 2) * v.x
+          const newCy = newTL.y + (rawW / 2) * u.y + (rawH / 2) * v.y
           newX = Math.round(newCx - rawW / 2)
           newY = Math.round(newCy - rawH / 2)
         }
@@ -1293,6 +1352,32 @@ function Editor() {
         updateNode(ds.nodeId, { maxWidth: newMaxW, maxHeight: newMaxH }, true)
         ds.hasMoved = true
       }
+      else if (ds.mode.startsWith('crop-')) {
+        const angle = (ds.orig.rotation || 0) * (Math.PI / 180)
+        const cosA = Math.cos(angle), sinA = Math.sin(angle)
+        // Project screen-space delta into local node axes
+        const localDx = dx * cosA + dy * sinA
+        const localDy = -dx * sinA + dy * cosA
+        let { cropLeft, cropRight, cropTop, cropBottom } = ds.orig
+        const pctX = (localDx / ds.orig.width) * 100
+        const pctY = (localDy / ds.orig.height) * 100
+        if (ds.mode === 'crop-left') {
+          cropLeft = Math.max(0, Math.min(100 - cropRight - 5, cropLeft + pctX))
+        } else if (ds.mode === 'crop-right') {
+          cropRight = Math.max(0, Math.min(100 - cropLeft - 5, cropRight - pctX))
+        } else if (ds.mode === 'crop-top') {
+          cropTop = Math.max(0, Math.min(100 - cropBottom - 5, cropTop + pctY))
+        } else if (ds.mode === 'crop-bottom') {
+          cropBottom = Math.max(0, Math.min(100 - cropTop - 5, cropBottom - pctY))
+        }
+        updateNode(ds.nodeId, {
+          cropLeft: Math.round(cropLeft * 10) / 10,
+          cropRight: Math.round(cropRight * 10) / 10,
+          cropTop: Math.round(cropTop * 10) / 10,
+          cropBottom: Math.round(cropBottom * 10) / 10,
+        }, true)
+        ds.hasMoved = true
+      }
       else if (ds.mode === 'rotate') {
         const canvasRect = canvasRef.current?.getBoundingClientRect()
         if (canvasRect) {
@@ -1314,6 +1399,30 @@ function Editor() {
       const ds = dragState.current
       if (ds && ds.hasMoved) {
         pushHistory(ds.initialCanvas)
+        // After moving a grouped node, update the group's stored origin so
+        // subsequent reflows use the new position as the stable anchor.
+        if (ds.mode === 'move') {
+          const c = canvasRefObj.current
+          if (c) {
+            const movedGroupIds = new Set(
+              (ds.moveIds || [ds.nodeId])
+                .map(id => c.nodes.find(n => n.id === id)?.groupId)
+                .filter(Boolean)
+            )
+            if (movedGroupIds.size > 0) {
+              setCanvas((prev) => {
+                const groups = (prev.groups || []).map(g => {
+                  if (!movedGroupIds.has(g.id)) return g
+                  const firstNode = prev.nodes.find(n => n.id === g.nodeIds[0])
+                  if (!firstNode) return g
+                  const dims = getNodeEffectiveDimensions(firstNode)
+                  return { ...g, originX: firstNode.x + dims.offsetX, originY: firstNode.y + dims.offsetY }
+                })
+                return { ...prev, groups }
+              }, true)
+            }
+          }
+        }
       }
       dragState.current = null; setSnapLines([]); document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) 
     }
@@ -1392,7 +1501,44 @@ function Editor() {
       }
     }
     if (node.type === 'image') {
-      return { ...base, borderRadius: maskRadius(node) }
+      const mask = node.mask || 'none'
+      const br = node.borderRadius || 0
+      const cL = node.cropLeft || 0
+      const cR = node.cropRight || 0
+      const cT = node.cropTop || 0
+      const cB = node.cropBottom || 0
+      const hasClip = cL > 0 || cR > 0 || cT > 0 || cB > 0
+
+      // Compute border-radius from mask preset
+      const w = node.width, h = node.height, min = Math.min(w, h)
+      const maskRadius = mask === 'circle' ? '50%'
+        : mask === 'rounded' ? Math.round(min * 0.15)
+        : mask === 'pill' ? Math.round(min * 0.5)
+        : br
+
+      // Polygon masks use clip-path
+      const polygonClip = {
+        triangle: 'polygon(50% 0%, 0% 100%, 100% 100%)',
+        'triangle-down': 'polygon(0% 0%, 100% 0%, 50% 100%)',
+        diamond: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)',
+        pentagon: 'polygon(50% 0%, 100% 38%, 82% 100%, 18% 100%, 0% 38%)',
+        hexagon: 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)',
+        star: 'polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)',
+        'arrow-right': 'polygon(0% 20%, 60% 20%, 60% 0%, 100% 50%, 60% 100%, 60% 80%, 0% 80%)',
+        parallelogram: 'polygon(15% 0%, 100% 0%, 85% 100%, 0% 100%)',
+      }[mask]
+
+      const clipPath = polygonClip
+        ? polygonClip
+        : hasClip
+          ? `inset(${cT}% ${cR}% ${cB}% ${cL}% round ${typeof maskRadius === 'string' ? maskRadius : maskRadius + 'px'})`
+          : undefined
+
+      return {
+        ...base,
+        borderRadius: polygonClip ? 0 : maskRadius,
+        ...(clipPath ? { clipPath } : {}),
+      }
     }
     return base
   }
@@ -1789,7 +1935,7 @@ function Editor() {
                     ))
                   })() :
                    node.type === 'image' && node.src ? (
-                    <img src={node.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'contain', objectPosition: 'center', filter: buildFilterCss(node.filters) }} draggable={false} />
+                     <img src={node.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', filter: buildFilterCss(node.filters) }} draggable={false} />
                    ) :
                    node.type === 'image' ? <div style={{ width: '100%', height: '100%', background: '#e5e7eb' }} /> : null}
                   {/* Handles and Drag surface are now moved to the Selection Overlay below */}
@@ -1819,11 +1965,31 @@ function Editor() {
                 const node = canvas.nodes.find((n) => n.id === sid)
                 if (!node) return null
                 const isPrimary = sid === primarySelectedId
+                const isImage = node.type === 'image'
+                const cL = isImage ? (node.cropLeft || 0) : 0
+                const cR = isImage ? (node.cropRight || 0) : 0
+                const cT = isImage ? (node.cropTop || 0) : 0
+                const cB = isImage ? (node.cropBottom || 0) : 0
+                const hasCrop = cL > 0 || cR > 0 || cT > 0 || cB > 0
+                // Cropped visible dimensions
+                const cropW = hasCrop ? node.width * (100 - cL - cR) / 100 : node.width
+                const cropH = hasCrop ? node.height * (100 - cT - cB) / 100 : node.height
+                // Offset from node origin to crop origin
+                const offsetX = hasCrop ? node.width * cL / 100 : 0
+                const offsetY = hasCrop ? node.height * cT / 100 : 0
+                // The overlay is positioned at the cropped top-left and sized to the cropped area
+                const overlayLeft = node.x + offsetX
+                const overlayTop = node.y + offsetY
+                // Transform origin must be relative to the original node center for correct rotation
+                const originX = (node.width / 2) - offsetX
+                const originY = (node.height / 2) - offsetY
+                const isCropMode = cropModeNodeId === node.id
                 return (
                   <div key={sid} style={{
-                    position: 'absolute', left: node.x, top: node.y, width: node.width, height: node.height,
-                    transform: `rotate(${node.rotation || 0}deg)`, transformOrigin: 'center center',
-                    outline: isPrimary ? '3px solid #6366f1' : '2px dashed #6366f1',
+                    position: 'absolute', left: overlayLeft, top: overlayTop, width: cropW, height: cropH,
+                    transform: `rotate(${node.rotation || 0}deg)`,
+                    transformOrigin: `${originX}px ${originY}px`,
+                    outline: isCropMode ? '2px dashed #f59e0b' : (isPrimary ? '3px solid #6366f1' : '2px dashed #6366f1'),
                     outlineOffset: 2,
                     pointerEvents: 'none', zIndex: isPrimary ? 50 : 45,
                   }}>
@@ -1833,6 +1999,7 @@ function Editor() {
                       onDoubleClick={(e) => {
                         e.stopPropagation()
                         if (node.type === 'text') setEditingId(node.id)
+                        if (isImage && isPrimary) setCropModeNodeId(node.id)
                       }}
                       onClick={(e) => {
                         e.stopPropagation()
@@ -1846,15 +2013,38 @@ function Editor() {
                           } else selectLayer(node.id)
                         }
                       }}
-                      style={{ position: 'absolute', inset: 0, pointerEvents: 'auto', cursor: 'move' }}
+                      style={{ position: 'absolute', inset: 0, pointerEvents: 'auto', cursor: isCropMode ? 'crosshair' : 'move' }}
                     />
-                    {isPrimary && (
+                    {/* Normal resize / rotate handles (hidden in crop mode) */}
+                    {isPrimary && !isCropMode && (
                       <>
                         <div onMouseDown={(e) => handleMouseDown(e, node, 'resize')}
                           style={{ position: 'absolute', right: -8, bottom: -8, width: 20, height: 20, background: '#6366f1', borderRadius: 4, cursor: 'nwse-resize', border: '2px solid white', pointerEvents: 'auto' }} />
                         <div onMouseDown={(e) => handleMouseDown(e, node, 'rotate')}
                           style={{ position: 'absolute', left: '50%', top: -36, width: 16, height: 16, marginLeft: -8, background: '#fff', borderRadius: '50%', cursor: 'grab', border: '2px solid #6366f1', pointerEvents: 'auto' }} />
                         <div style={{ position: 'absolute', left: '50%', top: -20, width: 2, height: 20, marginLeft: -1, background: '#6366f1', pointerEvents: 'none' }} />
+                      </>
+                    )}
+                    {/* Crop handles — shown only in crop mode */}
+                    {isPrimary && isCropMode && (
+                      <>
+                        {/* Left edge */}
+                        <div onMouseDown={(e) => handleMouseDown(e, node, 'crop-left')}
+                          style={{ position: 'absolute', left: -4, top: '20%', width: 8, height: '60%', background: '#f59e0b', borderRadius: 3, cursor: 'ew-resize', pointerEvents: 'auto', opacity: 0.9 }} />
+                        {/* Right edge */}
+                        <div onMouseDown={(e) => handleMouseDown(e, node, 'crop-right')}
+                          style={{ position: 'absolute', right: -4, top: '20%', width: 8, height: '60%', background: '#f59e0b', borderRadius: 3, cursor: 'ew-resize', pointerEvents: 'auto', opacity: 0.9 }} />
+                        {/* Top edge */}
+                        <div onMouseDown={(e) => handleMouseDown(e, node, 'crop-top')}
+                          style={{ position: 'absolute', top: -4, left: '20%', height: 8, width: '60%', background: '#f59e0b', borderRadius: 3, cursor: 'ns-resize', pointerEvents: 'auto', opacity: 0.9 }} />
+                        {/* Bottom edge */}
+                        <div onMouseDown={(e) => handleMouseDown(e, node, 'crop-bottom')}
+                          style={{ position: 'absolute', bottom: -4, left: '20%', height: 8, width: '60%', background: '#f59e0b', borderRadius: 3, cursor: 'ns-resize', pointerEvents: 'auto', opacity: 0.9 }} />
+                        {/* Exit crop mode button */}
+                        <div onClick={(e) => { e.stopPropagation(); setCropModeNodeId(null) }}
+                          style={{ position: 'absolute', top: -28, right: 0, background: '#f59e0b', color: '#000', fontSize: 11, fontWeight: 600, padding: '2px 8px', borderRadius: 4, cursor: 'pointer', pointerEvents: 'auto', whiteSpace: 'nowrap' }}>
+                          ✓ Done
+                        </div>
                       </>
                     )}
                   </div>
@@ -1979,7 +2169,7 @@ function Editor() {
                   <TextProperties node={selected} updateNode={updateNode} meta={fontMeta} canvas={canvas} editorRef={editorRef} savedRangeRef={savedRangeRef} htmlToTags={htmlToTags} editingId={editingId} />
                 )}
                 {selected.type === 'image' && (
-                  <ImageProperties node={selected} updateNode={updateNode} />
+                  <ImageProperties node={selected} updateNode={updateNode} setCropModeNodeId={setCropModeNodeId} />
                 )}
                 {selected.type === 'shape' && (
                   <ShapeProperties node={selected} updateNode={updateNode} />
@@ -2440,7 +2630,7 @@ function TextProperties({ node, updateNode, meta, canvas, editorRef, savedRangeR
   )
 }
 
-function ImageProperties({ node, updateNode }) {
+function ImageProperties({ node, updateNode, setCropModeNodeId }) {
   const f = { ...DEFAULT_FILTERS, ...(node.filters || {}) }
   const setFilter = (key, value) => updateNode(node.id, { filters: { ...f, [key]: value } })
   const resetFilters = () => updateNode(node.id, { filters: { ...DEFAULT_FILTERS } })
@@ -2458,21 +2648,106 @@ function ImageProperties({ node, updateNode }) {
   return (
     <>
       <div><Label className="text-xs">Image URL</Label><Input value={node.src || ''} onChange={(e) => updateNode(node.id, { src: e.target.value })} /></div>
-      <div>
-        <Label className="text-xs">Mask / Shape</Label>
-        <div className="grid grid-cols-5 gap-1.5 mt-1">
-          {MASK_PRESETS.map((m) => (
-            <button key={m.value} onClick={() => updateNode(node.id, { mask: m.value })}
-              className={`h-12 rounded border text-xs hover:ring-2 hover:ring-primary transition ${node.mask === m.value || (!node.mask && m.value === 'none') ? 'ring-2 ring-primary' : ''}`}>
-              <div className="w-7 h-7 mx-auto bg-gradient-to-br from-indigo-400 to-pink-400" style={{
-                borderRadius: m.value === 'circle' ? 9999 : m.value === 'pill' ? 14 : m.value === 'rounded' ? 5 : m.value === 'soft' ? 3 : 0
-              }} />
-              <span className="block text-[10px] mt-0.5 text-muted-foreground">{m.label}</span>
+
+      {/* Shape / Mask */}
+      <div className="pt-3 border-t">
+        <Label className="text-xs mb-2 block">Shape / Mask</Label>
+        <div className="grid grid-cols-4 gap-1.5">
+          {[
+            { value: 'none',         label: 'None',       preview: 'rounded-none' },
+            { value: 'circle',       label: 'Circle',     preview: 'rounded-full' },
+            { value: 'rounded',      label: 'Rounded',    preview: 'rounded-xl' },
+            { value: 'pill',         label: 'Pill',       preview: 'rounded-full w-8' },
+            { value: 'triangle',     label: '▲ Tri',      preview: null },
+            { value: 'triangle-down',label: '▼ Tri',      preview: null },
+            { value: 'diamond',      label: '◆ Diam',     preview: null },
+            { value: 'pentagon',     label: '⬠ Pent',    preview: null },
+            { value: 'hexagon',      label: '⬡ Hex',     preview: null },
+            { value: 'star',         label: '★ Star',     preview: null },
+            { value: 'arrow-right',  label: '➤ Arrow',   preview: null },
+            { value: 'parallelogram',label: '▱ Para',     preview: null },
+          ].map(({ value, label }) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => updateNode(node.id, { mask: value })}
+              className={`h-9 text-[10px] font-medium rounded border-2 transition-colors ${
+                (node.mask || 'none') === value
+                  ? 'border-foreground bg-[#D4FF00] text-foreground'
+                  : 'border-foreground/20 hover:border-foreground/50 bg-background'
+              }`}
+            >
+              {label}
             </button>
           ))}
         </div>
+        {(!node.mask || node.mask === 'none') && (
+          <div className="mt-2">
+            <Label className="text-xs">Corner Radius</Label>
+            <Input type="number" value={node.borderRadius || 0} onChange={(e) => updateNode(node.id, { borderRadius: parseInt(e.target.value) || 0 })} />
+          </div>
+        )}
       </div>
-      <div><Label className="text-xs">Custom Corner Radius</Label><Input type="number" value={node.borderRadius || 0} onChange={(e) => updateNode(node.id, { borderRadius: parseInt(e.target.value) || 0, mask: 'none' })} /></div>
+
+      <div className="pt-3 border-t">
+        <Label className="text-xs flex items-center gap-2"><Crop className="w-3.5 h-3.5" />Cut / Crop Image</Label>
+        <div className="space-y-3 mt-2">
+          <div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">Left Crop</span>
+              <span className="text-xs text-muted-foreground">{node.cropLeft || 0}%</span>
+            </div>
+            <Slider value={[node.cropLeft || 0]} min={0} max={90} step={1} onValueChange={(v) => {
+              const newLeft = v[0];
+              const currentRight = node.cropRight || 0;
+              if (newLeft + currentRight < 100) {
+                updateNode(node.id, { cropLeft: newLeft });
+              }
+            }} />
+          </div>
+          <div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">Right Crop</span>
+              <span className="text-xs text-muted-foreground">{node.cropRight || 0}%</span>
+            </div>
+            <Slider value={[node.cropRight || 0]} min={0} max={90} step={1} onValueChange={(v) => {
+              const newRight = v[0];
+              const currentLeft = node.cropLeft || 0;
+              if (currentLeft + newRight < 100) {
+                updateNode(node.id, { cropRight: newRight });
+              }
+            }} />
+          </div>
+          <div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">Top Crop</span>
+              <span className="text-xs text-muted-foreground">{node.cropTop || 0}%</span>
+            </div>
+            <Slider value={[node.cropTop || 0]} min={0} max={90} step={1} onValueChange={(v) => {
+              const newTop = v[0];
+              const currentBottom = node.cropBottom || 0;
+              if (newTop + currentBottom < 100) {
+                updateNode(node.id, { cropTop: newTop });
+              }
+            }} />
+          </div>
+          <div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs text-muted-foreground">Bottom Crop</span>
+              <span className="text-xs text-muted-foreground">{node.cropBottom || 0}%</span>
+            </div>
+            <Slider value={[node.cropBottom || 0]} min={0} max={90} step={1} onValueChange={(v) => {
+              const newBottom = v[0];
+              const currentTop = node.cropTop || 0;
+              if (currentTop + newBottom < 100) {
+                updateNode(node.id, { cropBottom: newBottom });
+              }
+            }} />
+          </div>
+          <Button size="sm" variant="ghost" className="h-7 text-xs w-full border border-foreground/10 mt-1" onClick={() => updateNode(node.id, { cropLeft: 0, cropRight: 0, cropTop: 0, cropBottom: 0 })}>Reset Crop</Button>
+          <Button size="sm" className="h-7 text-xs w-full mt-1 bg-amber-500 hover:bg-amber-600 text-black" onClick={() => setCropModeNodeId?.(node.id)}><Crop className="w-3 h-3 mr-1.5" />Crop on Canvas</Button>
+        </div>
+      </div>
 
       <div className="pt-3 border-t">
         <div className="flex items-center justify-between mb-2">
@@ -2630,6 +2905,22 @@ function GroupPropertiesPanel({ group, nodes, selectedIds, updateGroup, updateGr
         >
           <option value="horizontal">Horizontal (gap X between items)</option>
           <option value="vertical">Vertical (gap Y between items)</option>
+        </select>
+      </div>
+
+      <div>
+        <Label className="text-xs">
+          {group.layout === 'vertical' ? 'Align items (X-axis)' : 'Align items (Y-axis)'}
+        </Label>
+        <select
+          className="w-full h-10 border rounded-md px-3 text-sm bg-background"
+          value={group.align || 'free'}
+          onChange={(e) => updateGroup(group.id, { align: e.target.value })}
+        >
+          <option value="free">Free (manual positioning)</option>
+          <option value="left">{group.layout === 'vertical' ? 'Left' : 'Top'}</option>
+          <option value="center">Center</option>
+          <option value="right">{group.layout === 'vertical' ? 'Right' : 'Bottom'}</option>
         </select>
       </div>
 

@@ -5,7 +5,7 @@ const nextConfig = {
   },
   experimental: {
     // Remove if not using Server Components
-    serverComponentsExternalPackages: ['mongodb', '@resvg/resvg-js', 'satori', 'sharp'],
+    serverComponentsExternalPackages: ['mongodb', '@resvg/resvg-js', 'satori', 'sharp', 'uuid'],
   },
   webpack(config, { dev }) {
     if (dev) {
