@@ -743,8 +743,6 @@ function Editor() {
     if (ids.length < 2) return toast.error('Select at least 2 layers (Ctrl+click in the list)')
     const layout = 'horizontal'
     const sorted = sortNodeIdsByLayout(ids, canvas.nodes, layout)
-    const firstNode = canvas.nodes.find(n => n.id === sorted[0])
-    const firstDims = firstNode ? getNodeEffectiveDimensions(firstNode) : { offsetX: 0, offsetY: 0 }
     const groupId = uuidv4()
     const newGroup = {
       id: groupId,
@@ -753,11 +751,6 @@ function Editor() {
       layout,
       align: 'left',
       gaps: sorted.slice(0, -1).map(() => ({ gapX: 0, gapY: 0 })),
-      // Store the stable cross-axis origin so reflows never drift the group position.
-      // For horizontal: originY = group's top visible edge.
-      // For vertical: originX = group's left visible edge.
-      originX: firstNode ? firstNode.x + firstDims.offsetX : 0,
-      originY: firstNode ? firstNode.y + firstDims.offsetY : 0,
     }
     setCanvas((c) => {
       let nextGroups = stripNodesFromOtherGroups(c.groups || [], sorted, groupId)
@@ -793,30 +786,6 @@ function Editor() {
       let updated = { ...g, ...patch }
       if (patch.nodeIds) updated.nodeIds = patch.nodeIds
       updated.gaps = normalizeGroupGaps(updated)
-
-      // When the user explicitly changes layout direction or alignment,
-      // recompute the stable origin from the current first node position.
-      const structuralChange = patch.layout != null || patch.align != null
-      if (structuralChange) {
-        const firstNode = c.nodes.find(n => n.id === updated.nodeIds[0])
-        if (firstNode) {
-          const dims = getNodeEffectiveDimensions(firstNode)
-          updated.originX = firstNode.x + dims.offsetX
-          updated.originY = firstNode.y + dims.offsetY
-        }
-      }
-
-      // When nodeIds are reordered, update origin to reflect the new first node
-      if (patch.nodeIds && updated.align !== 'free') {
-        const newFirstId = updated.nodeIds[0]
-        const newFirst = c.nodes.find(n => n.id === newFirstId)
-        if (newFirst) {
-          const dims = getNodeEffectiveDimensions(newFirst)
-          updated.originX = newFirst.x + dims.offsetX
-          updated.originY = newFirst.y + dims.offsetY
-        }
-      }
-
       const nodes = applyGroupLayoutToNodes(c.nodes, updated)
       return {
         ...c,
@@ -1399,30 +1368,6 @@ function Editor() {
       const ds = dragState.current
       if (ds && ds.hasMoved) {
         pushHistory(ds.initialCanvas)
-        // After moving a grouped node, update the group's stored origin so
-        // subsequent reflows use the new position as the stable anchor.
-        if (ds.mode === 'move') {
-          const c = canvasRefObj.current
-          if (c) {
-            const movedGroupIds = new Set(
-              (ds.moveIds || [ds.nodeId])
-                .map(id => c.nodes.find(n => n.id === id)?.groupId)
-                .filter(Boolean)
-            )
-            if (movedGroupIds.size > 0) {
-              setCanvas((prev) => {
-                const groups = (prev.groups || []).map(g => {
-                  if (!movedGroupIds.has(g.id)) return g
-                  const firstNode = prev.nodes.find(n => n.id === g.nodeIds[0])
-                  if (!firstNode) return g
-                  const dims = getNodeEffectiveDimensions(firstNode)
-                  return { ...g, originX: firstNode.x + dims.offsetX, originY: firstNode.y + dims.offsetY }
-                })
-                return { ...prev, groups }
-              }, true)
-            }
-          }
-        }
       }
       dragState.current = null; setSnapLines([]); document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp) 
     }
