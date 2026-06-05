@@ -1509,15 +1509,13 @@ function Editor() {
       const cB = node.cropBottom || 0
       const hasClip = cL > 0 || cR > 0 || cT > 0 || cB > 0
 
-      // Compute border-radius from mask preset
       const w = node.width, h = node.height, min = Math.min(w, h)
       const maskRadius = mask === 'circle' ? '50%'
         : mask === 'rounded' ? Math.round(min * 0.15)
         : mask === 'pill' ? Math.round(min * 0.5)
         : br
 
-      // Polygon masks use clip-path
-      const polygonClip = {
+      const polygonClipMap = {
         triangle: 'polygon(50% 0%, 0% 100%, 100% 100%)',
         'triangle-down': 'polygon(0% 0%, 100% 0%, 50% 100%)',
         diamond: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)',
@@ -1526,8 +1524,12 @@ function Editor() {
         star: 'polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)',
         'arrow-right': 'polygon(0% 20%, 60% 20%, 60% 0%, 100% 50%, 60% 100%, 60% 80%, 0% 80%)',
         parallelogram: 'polygon(15% 0%, 100% 0%, 85% 100%, 0% 100%)',
-      }[mask]
+      }
+      const polygonClip = polygonClipMap[mask]
 
+      // When a polygon shape is active, apply it on the outer div.
+      // Crop is handled by a nested inner div (see canvas render below).
+      // When no polygon: use borderRadius + inset clip-path for crop.
       const clipPath = polygonClip
         ? polygonClip
         : hasClip
@@ -1537,6 +1539,7 @@ function Editor() {
       return {
         ...base,
         borderRadius: polygonClip ? 0 : maskRadius,
+        overflow: 'hidden',
         ...(clipPath ? { clipPath } : {}),
       }
     }
@@ -1934,9 +1937,27 @@ function Editor() {
                       </div>
                     ))
                   })() :
-                   node.type === 'image' && node.src ? (
-                     <img src={node.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', filter: buildFilterCss(node.filters) }} draggable={false} />
-                   ) :
+                   node.type === 'image' && node.src ? (() => {
+                     const hasPoly = ['triangle','triangle-down','diamond','pentagon','hexagon','star','arrow-right','parallelogram'].includes(node.mask)
+                     const cL = node.cropLeft || 0, cR = node.cropRight || 0
+                     const cT = node.cropTop || 0, cB = node.cropBottom || 0
+                     const hasCrop = cL > 0 || cR > 0 || cT > 0 || cB > 0
+                     const imgEl = <img src={node.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', filter: buildFilterCss(node.filters) }} draggable={false} />
+                     // When polygon + crop: nest a crop div inside so both clip-paths apply
+                     if (hasPoly && hasCrop) {
+                       return (
+                         <div style={{
+                           position: 'absolute',
+                           top: `${cT}%`, left: `${cL}%`,
+                           right: `${cR}%`, bottom: `${cB}%`,
+                           overflow: 'hidden',
+                         }}>
+                           <img src={node.src} alt="" style={{ position: 'absolute', top: `-${cT / (100 - cT - cB) * 100}%`, left: `-${cL / (100 - cL - cR) * 100}%`, width: `${100 * 100 / (100 - cL - cR)}%`, height: `${100 * 100 / (100 - cT - cB)}%`, objectFit: 'cover', filter: buildFilterCss(node.filters) }} draggable={false} />
+                         </div>
+                       )
+                     }
+                     return imgEl
+                   })() :
                    node.type === 'image' ? <div style={{ width: '100%', height: '100%', background: '#e5e7eb' }} /> : null}
                   {/* Handles and Drag surface are now moved to the Selection Overlay below */}
                 </div>
@@ -2169,7 +2190,23 @@ function Editor() {
                   <TextProperties node={selected} updateNode={updateNode} meta={fontMeta} canvas={canvas} editorRef={editorRef} savedRangeRef={savedRangeRef} htmlToTags={htmlToTags} editingId={editingId} />
                 )}
                 {selected.type === 'image' && (
-                  <ImageProperties node={selected} updateNode={updateNode} setCropModeNodeId={setCropModeNodeId} />
+                  <ImageProperties node={selected} updateNode={updateNode} setCropModeNodeId={setCropModeNodeId}
+                    onReplace={(src) => updateNode(selected.id, { src })}
+                    onReplaceUpload={async (file) => {
+                      if (!file) return
+                      if (file.size > 6 * 1024 * 1024) return toast.error('Image too large (max 6MB)')
+                      setUploading(true)
+                      try {
+                        const reader = new FileReader()
+                        const dataUrl = await new Promise((resolve, reject) => { reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file) })
+                        const res = await fetch('/api/uploads', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ data: dataUrl }) })
+                        const result = await res.json()
+                        if (result.url) { updateNode(selected.id, { src: result.url }); toast.success('Image replaced') }
+                        else toast.error(result.error || 'Upload failed')
+                      } catch (e) { toast.error('Upload failed: ' + e.message) }
+                      finally { setUploading(false) }
+                    }}
+                  />
                 )}
                 {selected.type === 'shape' && (
                   <ShapeProperties node={selected} updateNode={updateNode} />
@@ -2630,10 +2667,13 @@ function TextProperties({ node, updateNode, meta, canvas, editorRef, savedRangeR
   )
 }
 
-function ImageProperties({ node, updateNode, setCropModeNodeId }) {
+function ImageProperties({ node, updateNode, setCropModeNodeId, onReplace, onReplaceUpload }) {
   const f = { ...DEFAULT_FILTERS, ...(node.filters || {}) }
   const setFilter = (key, value) => updateNode(node.id, { filters: { ...f, [key]: value } })
   const resetFilters = () => updateNode(node.id, { filters: { ...DEFAULT_FILTERS } })
+  const replaceFileRef = useRef(null)
+  const [replaceUrlInput, setReplaceUrlInput] = useState('')
+  const [showReplaceUrl, setShowReplaceUrl] = useState(false)
 
   const FilterSlider = ({ name, label, min, max, step = 1, suffix = '' }) => (
     <div>
@@ -2645,43 +2685,77 @@ function ImageProperties({ node, updateNode, setCropModeNodeId }) {
     </div>
   )
 
+  const SHAPES = [
+    { value: 'none',          label: 'None',    css: { borderRadius: 0 } },
+    { value: 'circle',        label: 'Circle',  css: { borderRadius: '50%' } },
+    { value: 'rounded',       label: 'Round',   css: { borderRadius: 8 } },
+    { value: 'pill',          label: 'Pill',    css: { borderRadius: 20 } },
+    { value: 'triangle',      label: 'Tri ▲',   css: { clipPath: 'polygon(50% 0%, 0% 100%, 100% 100%)' } },
+    { value: 'triangle-down', label: 'Tri ▼',   css: { clipPath: 'polygon(0% 0%, 100% 0%, 50% 100%)' } },
+    { value: 'diamond',       label: 'Diamond', css: { clipPath: 'polygon(50% 0%, 100% 50%, 50% 100%, 0% 50%)' } },
+    { value: 'pentagon',      label: 'Penta',   css: { clipPath: 'polygon(50% 0%, 100% 38%, 82% 100%, 18% 100%, 0% 38%)' } },
+    { value: 'hexagon',       label: 'Hex',     css: { clipPath: 'polygon(25% 0%, 75% 0%, 100% 50%, 75% 100%, 25% 100%, 0% 50%)' } },
+    { value: 'star',          label: 'Star',    css: { clipPath: 'polygon(50% 0%, 61% 35%, 98% 35%, 68% 57%, 79% 91%, 50% 70%, 21% 91%, 32% 57%, 2% 35%, 39% 35%)' } },
+    { value: 'arrow-right',   label: 'Arrow',   css: { clipPath: 'polygon(0% 20%, 60% 20%, 60% 0%, 100% 50%, 60% 100%, 60% 80%, 0% 80%)' } },
+    { value: 'parallelogram', label: 'Para',    css: { clipPath: 'polygon(15% 0%, 100% 0%, 85% 100%, 0% 100%)' } },
+  ]
+
+  const currentMask = node.mask || 'none'
+
   return (
     <>
-      <div><Label className="text-xs">Image URL</Label><Input value={node.src || ''} onChange={(e) => updateNode(node.id, { src: e.target.value })} /></div>
+      {/* Replace image */}
+      <div className="space-y-1.5">
+        <Label className="text-xs">Image Source</Label>
+        <div className="flex gap-1.5">
+          <Button size="sm" variant="outline" className="flex-1 border-2 text-xs h-8"
+            onClick={() => replaceFileRef.current?.click()}>
+            <Upload className="w-3 h-3 mr-1.5" />Replace
+          </Button>
+          <Button size="sm" variant="outline" className={`flex-1 border-2 text-xs h-8 ${showReplaceUrl ? 'border-foreground' : ''}`}
+            onClick={() => setShowReplaceUrl(v => !v)}>
+            <LinkIcon className="w-3 h-3 mr-1.5" />URL
+          </Button>
+          <input ref={replaceFileRef} type="file" accept="image/*" className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) { onReplaceUpload?.(f); e.target.value = '' } }} />
+        </div>
+        {showReplaceUrl && (
+          <div className="flex gap-1.5">
+            <Input className="h-8 text-xs flex-1" placeholder="https://..." value={replaceUrlInput}
+              onChange={(e) => setReplaceUrlInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter' && replaceUrlInput.trim()) { onReplace?.(replaceUrlInput.trim()); setReplaceUrlInput(''); setShowReplaceUrl(false) } }} />
+            <Button size="sm" className="h-8 px-3" onClick={() => { if (replaceUrlInput.trim()) { onReplace?.(replaceUrlInput.trim()); setReplaceUrlInput(''); setShowReplaceUrl(false) } }}>
+              <Check className="w-3 h-3" />
+            </Button>
+          </div>
+        )}
+      </div>
 
       {/* Shape / Mask */}
       <div className="pt-3 border-t">
         <Label className="text-xs mb-2 block">Shape / Mask</Label>
         <div className="grid grid-cols-4 gap-1.5">
-          {[
-            { value: 'none',         label: 'None',       preview: 'rounded-none' },
-            { value: 'circle',       label: 'Circle',     preview: 'rounded-full' },
-            { value: 'rounded',      label: 'Rounded',    preview: 'rounded-xl' },
-            { value: 'pill',         label: 'Pill',       preview: 'rounded-full w-8' },
-            { value: 'triangle',     label: '▲ Tri',      preview: null },
-            { value: 'triangle-down',label: '▼ Tri',      preview: null },
-            { value: 'diamond',      label: '◆ Diam',     preview: null },
-            { value: 'pentagon',     label: '⬠ Pent',    preview: null },
-            { value: 'hexagon',      label: '⬡ Hex',     preview: null },
-            { value: 'star',         label: '★ Star',     preview: null },
-            { value: 'arrow-right',  label: '➤ Arrow',   preview: null },
-            { value: 'parallelogram',label: '▱ Para',     preview: null },
-          ].map(({ value, label }) => (
-            <button
-              key={value}
-              type="button"
-              onClick={() => updateNode(node.id, { mask: value })}
-              className={`h-9 text-[10px] font-medium rounded border-2 transition-colors ${
-                (node.mask || 'none') === value
-                  ? 'border-foreground bg-[#D4FF00] text-foreground'
-                  : 'border-foreground/20 hover:border-foreground/50 bg-background'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
+          {SHAPES.map(({ value, label, css }) => {
+            const active = currentMask === value
+            return (
+              <button key={value} type="button"
+                onClick={() => updateNode(node.id, { mask: value })}
+                className={`flex flex-col items-center gap-1 p-1.5 rounded-lg border-2 transition-colors ${
+                  active ? 'border-foreground bg-[#D4FF00]/60' : 'border-foreground/15 hover:border-foreground/40 bg-muted/30'
+                }`}
+              >
+                {/* Shape preview swatch */}
+                <div style={{
+                  width: 28, height: 28,
+                  background: active ? '#111' : '#6366f1',
+                  ...css,
+                }} />
+                <span className="text-[9px] font-medium leading-none">{label}</span>
+              </button>
+            )
+          })}
         </div>
-        {(!node.mask || node.mask === 'none') && (
+        {currentMask === 'none' && (
           <div className="mt-2">
             <Label className="text-xs">Corner Radius</Label>
             <Input type="number" value={node.borderRadius || 0} onChange={(e) => updateNode(node.id, { borderRadius: parseInt(e.target.value) || 0 })} />
@@ -2700,9 +2774,7 @@ function ImageProperties({ node, updateNode, setCropModeNodeId }) {
             <Slider value={[node.cropLeft || 0]} min={0} max={90} step={1} onValueChange={(v) => {
               const newLeft = v[0];
               const currentRight = node.cropRight || 0;
-              if (newLeft + currentRight < 100) {
-                updateNode(node.id, { cropLeft: newLeft });
-              }
+              if (newLeft + currentRight < 100) updateNode(node.id, { cropLeft: newLeft });
             }} />
           </div>
           <div>
@@ -2713,9 +2785,7 @@ function ImageProperties({ node, updateNode, setCropModeNodeId }) {
             <Slider value={[node.cropRight || 0]} min={0} max={90} step={1} onValueChange={(v) => {
               const newRight = v[0];
               const currentLeft = node.cropLeft || 0;
-              if (currentLeft + newRight < 100) {
-                updateNode(node.id, { cropRight: newRight });
-              }
+              if (currentLeft + newRight < 100) updateNode(node.id, { cropRight: newRight });
             }} />
           </div>
           <div>
@@ -2726,9 +2796,7 @@ function ImageProperties({ node, updateNode, setCropModeNodeId }) {
             <Slider value={[node.cropTop || 0]} min={0} max={90} step={1} onValueChange={(v) => {
               const newTop = v[0];
               const currentBottom = node.cropBottom || 0;
-              if (newTop + currentBottom < 100) {
-                updateNode(node.id, { cropTop: newTop });
-              }
+              if (newTop + currentBottom < 100) updateNode(node.id, { cropTop: newTop });
             }} />
           </div>
           <div>
@@ -2739,13 +2807,13 @@ function ImageProperties({ node, updateNode, setCropModeNodeId }) {
             <Slider value={[node.cropBottom || 0]} min={0} max={90} step={1} onValueChange={(v) => {
               const newBottom = v[0];
               const currentTop = node.cropTop || 0;
-              if (currentTop + newBottom < 100) {
-                updateNode(node.id, { cropBottom: newBottom });
-              }
+              if (currentTop + newBottom < 100) updateNode(node.id, { cropBottom: newBottom });
             }} />
           </div>
-          <Button size="sm" variant="ghost" className="h-7 text-xs w-full border border-foreground/10 mt-1" onClick={() => updateNode(node.id, { cropLeft: 0, cropRight: 0, cropTop: 0, cropBottom: 0 })}>Reset Crop</Button>
-          <Button size="sm" className="h-7 text-xs w-full mt-1 bg-amber-500 hover:bg-amber-600 text-black" onClick={() => setCropModeNodeId?.(node.id)}><Crop className="w-3 h-3 mr-1.5" />Crop on Canvas</Button>
+          <Button size="sm" variant="ghost" className="h-7 text-xs w-full border border-foreground/10 mt-1"
+            onClick={() => updateNode(node.id, { cropLeft: 0, cropRight: 0, cropTop: 0, cropBottom: 0 })}>Reset Crop</Button>
+          <Button size="sm" className="h-7 text-xs w-full mt-1 bg-amber-500 hover:bg-amber-600 text-black"
+            onClick={() => setCropModeNodeId?.(node.id)}><Crop className="w-3 h-3 mr-1.5" />Crop on Canvas</Button>
         </div>
       </div>
 
