@@ -1,5 +1,5 @@
 'use client'
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'
@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
 } from '@/components/ui/dialog'
-import { Plus, Trash2, Pencil, Copy, Moon, Sun, ArrowUpRight, ArrowRight } from 'lucide-react'
+import { Plus, Trash2, Pencil, Copy, Moon, Sun, ArrowUpRight, ArrowRight, Upload, Download } from 'lucide-react'
 import { toast } from 'sonner'
 import { KandLogo, KandMark } from '@/components/logo'
 
@@ -114,6 +114,8 @@ function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
+  const [importing, setImporting] = useState(false)
+  const importFileRef = useRef(null)
 
   const load = async () => {
     setLoading(true)
@@ -133,6 +135,52 @@ function Dashboard() {
     setOpen(false); setName('')
     router.push(`/editor/${c.id}`)
   }
+
+  const importCanvas = async (file) => {
+    if (!file) return
+    setImporting(true)
+    try {
+      const text = await file.text()
+      const config = JSON.parse(text)
+      // Strip any stored id/timestamps so the server assigns a fresh one
+      const { id: _id, _id: __id, createdAt, updatedAt, ...data } = config
+      if (!data.name) data.name = file.name.replace(/\.kand\.json$/i, '').replace(/-/g, ' ') || 'Imported Canvas'
+      // Create canvas shell first, then PUT the full data
+      const createRes = await fetch('/api/canvases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: data.name, width: data.width, height: data.height, background: data.background }),
+      })
+      const newCanvas = await createRes.json()
+      if (!newCanvas.id) throw new Error('Failed to create canvas')
+      // PUT the full config onto the new canvas
+      await fetch(`/api/canvases/${newCanvas.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...data, id: newCanvas.id }),
+      })
+      toast.success('Canvas imported')
+      router.push(`/editor/${newCanvas.id}`)
+    } catch (e) {
+      toast.error('Import failed: ' + (e.message || 'Invalid file'))
+    } finally {
+      setImporting(false)
+      if (importFileRef.current) importFileRef.current.value = ''
+    }
+  }
+
+  const exportCanvas = (canvas) => {
+    const { _id, createdAt, updatedAt, ...exportData } = canvas
+    const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `${(canvas.name || 'canvas').replace(/[^a-z0-9]/gi, '-').toLowerCase()}.kand.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    toast.success('Exported')
+  }
+
   const deleteCanvas = async (id) => {
     if (!confirm('Delete this design?')) return
     await fetch(`/api/canvases/${id}`, { method: 'DELETE' })
@@ -156,6 +204,21 @@ function Dashboard() {
               DOCS <ArrowUpRight className="w-3.5 h-3.5" />
             </a>
             <ThemeToggle />
+            <input
+              ref={importFileRef}
+              type="file"
+              accept=".json,.kand.json"
+              className="hidden"
+              onChange={(e) => { const f = e.target.files?.[0]; if (f) importCanvas(f) }}
+            />
+            <Button
+              variant="outline"
+              className="border-2 border-foreground/30 rounded-full px-5 h-10 font-semibold"
+              onClick={() => importFileRef.current?.click()}
+              disabled={importing}
+            >
+              <Upload className="w-4 h-4 mr-1.5" />{importing ? 'Importing…' : 'Import'}
+            </Button>
             <Dialog open={open} onOpenChange={setOpen}>
               <DialogTrigger asChild>
                 <Button className="bg-foreground text-background hover:bg-foreground/85 rounded-full px-5 h-10 font-semibold">
@@ -247,6 +310,7 @@ function Dashboard() {
                   <div className="flex gap-0.5">
                     <Button size="icon" variant="ghost" className="h-8 w-8 hover:bg-[#D4FF00] hover:text-foreground" onClick={() => router.push(`/editor/${c.id}`)} title="Edit"><Pencil className="w-3.5 h-3.5" /></Button>
                     <Button size="icon" variant="ghost" className="h-8 w-8 hover:bg-[#D4FF00] hover:text-foreground" onClick={() => duplicateCanvas(c.id)} title="Duplicate"><Copy className="w-3.5 h-3.5" /></Button>
+                    <Button size="icon" variant="ghost" className="h-8 w-8 hover:bg-[#D4FF00] hover:text-foreground" onClick={() => exportCanvas(c)} title="Export .kand.json"><Download className="w-3.5 h-3.5" /></Button>
                     <Button size="icon" variant="ghost" className="h-8 w-8 hover:bg-destructive hover:text-destructive-foreground" onClick={() => deleteCanvas(c.id)} title="Delete"><Trash2 className="w-3.5 h-3.5" /></Button>
                   </div>
                 </div>

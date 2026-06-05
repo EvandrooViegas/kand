@@ -15,7 +15,7 @@ import {
   Square, Circle, ChevronUp, ChevronDown, ChevronsUp, ChevronsDown, Upload,
   Link as LinkIcon, Palette, Plus, X, Moon, Sun, Italic, Underline, Bold,
   AlignLeft, AlignCenter, AlignRight, Sparkles, Wand2, GripVertical, Undo2, Redo2,
-  ZoomIn, ZoomOut, Maximize2, Folder, Unlink, ChevronRight, Group, Crop
+  ZoomIn, ZoomOut, Maximize2, Folder, Unlink, ChevronRight, Group, Crop, Download
 } from 'lucide-react'
 import {
   applyGroupLayoutToNodes, normalizeGroupGaps, sortNodeIdsByLayout,
@@ -1717,6 +1717,17 @@ function Editor() {
           <ThemeToggle />
           <Button variant="outline" size="sm" className="hidden md:inline-flex border-2 border-foreground/30 rounded-full font-semibold" onClick={() => setApiDialog(true)}><Code2 className="w-4 h-4 mr-1.5" />API</Button>
           <Button variant="outline" size="sm" className="hidden lg:inline-flex border-2 border-foreground/30 rounded-full font-semibold" onClick={() => setRenderDialog(true)}><Play className="w-4 h-4 mr-1.5" />Render</Button>
+          <Button variant="outline" size="sm" className="hidden md:inline-flex border-2 border-foreground/30 rounded-full font-semibold" onClick={() => {
+            const { _id, createdAt, updatedAt, ...exportData } = canvas
+            const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' })
+            const url = URL.createObjectURL(blob)
+            const a = document.createElement('a')
+            a.href = url
+            a.download = `${(canvas.name || 'canvas').replace(/[^a-z0-9]/gi, '-').toLowerCase()}.kand.json`
+            a.click()
+            URL.revokeObjectURL(url)
+            toast.success('Exported')
+          }}><Download className="w-4 h-4 mr-1.5" />Export</Button>
           <Button
             size="sm"
             onClick={save}
