@@ -541,14 +541,16 @@ function Editor() {
         if (enode) {
           editorRef.current.innerHTML = tagsToHtml(enode.text || '')
           editorRef.current.focus()
-          
-          // Select all text or put cursor at the end
+
+          // Select ALL text by default so the user can immediately apply a class
+          // or formatting without having to manually highlight (no Ctrl+arrow needed).
           const range = document.createRange()
           range.selectNodeContents(editorRef.current)
-          range.collapse(false)
           const sel = window.getSelection()
           sel.removeAllRanges()
           sel.addRange(range)
+          // Surface the floating toolbar / save the range for class application.
+          requestAnimationFrame(() => handleSelectionChange())
         }
         hasInitializedRef.current = true
       }
@@ -1506,7 +1508,8 @@ function Editor() {
         const bg = cls.background || cls.backgroundColor;
         const py = typeof cls.paddingY === 'number' ? cls.paddingY : 0
         const px = typeof cls.paddingX === 'number' ? cls.paddingX : 0
-        const showBgBox = isVisibleBackground(bg) && (px !== 0 || py !== 0)
+        // Show the highlight box whenever a visible background is set — padding is optional.
+        const showBgBox = isVisibleBackground(bg)
         if (cls.fontWeight) css += `font-weight: ${cls.fontWeight} !important; `;
         if (cls.fontStyle) css += `font-style: ${cls.fontStyle} !important; `;
         if (cls.letterSpacing) css += `letter-spacing: ${cls.letterSpacing}px !important; `;
@@ -3045,13 +3048,13 @@ function ClassesPanel({ canvas, setCanvas }) {
   }
 
   const updateClass = (name, key, value) => {
-    const updated = { ...classes }
-    if (value === undefined || value === '' || Number.isNaN(value)) {
-      delete updated[name][key]
+    const current = { ...(classes[name] || {}) }
+    if (value === undefined || value === '' || (typeof value === 'number' && Number.isNaN(value))) {
+      delete current[key]
     } else {
-      updated[name] = { ...updated[name], [key]: value }
+      current[key] = value
     }
-    setCanvas({ ...canvas, classes: updated })
+    setCanvas({ ...canvas, classes: { ...classes, [name]: current } })
   }
 
   return (
