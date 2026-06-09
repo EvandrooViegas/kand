@@ -966,6 +966,18 @@ function Editor() {
       nodes: applyPatchWithReflow(c.nodes, nodeId, patch, c.groups || []),
     }), skipHistory)
   }
+  // Set a node's dynamic key while preventing duplicates across the canvas
+  const setDynamicKey = (nodeId, rawKey) => {
+    const key = (rawKey || '').trim()
+    if (key) {
+      const clash = (canvas?.nodes || []).some((n) => n.id !== nodeId && (n.dynamic_key || '').trim() === key)
+      if (clash) {
+        toast.error(`Dynamic key "${key}" is already in use`)
+        return
+      }
+    }
+    updateNode(nodeId, { dynamic_key: key })
+  }
   const deleteNode = (nodeId, skipClear = false) => {
     setCanvas((c) => ({
       ...c,
@@ -1810,9 +1822,10 @@ function Editor() {
       <ResizablePanelGroup direction="horizontal" className="flex-1 min-h-0">
         <ResizablePanel defaultSize={18} minSize={14} maxSize={32} className="min-w-0">
         <Tabs defaultValue="design" className="h-full w-full border-r-2 border-foreground/90 bg-card flex flex-col min-h-0">
-          <TabsList className="grid grid-cols-2 rounded-none border-b-2 border-foreground/90 h-11 bg-[#FAF7F2] dark:bg-[#0E0D0B] p-0">
+          <TabsList className="grid grid-cols-3 rounded-none border-b-2 border-foreground/90 h-11 bg-[#FAF7F2] dark:bg-[#0E0D0B] p-0">
             <TabsTrigger value="design" className="rounded-none data-[state=active]:bg-card data-[state=active]:border-b-2 data-[state=active]:border-[#D4FF00] font-bold tracking-widest text-xs uppercase">Design</TabsTrigger>
             <TabsTrigger value="classes" className="rounded-none data-[state=active]:bg-card data-[state=active]:border-b-2 data-[state=active]:border-[#D4FF00] font-bold tracking-widest text-xs uppercase">Classes</TabsTrigger>
+            <TabsTrigger value="keys" className="rounded-none data-[state=active]:bg-card data-[state=active]:border-b-2 data-[state=active]:border-[#D4FF00] font-bold tracking-widest text-xs uppercase">Keys</TabsTrigger>
           </TabsList>
           
           <TabsContent value="design" className="flex-1 flex flex-col p-3 m-0 space-y-1 min-h-0">
@@ -1935,6 +1948,30 @@ function Editor() {
           </TabsContent>
           <TabsContent value="classes" className="flex-1 overflow-y-auto p-3 m-0 min-h-0">
             <ClassesPanel canvas={canvas} setCanvas={setCanvas} />
+          </TabsContent>
+          <TabsContent value="keys" className="flex-1 overflow-y-auto p-3 m-0 min-h-0">
+            <p className="text-lg leading-none mb-1" style={BEBAS}>DYNAMIC KEYS</p>
+            <p className="text-xs text-muted-foreground mb-3">All keys exposed via the render API. Each must be unique.</p>
+            {(() => {
+              const keyed = (canvas?.nodes || []).filter((n) => (n.dynamic_key || '').trim())
+              if (keyed.length === 0) {
+                return <p className="text-xs text-muted-foreground italic">No dynamic keys yet. Set a Dynamic Key on a text or image element to make it editable via the API.</p>
+              }
+              return (
+                <div className="space-y-1.5">
+                  {keyed.map((n) => (
+                    <button
+                      key={n.id}
+                      onClick={() => setSelectedIds([n.id])}
+                      className={`w-full flex items-center gap-2 text-left px-2 py-1.5 rounded border transition hover:border-primary ${selectedIds.includes(n.id) ? 'border-primary bg-muted/50' : 'border-border'}`}
+                    >
+                      <span className="font-mono text-xs bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 rounded shrink-0">{`{${n.dynamic_key}}`}</span>
+                      <span className="text-xs text-muted-foreground truncate">{n.type === 'text' ? (n.text || 'text') : 'image'}</span>
+                    </button>
+                  ))}
+                </div>
+              )
+            })()}
           </TabsContent>
         </Tabs>
         </ResizablePanel>
@@ -2383,7 +2420,7 @@ function Editor() {
                 {(selected.type === 'text' || selected.type === 'image') && (
                   <div className="pt-3 border-t">
                     <Label className="text-xs flex items-center gap-2 mb-1">Dynamic Key <span className="text-[10px] text-muted-foreground font-normal">(optional)</span></Label>
-                    <Input placeholder="e.g. text_1" value={selected.dynamic_key || ''} onChange={(e) => updateNode(selected.id, { dynamic_key: e.target.value })} />
+                    <Input placeholder="e.g. text_1" defaultValue={selected.dynamic_key || ''} key={selected.id + (selected.dynamic_key || '')} onBlur={(e) => setDynamicKey(selected.id, e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }} />
                     <p className="text-xs text-muted-foreground mt-1">Set this to make the element dynamic via the API.</p>
                   </div>
                 )}
