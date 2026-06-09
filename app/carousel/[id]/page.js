@@ -67,12 +67,19 @@ export default function CarouselManager() {
 
   useEffect(() => { load() }, [load])
 
-  // Reload when editor iframe saves
+  // Quietly sync the saved reference when the editor iframe autosaves a page.
+  // We intentionally do NOT call load() here — re-fetching would reload the
+  // iframe and interrupt editing. The data is already persisted server-side.
   useEffect(() => {
-    const handler = (e) => { if (e.data?.type === 'kand:page-saved') load() }
+    const handler = (e) => {
+      if (e.data?.type === 'kand:page-saved') {
+        savedStr.current = JSON.stringify(canvas)
+        setHasChanges(false)
+      }
+    }
     window.addEventListener('message', handler)
     return () => window.removeEventListener('message', handler)
-  }, [load])
+  }, [canvas])
 
   const save = async () => {
     if (!canvas) return
@@ -86,6 +93,17 @@ export default function CarouselManager() {
       setHasChanges(false)
     } else toast.error('Save failed')
   }
+
+  // Keep a ref to the latest save so the autosave effect stays stable
+  const saveRef = useRef(save)
+  saveRef.current = save
+
+  // Debounced autosave — persists in the background, never reloads the page
+  useEffect(() => {
+    if (!hasChanges || !canvas) return
+    const t = setTimeout(() => { saveRef.current() }, 2000)
+    return () => clearTimeout(t)
+  }, [hasChanges, canvas])
 
   const enforcePeerTypes = (pages) => {
     if (!pages || pages.length === 0) return []

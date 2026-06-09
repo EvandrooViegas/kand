@@ -1205,6 +1205,17 @@ function Editor() {
     } else toast.error('Save failed')
   }
 
+  // Keep a ref to the latest save so the autosave effect stays stable
+  const saveRef = useRef(save)
+  saveRef.current = save
+
+  // Debounced autosave — fires in the background without reloading anything
+  useEffect(() => {
+    if (!hasChanges || !canvas) return
+    const t = setTimeout(() => { saveRef.current() }, 2000)
+    return () => clearTimeout(t)
+  }, [hasChanges, canvas])
+
   const testRender = async () => {
     setRendering(true); setRenderResult(null)
     try {
