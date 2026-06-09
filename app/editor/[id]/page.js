@@ -588,6 +588,28 @@ function Editor() {
   useEffect(() => {
     fetch(`/api/canvases/${id}`).then((r) => r.json()).then((data) => {
       if (data.error) { toast.error(data.error); router.push('/') } else {
+        // If editing a specific carousel page, use that page's design data
+        const pageId = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('page') : null
+        if (pageId && data.pages) {
+          const page = data.pages.find(p => p.id === pageId)
+          if (page) {
+            // Build a canvas-like object from the page, keeping root dimensions/classes
+            const pageCanvas = {
+              ...data,
+              nodes: page.nodes || [],
+              groups: page.groups || [],
+              classes: page.classes || data.classes || {},
+              background: page.background || data.background,
+              _carouselPageId: pageId,
+              _carouselPageName: page.name,
+              _carouselPageType: page.type,
+            }
+            setCanvas(pageCanvas, true)
+            savedCanvasRef.current = JSON.stringify(pageCanvas)
+            setHasChanges(false)
+            return
+          }
+        }
         setCanvas(data, true)
         savedCanvasRef.current = JSON.stringify(data)
         setHasChanges(false)
@@ -1119,11 +1141,46 @@ function Editor() {
 
   const save = async () => {
     if (!canvas) return
+
+    // If editing a carousel page, patch only that page inside the parent canvas
+    if (canvas._carouselPageId) {
+      const pageId = canvas._carouselPageId
+      // Fetch the full parent canvas first
+      const parentRes = await fetch(`/api/canvases/${id}`)
+      const parent = await parentRes.json()
+      if (parent.error) return toast.error('Could not load parent canvas')
+      const updatedPages = (parent.pages || []).map(p =>
+        p.id === pageId
+          ? { ...p, nodes: canvas.nodes || [], groups: canvas.groups || [], classes: canvas.classes || {}, background: canvas.background }
+          : p
+      )
+      const res = await fetch(`/api/canvases/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...parent, pages: updatedPages }),
+      })
+      if (res.ok) {
+        toast.success('Page saved!')
+        savedCanvasRef.current = JSON.stringify(canvas)
+        setHasChanges(false)
+        // Notify parent frame (carousel editor) that this page was saved
+        if (window.parent !== window) {
+          window.parent.postMessage({ type: 'kand:page-saved', canvasId: id }, '*')
+        }
+      } else toast.error('Save failed')
+      return
+    }
+
+    // Normal single canvas save
     const res = await fetch(`/api/canvases/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(canvas) })
     if (res.ok) {
       toast.success('Saved!')
       savedCanvasRef.current = JSON.stringify(canvas)
       setHasChanges(false)
+      // Notify parent frame (carousel editor) that this page was saved
+      if (window.parent !== window) {
+        window.parent.postMessage({ type: 'kand:page-saved', canvasId: id }, '*')
+      }
     } else toast.error('Save failed')
   }
 
@@ -1639,17 +1696,38 @@ function Editor() {
       <div ref={measureRef} aria-hidden="true" style={{ position: 'fixed', visibility: 'hidden', pointerEvents: 'none', left: -99999, top: -99999, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }} />
       <header className="border-b-2 border-foreground/90 bg-[#FAF7F2] dark:bg-[#0E0D0B] px-4 py-3 flex items-center justify-between shrink-0 z-20">
         <div className="flex items-center gap-3 min-w-0">
-          <Button variant="ghost" size="icon" className="hover:bg-[#D4FF00] hover:text-foreground shrink-0" onClick={() => router.push('/')} title="Back to studio"><ArrowLeft className="w-4 h-4" /></Button>
+          <Button variant="ghost" size="icon" className="hover:bg-[#D4FF00] hover:text-foreground shrink-0"
+            onClick={() => canvas._carouselPageId ? router.push(`/carousel/${id}`) : router.push('/')}
+            title={canvas._carouselPageId ? 'Back to carousel' : 'Back to studio'}>
+            <ArrowLeft className="w-4 h-4" />
+          </Button>
           <KandLogo size={30} />
-          <div className="hidden sm:inline-flex items-center gap-2 px-2.5 py-0.5 border border-foreground/80 rounded-full text-[10px] font-semibold uppercase tracking-widest shrink-0">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#9AB800] animate-pulse" />
-            Editor
-          </div>
-          <Input
-            value={canvas.name}
-            onChange={(e) => setCanvas({ ...canvas, name: e.target.value })}
-            className="w-48 sm:w-64 font-semibold border-2 border-foreground/20 rounded-lg bg-card focus-visible:ring-[#D4FF00]"
-          />
+          {canvas._carouselPageId ? (
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="hidden sm:inline-flex items-center gap-1.5 px-2.5 py-0.5 border border-indigo-400 rounded-full text-[10px] font-semibold uppercase tracking-widest shrink-0 text-indigo-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-indigo-400" />
+                Carousel
+              </div>
+              <span className="text-muted-foreground text-sm shrink-0">›</span>
+              <span className="text-xs font-bold truncate max-w-32">{canvas._carouselPageName || 'Page'}</span>
+              <span className="text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase"
+                style={{ background: canvas._carouselPageType === 'top_peer' ? '#D4FF00' : canvas._carouselPageType === 'bottom_peer' ? '#9AB800' : '#6366f1', color: '#000' }}>
+                {canvas._carouselPageType?.replace('_', ' ')}
+              </span>
+            </div>
+          ) : (
+            <>
+              <div className="hidden sm:inline-flex items-center gap-2 px-2.5 py-0.5 border border-foreground/80 rounded-full text-[10px] font-semibold uppercase tracking-widest shrink-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-[#9AB800] animate-pulse" />
+                Editor
+              </div>
+              <Input
+                value={canvas.name}
+                onChange={(e) => setCanvas({ ...canvas, name: e.target.value })}
+                className="w-48 sm:w-64 font-semibold border-2 border-foreground/20 rounded-lg bg-card focus-visible:ring-[#D4FF00]"
+              />
+            </>
+          )}
         </div>
         <div className="flex items-center gap-1.5 sm:gap-2">
           <Button variant="ghost" size="icon" className="hover:bg-[#D4FF00] hover:text-foreground" onClick={undo} disabled={historyRef.current.past.length === 0} title="Undo (Ctrl+Z)"><Undo2 className="w-4 h-4" /></Button>

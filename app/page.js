@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
 } from '@/components/ui/dialog'
-import { Plus, Trash2, Pencil, Copy, Moon, Sun, ArrowUpRight, ArrowRight, Upload, Download } from 'lucide-react'
+import { Plus, Trash2, Pencil, Copy, Moon, Sun, ArrowUpRight, ArrowRight, Upload, Download, Layers, Image as ImageIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { KandLogo, KandMark } from '@/components/logo'
 
@@ -114,6 +114,7 @@ function Dashboard() {
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState(false)
   const [name, setName] = useState('')
+  const [canvasType, setCanvasType] = useState('single') // 'single' | 'carousel'
   const [importing, setImporting] = useState(false)
   const importFileRef = useRef(null)
 
@@ -130,10 +131,15 @@ function Dashboard() {
   useEffect(() => { load() }, [])
 
   const createCanvas = async () => {
-    const res = await fetch('/api/canvases', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: name || 'Untitled' }) })
+    const res = await fetch('/api/canvases', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: name || 'Untitled', type: canvasType }),
+    })
     const c = await res.json()
-    setOpen(false); setName('')
-    router.push(`/editor/${c.id}`)
+    setOpen(false); setName(''); setCanvasType('single')
+    if (canvasType === 'carousel') router.push(`/carousel/${c.id}`)
+    else router.push(`/editor/${c.id}`)
   }
 
   const importCanvas = async (file) => {
@@ -203,6 +209,9 @@ function Dashboard() {
             <a href="#api-docs" className="hidden sm:flex items-center gap-1 text-sm font-medium hover:opacity-70 transition" style={BEBAS}>
               DOCS <ArrowUpRight className="w-3.5 h-3.5" />
             </a>
+            <button onClick={() => router.push('/renders')} className="hidden sm:flex items-center gap-1 text-sm font-medium hover:opacity-70 transition" style={BEBAS}>
+              RENDERS <ArrowRight className="w-3.5 h-3.5" />
+            </button>
             <ThemeToggle />
             <input
               ref={importFileRef}
@@ -219,18 +228,55 @@ function Dashboard() {
             >
               <Upload className="w-4 h-4 mr-1.5" />{importing ? 'Importing…' : 'Import'}
             </Button>
-            <Dialog open={open} onOpenChange={setOpen}>
+            <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) { setName(''); setCanvasType('single') } }}>
               <DialogTrigger asChild>
                 <Button className="bg-foreground text-background hover:bg-foreground/85 rounded-full px-5 h-10 font-semibold">
                   <Plus className="w-4 h-4 mr-1.5" />New Design
                 </Button>
               </DialogTrigger>
               <DialogContent>
-                <DialogHeader><DialogTitle>Name your design</DialogTitle></DialogHeader>
-                <Input placeholder="Summer launch post" value={name} onChange={(e) => setName(e.target.value)} autoFocus onKeyDown={(e) => e.key === 'Enter' && createCanvas()} />
+                <DialogHeader><DialogTitle>Create a new design</DialogTitle></DialogHeader>
+                <div className="space-y-4 py-2">
+                  {/* Type selection */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setCanvasType('single')}
+                      className={`flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all ${
+                        canvasType === 'single' ? 'border-foreground bg-[#D4FF00]/20' : 'border-foreground/20 hover:border-foreground/40'
+                      }`}
+                    >
+                      <ImageIcon className="w-6 h-6" />
+                      <span className="font-bold text-sm">Single Image</span>
+                      <span className="text-[11px] text-muted-foreground text-center">One canvas, rendered as a PNG</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setCanvasType('carousel')}
+                      className={`flex flex-col items-center gap-2 p-4 rounded-xl border-2 transition-all ${
+                        canvasType === 'carousel' ? 'border-foreground bg-[#D4FF00]/20' : 'border-foreground/20 hover:border-foreground/40'
+                      }`}
+                    >
+                      <Layers className="w-6 h-6" />
+                      <span className="font-bold text-sm">Carousel</span>
+                      <span className="text-[11px] text-muted-foreground text-center">Multiple pages, rendered as a ZIP</span>
+                    </button>
+                  </div>
+                  <div>
+                    <Input
+                      placeholder={canvasType === 'carousel' ? 'My carousel' : 'Summer launch post'}
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      autoFocus
+                      onKeyDown={(e) => e.key === 'Enter' && createCanvas()}
+                    />
+                  </div>
+                </div>
                 <DialogFooter>
                   <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-                  <Button onClick={createCanvas}>Create</Button>
+                  <Button onClick={createCanvas}>
+                    Create {canvasType === 'carousel' ? 'Carousel' : 'Canvas'}
+                  </Button>
                 </DialogFooter>
               </DialogContent>
             </Dialog>
@@ -291,11 +337,16 @@ function Dashboard() {
                 key={c.id}
                 className="group relative bg-card rounded-2xl border-2 border-foreground/90 overflow-hidden hover:-translate-y-1 transition-all duration-200 hover:shadow-[8px_8px_0_0_rgba(0,0,0,0.9)] dark:hover:shadow-[8px_8px_0_0_rgba(212,255,0,0.4)]"
               >
-                <div className="aspect-square bg-foreground/5 relative cursor-pointer overflow-hidden border-b-2 border-foreground/90" onClick={() => router.push(`/editor/${c.id}`)}>
+                <div className="aspect-square bg-foreground/5 relative cursor-pointer overflow-hidden border-b-2 border-foreground/90" onClick={() => router.push(c.type === 'carousel' ? `/carousel/${c.id}` : `/editor/${c.id}`)}>
                   <CanvasPreview canvas={c} />
                   <div className="absolute top-3 left-3 bg-[#D4FF00] text-foreground px-2 py-0.5 rounded-full text-[10px] font-bold uppercase tracking-wider border border-foreground/90">
                     #{(idx + 1).toString().padStart(2, '0')}
                   </div>
+                  {c.type === 'carousel' && (
+                    <div className="absolute top-3 right-3 bg-indigo-600 text-white px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider">
+                      Carousel
+                    </div>
+                  )}
                   <div className="absolute bottom-3 right-3 bg-foreground text-background w-9 h-9 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition">
                     <ArrowUpRight className="w-4 h-4" />
                   </div>
@@ -308,7 +359,7 @@ function Dashboard() {
                     </p>
                   </div>
                   <div className="flex gap-0.5">
-                    <Button size="icon" variant="ghost" className="h-8 w-8 hover:bg-[#D4FF00] hover:text-foreground" onClick={() => router.push(`/editor/${c.id}`)} title="Edit"><Pencil className="w-3.5 h-3.5" /></Button>
+                    <Button size="icon" variant="ghost" className="h-8 w-8 hover:bg-[#D4FF00] hover:text-foreground" onClick={() => router.push(c.type === 'carousel' ? `/carousel/${c.id}` : `/editor/${c.id}`)} title="Edit"><Pencil className="w-3.5 h-3.5" /></Button>
                     <Button size="icon" variant="ghost" className="h-8 w-8 hover:bg-[#D4FF00] hover:text-foreground" onClick={() => duplicateCanvas(c.id)} title="Duplicate"><Copy className="w-3.5 h-3.5" /></Button>
                     <Button size="icon" variant="ghost" className="h-8 w-8 hover:bg-[#D4FF00] hover:text-foreground" onClick={() => exportCanvas(c)} title="Export .kand.json"><Download className="w-3.5 h-3.5" /></Button>
                     <Button size="icon" variant="ghost" className="h-8 w-8 hover:bg-destructive hover:text-destructive-foreground" onClick={() => deleteCanvas(c.id)} title="Delete"><Trash2 className="w-3.5 h-3.5" /></Button>

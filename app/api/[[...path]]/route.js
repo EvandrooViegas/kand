@@ -2,6 +2,7 @@ import { MongoClient, Binary } from 'mongodb'
 import { v4 as uuidv4 } from 'uuid'
 import { NextResponse } from 'next/server'
 import { renderCanvasToPng } from '@/lib/renderCanvas'
+import JSZip from 'jszip'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -68,13 +69,27 @@ async function handleRoute(request, { params }) {
     // Create canvas
     if (route === '/canvases' && method === 'POST') {
       const body = await request.json().catch(() => ({}))
+      const isCarousel = body.type === 'carousel'
       const newCanvas = {
         id: uuidv4(),
         name: body.name || 'Untitled Canvas',
+        type: isCarousel ? 'carousel' : 'single',
         width: body.width || 1080,
         height: body.height || 1080,
         background: body.background || '#ffffff',
+        // Shared design — nodes/groups/classes live here for both single and carousel
         nodes: [],
+        groups: [],
+        classes: {},
+        // Carousel-specific: pages are just slots with type + name + order.
+        // No per-page design data — the shared design above is used for every page.
+        ...(isCarousel ? {
+          pages: [
+            { id: uuidv4(), type: 'top_peer',    name: 'Top Peer (Hook)',   order: 0 },
+            { id: uuidv4(), type: 'content',     name: 'Page 1',            order: 1 },
+            { id: uuidv4(), type: 'bottom_peer', name: 'Bottom Peer (CTA)', order: 2 },
+          ]
+        } : {}),
         createdAt: new Date(),
         updatedAt: new Date()
       }
@@ -178,11 +193,10 @@ if (uploadMatch && method === 'GET') {
   })
 }
 
-    // Render canvas to PNG
+    // Render canvas to PNG (single) or carousel (ZIP)
     if (route === '/render' && method === 'POST') {
       const body = await request.json().catch(() => ({}))
       const canvaId = body.canva_id || body.canvas_id || body.canvaId
-      const data = body.data || {}
       if (!canvaId) {
         return corsify(NextResponse.json({ error: 'canva_id is required' }, { status: 400 }))
       }
@@ -190,38 +204,137 @@ if (uploadMatch && method === 'GET') {
       if (!canvas) {
         return corsify(NextResponse.json({ error: 'Canvas not found' }, { status: 404 }))
       }
-      const png = await renderCanvasToPng(canvas, data)
+      const baseUrl = getBaseUrl(request)
       const renderId = uuidv4()
+
+      // ── CAROUSEL render ────────────────────────────────────────────────────
+      if (canvas.type === 'carousel') {
+        const { top_peer_data = {}, bottom_peer_data = {}, content = [] } = body
+        const pages = [...(canvas.pages || [])].sort((a, b) => a.order - b.order)
+        const zip = new JSZip()
+        const renderResults = []
+
+        for (let i = 0; i < pages.length; i++) {
+          const page = pages[i]
+          // Pick the data set for this page
+          let pageData = {}
+          if (page.type === 'top_peer') {
+            // Remap top_peer_data keys: strip _top suffix to match dynamic_key
+            for (const [k, v] of Object.entries(top_peer_data)) {
+              pageData[k.replace(/_top$/, '')] = v
+            }
+            // Also allow exact key match
+            Object.assign(pageData, top_peer_data)
+          } else if (page.type === 'bottom_peer') {
+            for (const [k, v] of Object.entries(bottom_peer_data)) {
+              pageData[k.replace(/_bottom$/, '')] = v
+            }
+            Object.assign(pageData, bottom_peer_data)
+          } else {
+            // content pages in order (index among content pages)
+            const contentIdx = pages.filter((p, j) => p.type === 'content' && j < i).length
+            const raw = content[contentIdx] || {}
+            // Remap _N suffix: hook_1 → hook, img_1 → img etc.
+            for (const [k, v] of Object.entries(raw)) {
+              pageData[k.replace(/_\d+$/, '')] = v
+            }
+            Object.assign(pageData, raw)
+          }
+
+          // All pages share the same design — use the canvas-level nodes/groups/classes.
+          // Only the dynamic data differs per page.
+          const pageCanvas = {
+            ...canvas,
+            nodes: canvas.nodes || [],
+            groups: canvas.groups || [],
+            classes: canvas.classes || {},
+            background: canvas.background,
+          }
+          try {
+            const png = await renderCanvasToPng(pageCanvas, pageData)
+            const label = page.type === 'top_peer' ? '00-top-peer'
+              : page.type === 'bottom_peer' ? `${String(pages.length - 1).padStart(2, '0')}-bottom-peer`
+              : `${String(i).padStart(2, '0')}-${page.name || 'page'}`
+            zip.file(`${label}.png`, png)
+            renderResults.push({ pageId: page.id, type: page.type, order: i, filename: `${label}.png` })
+          } catch (e) {
+            console.error('carousel page render error', page.id, e.message)
+            renderResults.push({ pageId: page.id, type: page.type, order: i, error: e.message })
+          }
+        }
+
+        const zipBuf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
+        await db.collection('renders').insertOne({
+          id: renderId,
+          canvasId: canvaId,
+          type: 'carousel',
+          zip: new Binary(zipBuf),
+          pages: renderResults,
+          payload: body,
+          approved: false,
+          createdAt: new Date(),
+        })
+        const zipUrl = `${baseUrl}/api/rendered/${renderId}.zip`
+        return corsify(NextResponse.json({ url: zipUrl, render_id: renderId, canva_id: canvaId, type: 'carousel', pages: renderResults }))
+      }
+
+      // ── SINGLE render ──────────────────────────────────────────────────────
+      const data = body.data || {}
+      const png = await renderCanvasToPng(canvas, data)
       await db.collection('renders').insertOne({
         id: renderId,
         canvasId: canvaId,
+        type: 'single',
         png: new Binary(png),
+        payload: body,
+        approved: false,
         createdAt: new Date()
       })
-      const baseUrl = getBaseUrl(request)
       const url = `${baseUrl}/api/rendered/${renderId}`
-      return corsify(NextResponse.json({ url, render_id: renderId, canva_id: canvaId }))
+      return corsify(NextResponse.json({ url, render_id: renderId, canva_id: canvaId, type: 'single' }))
     }
 
-    // Serve rendered PNG
-  const renderedMatch = route.match(/^\/rendered\/([^/]+?)(?:\.png)?$/)
-if (renderedMatch && method === 'GET') {
-  const id = renderedMatch[1]
-  const r = await db.collection('renders').findOne({ id })
-  if (!r) return corsify(NextResponse.json({ error: 'Not found' }, { status: 404 }))
-  
-  // FIX: Use .value() to avoid memory pool corruption
-  const buf = r.png && typeof r.png.value === 'function' ? r.png.value() : Buffer.from(r.png)
-  
-  return new NextResponse(buf, {
-    status: 200,
-    headers: {
-      'Content-Type': 'image/png',
-      'Cache-Control': 'public, max-age=86400',
-      'Access-Control-Allow-Origin': '*',
+    // Serve rendered PNG or ZIP
+    const renderedMatch = route.match(/^\/rendered\/([^/]+?)(?:\.(png|zip))?$/)
+    if (renderedMatch && method === 'GET') {
+      const id = renderedMatch[1]
+      const r = await db.collection('renders').findOne({ id })
+      if (!r) return corsify(NextResponse.json({ error: 'Not found' }, { status: 404 }))
+      if (r.type === 'carousel' && r.zip) {
+        const buf = r.zip && typeof r.zip.value === 'function' ? r.zip.value() : Buffer.from(r.zip)
+        return new NextResponse(buf, {
+          status: 200,
+          headers: { 'Content-Type': 'application/zip', 'Content-Disposition': `attachment; filename="render-${id}.zip"`, 'Cache-Control': 'public, max-age=86400', 'Access-Control-Allow-Origin': '*' }
+        })
+      }
+      const buf = r.png && typeof r.png.value === 'function' ? r.png.value() : Buffer.from(r.png)
+      return new NextResponse(buf, {
+        status: 200,
+        headers: { 'Content-Type': 'image/png', 'Cache-Control': 'public, max-age=86400', 'Access-Control-Allow-Origin': '*' }
+      })
     }
-  })
-}
+
+    // List all renders (dashboard)
+    if (route === '/renders' && method === 'GET') {
+      const list = await db.collection('renders').find({}).sort({ createdAt: -1 }).limit(200).toArray()
+      return corsify(NextResponse.json(list.map(({ _id, png, zip, ...rest }) => rest)))
+    }
+
+    // Approve a render
+    const renderApproveMatch = route.match(/^\/renders\/([^/]+)\/approve$/)
+    if (renderApproveMatch && method === 'POST') {
+      const id = renderApproveMatch[1]
+      await db.collection('renders').updateOne({ id }, { $set: { approved: true, approvedAt: new Date() } })
+      return corsify(NextResponse.json({ success: true }))
+    }
+
+    // Delete a render
+    const renderDeleteMatch = route.match(/^\/renders\/([^/]+)$/)
+    if (renderDeleteMatch && method === 'DELETE') {
+      const id = renderDeleteMatch[1]
+      await db.collection('renders').deleteOne({ id })
+      return corsify(NextResponse.json({ success: true }))
+    }
 
     return corsify(NextResponse.json({ error: `Route ${route} not found` }, { status: 404 }))
   } catch (error) {
