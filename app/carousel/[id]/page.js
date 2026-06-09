@@ -295,19 +295,22 @@ export default function CarouselManager() {
     <div className="h-screen flex flex-col bg-[#FAF7F2] dark:bg-[#0E0D0B] text-foreground overflow-hidden">
 
       {/* ── Header ─────────────────────────────────────────────────── */}
-      <header className="border-b-2 border-foreground/90 bg-[#FAF7F2] dark:bg-[#0E0D0B] px-4 py-2.5 flex items-center justify-between shrink-0">
-        <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => router.push('/')}><ArrowLeft className="w-4 h-4" /></Button>
-          <KandLogo size={26} />
+      <header className="border-b-2 border-foreground/90 bg-[#FAF7F2] dark:bg-[#0E0D0B] px-4 py-3 flex items-center justify-between shrink-0">
+        <div className="flex items-center gap-3 min-w-0">
+          <Button variant="ghost" size="icon" className="hover:bg-[#D4FF00] hover:text-foreground shrink-0" onClick={() => router.push('/')}><ArrowLeft className="w-4 h-4" /></Button>
+          <KandLogo size={30} />
+          <div className="hidden sm:inline-flex items-center gap-2 px-2.5 py-0.5 border border-indigo-400 rounded-full text-[10px] font-semibold uppercase tracking-widest shrink-0 text-indigo-400">
+            <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />
+            Carousel
+          </div>
           <Input value={canvas.name} onChange={e => update(c => ({ ...c, name: e.target.value }))}
-            className="w-44 font-semibold border-2 border-foreground/20 h-8 text-sm" />
-          <span className="text-[10px] bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 px-2 py-0.5 rounded-full font-bold uppercase tracking-wider">Carousel</span>
+            className="w-48 sm:w-64 font-semibold border-2 border-foreground/20 rounded-lg bg-card focus-visible:ring-[#D4FF00]" />
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1.5 sm:gap-2">
           <ThemeToggle />
           <Button size="sm" onClick={save} disabled={!hasChanges}
-            className={`rounded-full px-4 h-8 font-semibold text-xs ${hasChanges ? 'bg-foreground text-background' : 'bg-muted text-muted-foreground'}`}>
-            <Save className="w-3.5 h-3.5 mr-1.5" />{hasChanges ? 'Save' : 'Saved'}
+            className={`rounded-full px-5 font-semibold ${hasChanges ? 'bg-foreground text-background hover:bg-foreground/85' : 'bg-muted text-muted-foreground'}`}>
+            <Save className="w-4 h-4 mr-1.5" />{hasChanges ? 'Save' : 'Saved'}
           </Button>
         </div>
       </header>

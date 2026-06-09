@@ -1811,23 +1811,39 @@ function Editor() {
       </header>
       )}
       {isEmbedded && (
-        <div className="border-b border-foreground/10 bg-card px-3 py-1.5 flex items-center justify-between shrink-0 z-20">
-          <span className="text-[11px] text-muted-foreground font-medium truncate">
-            {canvas._carouselPageName ? `${canvas._carouselPageName} · ` : ''}{canvas.width}×{canvas.height}
-          </span>
-          {/* Save button removed from embedded view to avoid duplicate buttons with Carousel layout */}
-        </div>
+        <header className="border-b-2 border-foreground/90 bg-[#FAF7F2] dark:bg-[#0E0D0B] px-4 py-2.5 flex items-center justify-between shrink-0 z-20">
+          <div className="flex items-center gap-3 min-w-0">
+            <Button variant="ghost" size="icon" className="hover:bg-[#D4FF00] hover:text-foreground shrink-0"
+              onClick={() => router.push(`/carousel/${id}`)}>
+              <ArrowLeft className="w-4 h-4" />
+            </Button>
+            <KandLogo size={26} />
+            {canvas._carouselPageType && (
+              <span className="text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase shrink-0"
+                style={{
+                  background: canvas._carouselPageType === 'top_peer' ? '#D4FF00'
+                    : canvas._carouselPageType === 'bottom_peer' ? '#9AB800' : '#6366f1',
+                  color: '#000'
+                }}>
+                {canvas._carouselPageType.replace(/_/g, ' ')}
+              </span>
+            )}
+            <span className="text-xs font-semibold truncate text-foreground/80">
+              {canvas._carouselPageName || 'Page'}
+            </span>
+            <span className="text-[10px] text-muted-foreground shrink-0">{canvas.width}×{canvas.height}</span>
+          </div>
+          <Button size="sm" onClick={save} disabled={!hasChanges}
+            className={`rounded-full px-4 h-8 font-semibold text-xs shrink-0 ${hasChanges ? 'bg-foreground text-background hover:bg-foreground/85' : 'bg-muted text-muted-foreground'}`}>
+            <Save className="w-3.5 h-3.5 mr-1.5" />{hasChanges ? 'Save' : 'Saved'}
+          </Button>
+        </header>
       )}
 
       <ResizablePanelGroup direction="horizontal" className="flex-1 min-h-0">
         <ResizablePanel defaultSize={18} minSize={14} maxSize={32} className="min-w-0">
-        <Tabs defaultValue="design" className="h-full w-full border-r-2 border-foreground/90 bg-card flex flex-col min-h-0">
-          <TabsList className="grid grid-cols-2 rounded-none border-b-2 border-foreground/90 h-11 bg-[#FAF7F2] dark:bg-[#0E0D0B] p-0">
-            <TabsTrigger value="design" className="rounded-none data-[state=active]:bg-card data-[state=active]:border-b-2 data-[state=active]:border-[#D4FF00] font-bold tracking-widest text-xs uppercase">Design</TabsTrigger>
-            <TabsTrigger value="classes" className="rounded-none data-[state=active]:bg-card data-[state=active]:border-b-2 data-[state=active]:border-[#D4FF00] font-bold tracking-widest text-xs uppercase">Classes</TabsTrigger>
-          </TabsList>
-          
-          <TabsContent value="design" className="flex-1 flex flex-col p-3 m-0 space-y-1 min-h-0">
+        <div className="h-full w-full border-r-2 border-foreground/90 bg-card flex flex-col min-h-0">
+          <div className="flex-1 flex flex-col p-3 m-0 space-y-1 min-h-0">
             <p className="text-lg leading-none mb-2" style={BEBAS}>ADD</p>
           <div className="space-y-1.5">
             <Button variant="outline" className="w-full justify-start border-2 border-foreground/25 hover:bg-[#D4FF00] hover:text-foreground hover:border-foreground/90" onClick={addText}><Type className="w-4 h-4 mr-2" /> Text</Button>
@@ -1944,11 +1960,8 @@ function Editor() {
               </div>
             </div>
           )}
-          </TabsContent>
-          <TabsContent value="classes" className="flex-1 overflow-y-auto p-3 m-0 min-h-0">
-            <ClassesPanel canvas={canvas} setCanvas={setCanvas} />
-          </TabsContent>
-        </Tabs>
+          </div>
+        </div>
         </ResizablePanel>
 
         <ResizableHandle withHandle className="bg-foreground/20 w-0.5" />
@@ -2298,7 +2311,12 @@ function Editor() {
         <ResizableHandle withHandle className="bg-foreground/20 w-0.5" />
 
         <ResizablePanel defaultSize={24} minSize={16} maxSize={40} className="min-w-0">
-        <div className="h-full border-l-2 border-foreground/90 bg-card p-4 overflow-y-auto">
+        <Tabs defaultValue="properties" className="h-full flex flex-col border-l-2 border-foreground/90 bg-card min-h-0">
+          <TabsList className="grid grid-cols-2 rounded-none border-b-2 border-foreground/90 h-11 bg-[#FAF7F2] dark:bg-[#0E0D0B] p-0 shrink-0">
+            <TabsTrigger value="properties" className="rounded-none data-[state=active]:bg-card data-[state=active]:border-b-2 data-[state=active]:border-[#D4FF00] font-bold tracking-widest text-xs uppercase">Props</TabsTrigger>
+            <TabsTrigger value="canvas" className="rounded-none data-[state=active]:bg-card data-[state=active]:border-b-2 data-[state=active]:border-[#D4FF00] font-bold tracking-widest text-xs uppercase">Canvas</TabsTrigger>
+          </TabsList>
+          <TabsContent value="properties" className="flex-1 overflow-y-auto p-4 m-0 min-h-0">
           {selectedGroup ? (
             <GroupPropertiesPanel
               group={selectedGroup}
@@ -2402,7 +2420,24 @@ function Editor() {
               </div>
             </div>
           )}
-        </div>
+          </TabsContent>
+          <TabsContent value="canvas" className="flex-1 overflow-y-auto m-0 min-h-0" data-class-panel>
+            <div className="p-3 border-b-2 border-foreground/10">
+              <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Classes</p>
+            </div>
+            <div className="p-3">
+              <ClassesPanel canvas={canvas} setCanvas={setCanvas} />
+            </div>
+            <div className="border-t-2 border-foreground/10">
+              <div className="p-3 border-b border-foreground/10">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground">Dynamic Keys</p>
+              </div>
+              <div className="p-3">
+                <KeysPanel canvas={canvas} setCanvas={setCanvas} setDynamicKey={setDynamicKey} />
+              </div>
+            </div>
+          </TabsContent>
+        </Tabs>
         </ResizablePanel>
       </ResizablePanelGroup>
 
@@ -3462,6 +3497,65 @@ function ClassesPanel({ canvas, setCanvas }) {
           <p className="text-xs text-muted-foreground text-center py-4">No custom classes defined. Create one to use special inline styles.</p>
         )}
       </div>
+    </div>
+  )
+}
+
+function KeysPanel({ canvas, setCanvas, setDynamicKey }) {
+  const nodes = (canvas?.nodes || []).filter(n => n.type === 'text' || n.type === 'image')
+
+  return (
+    <div>
+      <p className="text-xs font-semibold uppercase text-muted-foreground mb-1 tracking-wide">Dynamic Keys</p>
+      <p className="text-xs text-muted-foreground mb-4">Assign a key to make a layer dynamic via the API.</p>
+
+      {nodes.length === 0 && (
+        <p className="text-xs text-muted-foreground text-center py-4">No text or image layers found.</p>
+      )}
+
+      <div className="space-y-3">
+        {nodes.map(n => {
+          const label = n.type === 'text'
+            ? (plainTextFromStyled(n.text || '') || 'Empty text').slice(0, 30)
+            : 'Image'
+          return (
+            <div key={n.id} className="border border-foreground/10 rounded-lg p-3 bg-background space-y-1.5">
+              <div className="flex items-center gap-2">
+                {n.type === 'text' ? <Type className="w-3.5 h-3.5 shrink-0 text-muted-foreground" /> : <ImageIcon className="w-3.5 h-3.5 shrink-0 text-muted-foreground" />}
+                <span className="text-xs truncate text-foreground/80">{label}</span>
+                {n.dynamic_key && (
+                  <span className="ml-auto text-[10px] bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 rounded shrink-0">DYN</span>
+                )}
+              </div>
+              <Input
+                className="h-7 text-xs font-mono"
+                placeholder="e.g. title_1"
+                defaultValue={n.dynamic_key || ''}
+                key={n.id + (n.dynamic_key || '')}
+                onBlur={(e) => setDynamicKey(n.id, e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+              />
+            </div>
+          )
+        })}
+      </div>
+
+      {nodes.length > 0 && (
+        <div className="mt-5 pt-4 border-t border-foreground/10">
+          <p className="text-xs font-semibold uppercase text-muted-foreground mb-2 tracking-wide">API Payload Preview</p>
+          <pre className="bg-muted rounded p-2 text-[10px] font-mono overflow-x-auto text-foreground/80 whitespace-pre-wrap break-all">
+            {JSON.stringify(
+              Object.fromEntries(
+                nodes.filter(n => n.dynamic_key).map(n => [n.dynamic_key, n.type === 'text' ? (plainTextFromStyled(n.text || '') || 'Sample') : 'https://image.url'])
+              ),
+              null, 2
+            )}
+          </pre>
+          {nodes.filter(n => n.dynamic_key).length === 0 && (
+            <p className="text-[10px] text-muted-foreground italic">Assign at least one key above to see the payload.</p>
+          )}
+        </div>
+      )}
     </div>
   )
 }
