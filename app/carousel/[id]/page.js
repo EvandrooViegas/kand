@@ -12,6 +12,7 @@ import {
 import { toast } from 'sonner'
 import { v4 as uuidv4 } from 'uuid'
 import { KandLogo } from '@/components/logo'
+import { CanvasPreview } from '@/components/CanvasPreview'
 
 const BEBAS = { fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.01em' }
 const PAGE_COLORS  = { top_peer: '#D4FF00', content: '#6366f1', bottom_peer: '#9AB800' }
@@ -55,8 +56,14 @@ export default function CarouselManager() {
     if (data.pages) data.pages = [...data.pages].sort((a, b) => a.order - b.order)
     setCanvas(data)
     savedStr.current = JSON.stringify(data)
-    if (data.pages?.length && !selectedPage) setSelectedPage(data.pages[0].id)
   }, [id])
+
+  // Initialize selectedPage when canvas loads for the first time
+  useEffect(() => {
+    if (canvas?.pages?.length && !selectedPage) {
+      setSelectedPage(canvas.pages[0].id)
+    }
+  }, [canvas?.pages, selectedPage])
 
   useEffect(() => { load() }, [load])
 
@@ -77,13 +84,34 @@ export default function CarouselManager() {
     if (res.ok) {
       savedStr.current = JSON.stringify(updated)
       setHasChanges(false)
-      toast.success('Saved')
     } else toast.error('Save failed')
+  }
+
+  // Autosave
+  useEffect(() => {
+    if (!hasChanges || !canvas) return
+    const timer = setTimeout(() => {
+      save()
+    }, 3000)
+    return () => clearTimeout(timer)
+  }, [hasChanges, canvas])
+
+  const enforcePeerTypes = (pages) => {
+    if (!pages || pages.length === 0) return []
+    return pages.map((p, i) => {
+      let type = 'content'
+      if (i === 0) type = 'top_peer'
+      if (i === pages.length - 1 && pages.length > 1) type = 'bottom_peer'
+      return { ...p, type, order: i }
+    })
   }
 
   const update = (updater) => {
     setCanvas(prev => {
-      const next = typeof updater === 'function' ? updater(prev) : updater
+      let next = typeof updater === 'function' ? updater(prev) : updater
+      if (next.pages) {
+        next = { ...next, pages: enforcePeerTypes(next.pages) }
+      }
       setHasChanges(JSON.stringify(next) !== savedStr.current)
       return next
     })
@@ -118,8 +146,7 @@ export default function CarouselManager() {
 
   const deletePage = (pageId) => {
     const pages = canvas.pages || []
-    const page  = pages.find(p => p.id === pageId)
-    if (!page || page.type !== 'content') return toast.error('Only content pages can be deleted')
+    if (pages.length <= 1) return toast.error('Cannot delete the last page')
     const newPages = pages.filter(p => p.id !== pageId).map((p, i) => ({ ...p, order: i }))
     update(c => ({ ...c, pages: newPages }))
     if (selectedPage === pageId) setSelectedPage(newPages[0]?.id || null)
@@ -128,11 +155,55 @@ export default function CarouselManager() {
   const movePage = (pageId, dir) => {
     const pages = [...(canvas.pages || [])]
     const idx   = pages.findIndex(p => p.id === pageId)
-    if (idx === -1 || pages[idx].type !== 'content') return
+    if (idx === -1) return
     const swap = dir === 'up' ? idx - 1 : idx + 1
-    if (swap < 0 || swap >= pages.length || pages[swap].type !== 'content') return
+    if (swap < 0 || swap >= pages.length) return
     ;[pages[idx], pages[swap]] = [pages[swap], pages[idx]]
     update(c => ({ ...c, pages: pages.map((p, i) => ({ ...p, order: i })) }))
+  }
+
+  const duplicatePage = (pageId) => {
+    const pages = canvas.pages || []
+    const idx = pages.findIndex(p => p.id === pageId)
+    if (idx === -1) return
+    const original = pages[idx]
+    
+    const idMap = {}
+    const newNodes = (original.nodes || []).map(n => {
+      const newId = uuidv4()
+      idMap[n.id] = newId
+      return { ...n, id: newId }
+    })
+    
+    const newGroups = (original.groups || []).map(g => {
+      const newId = uuidv4()
+      idMap[g.id] = newId
+      return {
+        ...g,
+        id: newId,
+        nodeIds: (g.nodeIds || []).map(nid => idMap[nid] || nid)
+      }
+    })
+
+    newNodes.forEach(n => {
+      if (n.groupId && idMap[n.groupId]) {
+        n.groupId = idMap[n.groupId]
+      }
+    })
+
+    const newPage = {
+      ...original,
+      id: uuidv4(),
+      name: `${original.name} (Copy)`,
+      nodes: newNodes,
+      groups: newGroups,
+      classes: JSON.parse(JSON.stringify(original.classes || {})),
+    }
+    
+    const newPages = [...pages]
+    newPages.splice(idx + 1, 0, newPage)
+    update(c => ({ ...c, pages: newPages.map((p, i) => ({ ...p, order: i })) }))
+    setSelectedPage(newPage.id)
   }
 
   const renamePage = (pageId, name) => {
@@ -257,6 +328,12 @@ export default function CarouselManager() {
                   style={{ borderColor: isActive ? color : color + '40' }}>
                   {/* Top color bar */}
                   <div className="h-1" style={{ background: color }} />
+                  
+                  {/* Page Preview Thumbnail */}
+                  <div className="relative w-full bg-muted/20 border-b border-foreground/10 overflow-hidden" style={{ aspectRatio: `${canvas.width} / ${canvas.height}` }}>
+                    <CanvasPreview canvas={{ ...canvas, type: 'single', nodes: page.nodes, background: page.background }} containerWidth={210} />
+                  </div>
+
                   <div className="p-2.5">
                     {/* Badge + type */}
                     <div className="flex items-center gap-2 mb-1">
@@ -269,31 +346,30 @@ export default function CarouselManager() {
                       </span>
                     </div>
                     {/* Name */}
-                    {isContent ? (
-                      <input value={page.name}
-                        onClick={e => e.stopPropagation()}
-                        onChange={e => renamePage(page.id, e.target.value)}
-                        className="text-xs w-full bg-transparent border-0 border-b border-foreground/20 outline-none pb-0.5 font-medium" />
-                    ) : (
-                      <p className="text-xs text-muted-foreground">{PAGE_DESC[page.type]}</p>
-                    )}
-                    {/* Content page controls */}
-                    {isContent && (
-                      <div className="flex items-center gap-1 mt-1.5" onClick={e => e.stopPropagation()}>
-                        <button onClick={() => movePage(page.id, 'up')} disabled={idx <= 1}
-                          className="h-5 w-5 flex items-center justify-center rounded hover:bg-muted text-muted-foreground disabled:opacity-20">
-                          <ChevronUp className="w-3 h-3" />
-                        </button>
-                        <button onClick={() => movePage(page.id, 'down')} disabled={idx >= pages.length - 2}
-                          className="h-5 w-5 flex items-center justify-center rounded hover:bg-muted text-muted-foreground disabled:opacity-20">
-                          <ChevronDown className="w-3 h-3" />
-                        </button>
-                        <button onClick={() => deletePage(page.id)}
-                          className="ml-auto h-5 w-5 flex items-center justify-center rounded hover:bg-destructive hover:text-destructive-foreground text-muted-foreground transition">
-                          <Trash2 className="w-2.5 h-2.5" />
-                        </button>
-                      </div>
-                    )}
+                    <input value={page.name}
+                      onClick={e => e.stopPropagation()}
+                      onChange={e => renamePage(page.id, e.target.value)}
+                      className="text-xs w-full bg-transparent border-0 border-b border-foreground/20 outline-none pb-0.5 font-medium" />
+                    
+                    {/* Page controls */}
+                    <div className="flex items-center gap-1 mt-1.5" onClick={e => e.stopPropagation()}>
+                      <button onClick={() => movePage(page.id, 'up')} disabled={idx <= 0}
+                        className="h-5 w-5 flex items-center justify-center rounded hover:bg-muted text-muted-foreground disabled:opacity-20">
+                        <ChevronUp className="w-3 h-3" />
+                      </button>
+                      <button onClick={() => movePage(page.id, 'down')} disabled={idx >= pages.length - 1}
+                        className="h-5 w-5 flex items-center justify-center rounded hover:bg-muted text-muted-foreground disabled:opacity-20">
+                        <ChevronDown className="w-3 h-3" />
+                      </button>
+                      <button onClick={() => duplicatePage(page.id)}
+                        className="h-5 w-5 flex items-center justify-center rounded hover:bg-muted text-muted-foreground transition">
+                        <Copy className="w-2.5 h-2.5" />
+                      </button>
+                      <button onClick={() => deletePage(page.id)} disabled={pages.length <= 1}
+                        className="ml-auto h-5 w-5 flex items-center justify-center rounded hover:bg-destructive hover:text-destructive-foreground text-muted-foreground transition disabled:opacity-20">
+                        <Trash2 className="w-2.5 h-2.5" />
+                      </button>
+                    </div>
                   </div>
                 </div>
               )

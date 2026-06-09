@@ -1191,7 +1191,6 @@ function Editor() {
         body: JSON.stringify({ ...parent, pages: updatedPages }),
       })
       if (res.ok) {
-        toast.success('Page saved!')
         savedCanvasRef.current = JSON.stringify(canvas)
         setHasChanges(false)
         // Notify parent frame (carousel editor) that this page was saved
@@ -1205,7 +1204,6 @@ function Editor() {
     // Normal single canvas save
     const res = await fetch(`/api/canvases/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(canvas) })
     if (res.ok) {
-      toast.success('Saved!')
       savedCanvasRef.current = JSON.stringify(canvas)
       setHasChanges(false)
       // Notify parent frame (carousel editor) that this page was saved
