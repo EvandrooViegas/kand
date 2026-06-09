@@ -672,14 +672,6 @@ function Editor() {
   }, [canvas?.id, canvas?.nodes?.length, renderDialog])
 
   useEffect(() => {
-    if (!hasChanges || !canvas) return
-    const timer = setTimeout(() => {
-      save()
-    }, 3000)
-    return () => clearTimeout(timer)
-  }, [hasChanges, canvas])
-
-  useEffect(() => {
     const handler = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
       
@@ -974,6 +966,18 @@ function Editor() {
       nodes: applyPatchWithReflow(c.nodes, nodeId, patch, c.groups || []),
     }), skipHistory)
   }
+  // Set a node's dynamic key while preventing duplicates across the canvas
+  const setDynamicKey = (nodeId, rawKey) => {
+    const key = (rawKey || '').trim()
+    if (key) {
+      const clash = (canvas?.nodes || []).some((n) => n.id !== nodeId && (n.dynamic_key || '').trim() === key)
+      if (clash) {
+        toast.error(`Dynamic key "${key}" is already in use`)
+        return
+      }
+    }
+    updateNode(nodeId, { dynamic_key: key })
+  }
   const deleteNode = (nodeId, skipClear = false) => {
     setCanvas((c) => ({
       ...c,
@@ -1212,6 +1216,17 @@ function Editor() {
       }
     } else toast.error('Save failed')
   }
+
+  // Keep a ref to the latest save so the autosave effect stays stable
+  const saveRef = useRef(save)
+  saveRef.current = save
+
+  // Debounced autosave — fires in the background without reloading anything
+  useEffect(() => {
+    if (!hasChanges || !canvas) return
+    const t = setTimeout(() => { saveRef.current() }, 2000)
+    return () => clearTimeout(t)
+  }, [hasChanges, canvas])
 
   const testRender = async () => {
     setRendering(true); setRenderResult(null)
@@ -2380,7 +2395,7 @@ function Editor() {
                 {(selected.type === 'text' || selected.type === 'image') && (
                   <div className="pt-3 border-t">
                     <Label className="text-xs flex items-center gap-2 mb-1">Dynamic Key <span className="text-[10px] text-muted-foreground font-normal">(optional)</span></Label>
-                    <Input placeholder="e.g. text_1" value={selected.dynamic_key || ''} onChange={(e) => updateNode(selected.id, { dynamic_key: e.target.value })} />
+                    <Input placeholder="e.g. text_1" defaultValue={selected.dynamic_key || ''} key={selected.id + (selected.dynamic_key || '')} onBlur={(e) => setDynamicKey(selected.id, e.target.value)} onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }} />
                     <p className="text-xs text-muted-foreground mt-1">Set this to make the element dynamic via the API.</p>
                   </div>
                 )}
