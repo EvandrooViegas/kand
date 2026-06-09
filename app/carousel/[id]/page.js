@@ -5,9 +5,11 @@ import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import {
   ArrowLeft, Plus, Trash2, Save, Moon, Sun,
-  ChevronUp, ChevronDown, Copy, Check, Layers, Edit3, FileImage, Monitor
+  ChevronUp, ChevronDown, Copy, Check, Layers, Edit3, FileImage, Monitor,
+  KeyRound, Palette, Code2
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { v4 as uuidv4 } from 'uuid'
@@ -252,6 +254,43 @@ export default function CarouselManager() {
     bottom_peer_data: peerKeys('bottom_peer'),
   }
 
+  // Aggregate every dynamic key across all pages of the carousel
+  const allKeys = []
+  const seenKeys = new Map()
+  pages.forEach((p) => {
+    ;(p.nodes || []).forEach((n) => {
+      const k = (n.dynamic_key || '').trim()
+      if (!k) return
+      if (!seenKeys.has(k)) {
+        const entry = { key: k, type: n.type, pages: [] }
+        seenKeys.set(k, entry)
+        allKeys.push(entry)
+      }
+      const entry = seenKeys.get(k)
+      if (!entry.pages.includes(p.name)) entry.pages.push(p.name)
+    })
+  })
+
+  // Aggregate every custom class across all pages of the carousel
+  const allClasses = []
+  const seenClasses = new Map()
+  pages.forEach((p) => {
+    Object.entries(p.classes || {}).forEach(([name, cls]) => {
+      if (!seenClasses.has(name)) {
+        const entry = { name, type: cls?.type || 'text', pages: [] }
+        seenClasses.set(name, entry)
+        allClasses.push(entry)
+      }
+      const entry = seenClasses.get(name)
+      if (!entry.pages.includes(p.name)) entry.pages.push(p.name)
+    })
+  })
+
+  const goToPage = (pageName) => {
+    const pg = pages.find((p) => p.name === pageName)
+    if (pg) setSelectedPage(pg.id)
+  }
+
   return (
     <div className="h-screen flex flex-col bg-[#FAF7F2] dark:bg-[#0E0D0B] text-foreground overflow-hidden">
 
@@ -424,47 +463,121 @@ export default function CarouselManager() {
           </div>
         </div>
 
-        {/* ── Right: API panel ──────────────────────────────────────── */}
+        {/* ── Right: API / Keys / Classes panel ─────────────────────── */}
         <div className="w-60 shrink-0 border-l-2 border-foreground/90 bg-card flex flex-col min-h-0">
-          <div className="p-3 border-b-2 border-foreground/10 flex items-center justify-between">
-            <p className="text-[10px] font-bold uppercase tracking-widest">API Payload</p>
-            <button onClick={() => {
-              navigator.clipboard.writeText(JSON.stringify(apiExample, null, 2))
-              setCopiedApi(true); setTimeout(() => setCopiedApi(false), 1500)
-              toast.success('Copied')
-            }} className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition">
-              {copiedApi ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
-              {copiedApi ? 'Copied' : 'Copy'}
-            </button>
-          </div>
-          <div className="p-3 border-b border-foreground/10">
-            <p className="text-[10px] text-muted-foreground">
-              POST to <code className="bg-muted px-1 rounded">/api/render</code>
-              → returns <code className="bg-muted px-1 rounded">.zip</code>
-            </p>
-          </div>
-          <div className="flex-1 overflow-y-auto p-3">
-            <pre className="text-[9px] leading-relaxed text-muted-foreground whitespace-pre-wrap break-words">
-              {JSON.stringify(apiExample, null, 2)}
-            </pre>
-          </div>
-          {/* ZIP output list */}
-          <div className="p-3 border-t border-foreground/10 space-y-1.5">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2">Output ZIP</p>
-            {pages.map((p, i) => (
-              <div key={p.id}
-                className={`flex items-center gap-1.5 text-[10px] rounded px-1.5 py-1 transition ${
-                  selectedPage === p.id ? 'bg-muted font-semibold' : 'text-muted-foreground'
-                }`}>
-                <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: PAGE_COLORS[p.type] }} />
-                <code className="bg-muted/60 px-1 rounded text-[9px] truncate">
-                  {p.type === 'top_peer'    ? '00-top-peer.png'
-                  : p.type === 'bottom_peer' ? `${String(i).padStart(2,'0')}-bottom-peer.png`
-                  : `${String(i).padStart(2,'0')}-${(p.name||'page').replace(/\s+/g,'-').toLowerCase()}.png`}
-                </code>
+          <Tabs defaultValue="api" className="flex flex-col h-full min-h-0">
+            <TabsList className="grid grid-cols-3 rounded-none border-b-2 border-foreground/90 h-10 bg-[#FAF7F2] dark:bg-[#0E0D0B] p-0 shrink-0">
+              <TabsTrigger value="api" className="rounded-none data-[state=active]:bg-card data-[state=active]:border-b-2 data-[state=active]:border-[#D4FF00] font-bold tracking-wider text-[10px] uppercase gap-1">
+                <Code2 className="w-3 h-3" />API
+              </TabsTrigger>
+              <TabsTrigger value="keys" className="rounded-none data-[state=active]:bg-card data-[state=active]:border-b-2 data-[state=active]:border-[#D4FF00] font-bold tracking-wider text-[10px] uppercase gap-1">
+                <KeyRound className="w-3 h-3" />Keys
+              </TabsTrigger>
+              <TabsTrigger value="classes" className="rounded-none data-[state=active]:bg-card data-[state=active]:border-b-2 data-[state=active]:border-[#D4FF00] font-bold tracking-wider text-[10px] uppercase gap-1">
+                <Palette className="w-3 h-3" />Classes
+              </TabsTrigger>
+            </TabsList>
+
+            {/* API tab */}
+            <TabsContent value="api" className="flex-1 flex flex-col m-0 min-h-0">
+              <div className="p-3 border-b-2 border-foreground/10 flex items-center justify-between">
+                <p className="text-[10px] font-bold uppercase tracking-widest">API Payload</p>
+                <button onClick={() => {
+                  navigator.clipboard.writeText(JSON.stringify(apiExample, null, 2))
+                  setCopiedApi(true); setTimeout(() => setCopiedApi(false), 1500)
+                  toast.success('Copied')
+                }} className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition">
+                  {copiedApi ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
+                  {copiedApi ? 'Copied' : 'Copy'}
+                </button>
               </div>
-            ))}
-          </div>
+              <div className="p-3 border-b border-foreground/10">
+                <p className="text-[10px] text-muted-foreground">
+                  POST to <code className="bg-muted px-1 rounded">/api/render</code>
+                  → returns <code className="bg-muted px-1 rounded">.zip</code>
+                </p>
+              </div>
+              <div className="flex-1 overflow-y-auto p-3">
+                <pre className="text-[9px] leading-relaxed text-muted-foreground whitespace-pre-wrap break-words">
+                  {JSON.stringify(apiExample, null, 2)}
+                </pre>
+              </div>
+              {/* ZIP output list */}
+              <div className="p-3 border-t border-foreground/10 space-y-1.5">
+                <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground mb-2">Output ZIP</p>
+                {pages.map((p, i) => (
+                  <div key={p.id}
+                    className={`flex items-center gap-1.5 text-[10px] rounded px-1.5 py-1 transition ${
+                      selectedPage === p.id ? 'bg-muted font-semibold' : 'text-muted-foreground'
+                    }`}>
+                    <div className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: PAGE_COLORS[p.type] }} />
+                    <code className="bg-muted/60 px-1 rounded text-[9px] truncate">
+                      {p.type === 'top_peer'    ? '00-top-peer.png'
+                      : p.type === 'bottom_peer' ? `${String(i).padStart(2,'0')}-bottom-peer.png`
+                      : `${String(i).padStart(2,'0')}-${(p.name||'page').replace(/\s+/g,'-').toLowerCase()}.png`}
+                    </code>
+                  </div>
+                ))}
+              </div>
+            </TabsContent>
+
+            {/* Keys tab — every dynamic key across the whole carousel */}
+            <TabsContent value="keys" className="flex-1 overflow-y-auto p-3 m-0 min-h-0">
+              <p className="text-[10px] font-bold uppercase tracking-widest mb-1">Dynamic Keys</p>
+              <p className="text-[10px] text-muted-foreground mb-3">{allKeys.length} key{allKeys.length === 1 ? '' : 's'} across all pages.</p>
+              {allKeys.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground italic">No dynamic keys yet. Set a Dynamic Key on a text or image element inside any page.</p>
+              ) : (
+                <div className="space-y-1.5">
+                  {allKeys.map((k) => (
+                    <div key={k.key} className="rounded border border-border px-2 py-1.5">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        {k.type === 'image' ? <FileImage className="w-3 h-3 text-muted-foreground shrink-0" /> : <Edit3 className="w-3 h-3 text-muted-foreground shrink-0" />}
+                        <code className="font-mono text-[11px] bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 px-1.5 py-0.5 rounded truncate">{`{${k.key}}`}</code>
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {k.pages.map((pn) => (
+                          <button key={pn} onClick={() => goToPage(pn)}
+                            className="text-[9px] bg-muted hover:bg-muted/70 text-muted-foreground px-1.5 py-0.5 rounded transition">
+                            {pn}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </TabsContent>
+
+            {/* Classes tab — every custom class across the whole carousel */}
+            <TabsContent value="classes" className="flex-1 overflow-y-auto p-3 m-0 min-h-0">
+              <p className="text-[10px] font-bold uppercase tracking-widest mb-1">Custom Classes</p>
+              <p className="text-[10px] text-muted-foreground mb-3">{allClasses.length} class{allClasses.length === 1 ? '' : 'es'} across all pages.</p>
+              {allClasses.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground italic">No custom classes yet. Create classes inside a page editor to reuse styles.</p>
+              ) : (
+                <div className="space-y-1.5">
+                  {allClasses.map((c) => (
+                    <div key={c.name} className="rounded border border-border px-2 py-1.5">
+                      <div className="flex items-center gap-1.5 mb-1">
+                        <Palette className="w-3 h-3 text-muted-foreground shrink-0" />
+                        <code className="font-mono text-[11px] bg-muted px-1.5 py-0.5 rounded truncate">{c.name}</code>
+                        <span className="text-[8px] uppercase tracking-wider text-muted-foreground ml-auto shrink-0">{c.type}</span>
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {c.pages.map((pn) => (
+                          <button key={pn} onClick={() => goToPage(pn)}
+                            className="text-[9px] bg-muted hover:bg-muted/70 text-muted-foreground px-1.5 py-0.5 rounded transition">
+                            {pn}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </TabsContent>
+          </Tabs>
         </div>
       </div>
     </div>
