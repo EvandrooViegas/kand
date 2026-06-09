@@ -281,6 +281,7 @@ function Editor() {
   const id = params.id
   const [canvasState, setCanvasState] = useState(null)
   const [hasChanges, setHasChanges] = useState(false)
+  const [isEmbedded, setIsEmbedded] = useState(false)
   const savedCanvasRef = useRef(null)
   const historyRef = useRef({ past: [], future: [] })
   const clipboardRef = useRef([])
@@ -358,6 +359,8 @@ function Editor() {
   const [isDraggingOverBase, setIsDraggingOverBase] = useState(false)
   const [snapLines, setSnapLines] = useState([])
   const [selectionRect, setSelectionRect] = useState(null)
+  const [marqueeStart, setMarqueeStart] = useState(null)
+  const [marqueeEnd, setMarqueeEnd] = useState(null)
   const [textFormat, setTextFormat] = useState({ bold: false, italic: false, underline: false, color: '#000000', align: 'left' })
 
   const tagsToHtml = useCallback((text) => {
@@ -586,6 +589,11 @@ function Editor() {
   }, [editingId, htmlToTags])
 
   useEffect(() => {
+    // Detect if running inside an iframe (carousel embed)
+    try { setIsEmbedded(window.self !== window.top) } catch { setIsEmbedded(true) }
+  }, [])
+
+  useEffect(() => {
     fetch(`/api/canvases/${id}`).then((r) => r.json()).then((data) => {
       if (data.error) { toast.error(data.error); router.push('/') } else {
         // If editing a specific carousel page, use that page's design data
@@ -664,20 +672,36 @@ function Editor() {
   }, [canvas?.id, canvas?.nodes?.length, renderDialog])
 
   useEffect(() => {
+    if (!hasChanges || !canvas) return
+    const timer = setTimeout(() => {
+      save()
+    }, 3000)
+    return () => clearTimeout(timer)
+  }, [hasChanges, canvas])
+
+  useEffect(() => {
     const handler = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
       
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
         if (selectedIds.length > 0) {
           clipboardRef.current = (canvasState?.nodes || []).filter(n => selectedIds.includes(n.id))
+          try { localStorage.setItem('kand-clipboard', JSON.stringify(clipboardRef.current)) } catch (err) {}
           toast.success(`${clipboardRef.current.length} copied`)
         }
         return
       }
 
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'v') {
-        if (clipboardRef.current && clipboardRef.current.length > 0) {
-          const newNodes = clipboardRef.current.map(n => ({
+        let items = clipboardRef.current
+        if (!items || items.length === 0) {
+          try {
+            const stored = localStorage.getItem('kand-clipboard')
+            if (stored) items = JSON.parse(stored)
+          } catch (err) {}
+        }
+        if (items && items.length > 0) {
+          const newNodes = items.map(n => ({
             ...n,
             id: uuidv4(),
             groupId: undefined,
@@ -689,6 +713,13 @@ function Editor() {
           setSelectedGroupId(null)
           e.preventDefault()
         }
+        return
+      }
+
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a') {
+        e.preventDefault()
+        setSelectedIds((canvasState?.nodes || []).map(n => n.id))
+        setSelectedGroupId(null)
         return
       }
 
@@ -1694,6 +1725,7 @@ function Editor() {
         </div>
       )}
       <div ref={measureRef} aria-hidden="true" style={{ position: 'fixed', visibility: 'hidden', pointerEvents: 'none', left: -99999, top: -99999, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }} />
+      {!isEmbedded && (
       <header className="border-b-2 border-foreground/90 bg-[#FAF7F2] dark:bg-[#0E0D0B] px-4 py-3 flex items-center justify-between shrink-0 z-20">
         <div className="flex items-center gap-3 min-w-0">
           <Button variant="ghost" size="icon" className="hover:bg-[#D4FF00] hover:text-foreground shrink-0"
@@ -1764,6 +1796,15 @@ function Editor() {
           </Button>
         </div>
       </header>
+      )}
+      {isEmbedded && (
+        <div className="border-b border-foreground/10 bg-card px-3 py-1.5 flex items-center justify-between shrink-0 z-20">
+          <span className="text-[11px] text-muted-foreground font-medium truncate">
+            {canvas._carouselPageName ? `${canvas._carouselPageName} · ` : ''}{canvas.width}×{canvas.height}
+          </span>
+          {/* Save button removed from embedded view to avoid duplicate buttons with Carousel layout */}
+        </div>
+      )}
 
       <ResizablePanelGroup direction="horizontal" className="flex-1 min-h-0">
         <ResizablePanel defaultSize={18} minSize={14} maxSize={32} className="min-w-0">
@@ -1904,7 +1945,50 @@ function Editor() {
           ref={canvasViewportRef}
           className="h-full w-full overflow-auto flex items-center justify-center p-6 bg-[#FAF7F2] dark:bg-[#0E0D0B]"
           style={{ backgroundImage: 'radial-gradient(circle at 1px 1px, hsl(var(--foreground) / 0.08) 1px, transparent 0)', backgroundSize: '20px 20px' }}
-          onMouseDown={() => clearSelection()}
+          onMouseDown={(e) => {
+            if (e.target !== canvasViewportRef.current) return
+            if (!e.shiftKey && !e.ctrlKey && !e.metaKey) clearSelection()
+            if (!canvasRef.current) return
+            const rect = canvasRef.current.getBoundingClientRect()
+            const x = (e.clientX - rect.left) / scale
+            const y = (e.clientY - rect.top) / scale
+            setMarqueeStart({ x, y })
+            setMarqueeEnd({ x, y })
+          }}
+          onMouseMove={(e) => {
+            if (marqueeStart && canvasRef.current) {
+              const rect = canvasRef.current.getBoundingClientRect()
+              const x = (e.clientX - rect.left) / scale
+              const y = (e.clientY - rect.top) / scale
+              setMarqueeEnd({ x, y })
+            }
+          }}
+          onMouseUp={(e) => {
+            if (marqueeStart && marqueeEnd && canvas?.nodes) {
+              const minX = Math.min(marqueeStart.x, marqueeEnd.x)
+              const maxX = Math.max(marqueeStart.x, marqueeEnd.x)
+              const minY = Math.min(marqueeStart.y, marqueeEnd.y)
+              const maxY = Math.max(marqueeStart.y, marqueeEnd.y)
+              if (maxX - minX > 5 || maxY - minY > 5) {
+                const selected = canvas.nodes.filter(n => {
+                  const nw = n.width || 0
+                  const nh = n.height || 0
+                  return !(n.x > maxX || n.x + nw < minX || n.y > maxY || n.y + nh < minY)
+                }).map(n => n.id)
+                if (e.shiftKey || e.ctrlKey || e.metaKey) {
+                  setSelectedIds(prev => [...new Set([...prev, ...selected])])
+                } else {
+                  setSelectedIds(selected)
+                }
+              }
+            }
+            setMarqueeStart(null)
+            setMarqueeEnd(null)
+          }}
+          onMouseLeave={() => {
+            setMarqueeStart(null)
+            setMarqueeEnd(null)
+          }}
           onDragOver={(e) => { e.preventDefault(); if (e.dataTransfer.types.includes('Files')) setIsDraggingOverBase(true); }}
           onDragLeave={(e) => { if (e.currentTarget === e.target) setIsDraggingOverBase(false); }}
           onDrop={(e) => { e.preventDefault(); setIsDraggingOverBase(false); handleRootDrop(e); }}>
@@ -2004,6 +2088,21 @@ function Editor() {
 
               {/* Unclipped overlay — selection outline & handles visible outside paper (Canva-style) */}
               <div style={{ position: 'absolute', inset: 0, overflow: 'visible', pointerEvents: 'none' }}>
+              
+              {/* Marquee Selection Rectangle */}
+              {marqueeStart && marqueeEnd && (
+                <div style={{
+                  position: 'absolute',
+                  left: Math.min(marqueeStart.x, marqueeEnd.x),
+                  top: Math.min(marqueeStart.y, marqueeEnd.y),
+                  width: Math.abs(marqueeEnd.x - marqueeStart.x),
+                  height: Math.abs(marqueeEnd.y - marqueeStart.y),
+                  border: `${1/scale}px solid #3b82f6`,
+                  backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                  pointerEvents: 'none',
+                  zIndex: 9999
+                }} />
+              )}
               
               {/* Selection Overlay (handles drag, resize, rotate, and stays on top!) */}
               {selectedGroupId && (() => {

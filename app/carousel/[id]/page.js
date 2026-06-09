@@ -43,7 +43,8 @@ export default function CarouselManager() {
   const { id } = useParams()
   const [canvas, setCanvas]         = useState(null)
   const [hasChanges, setHasChanges] = useState(false)
-  const [selectedPage, setSelectedPage] = useState(null) // page id for highlight only
+  const [selectedPage, setSelectedPage] = useState(null)
+  const [iframeKey, setIframeKey]   = useState(0)  // bump to force iframe reload
   const [copiedApi, setCopiedApi]   = useState(false)
   const savedStr = useRef(null)
 
@@ -88,9 +89,19 @@ export default function CarouselManager() {
     })
   }
 
-  // Change canvas dimensions globally (affects all pages since design is shared)
-  const setDimensions = (w, h) => {
-    update(c => ({ ...c, width: w, height: h }))
+  // Change canvas dimensions globally — persists immediately so iframe reloads at correct size
+  const setDimensions = async (w, h) => {
+    const next = { ...canvas, width: w, height: h }
+    setCanvas(next)
+    setHasChanges(false)
+    try {
+      await fetch(`/api/canvases/${id}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(next),
+      })
+      savedStr.current = JSON.stringify(next)
+      setIframeKey(k => k + 1) // reload iframe with new dimensions
+    } catch { toast.error('Failed to update dimensions') }
   }
 
   const addContentPage = () => {
@@ -136,18 +147,29 @@ export default function CarouselManager() {
 
   const pages        = [...(canvas.pages || [])].sort((a, b) => a.order - b.order)
   const contentPages = pages.filter(p => p.type === 'content')
-  const dynamicKeys  = (canvas.nodes || []).filter(n => n.dynamic_key).map(n => n.dynamic_key)
 
-  const keyVal = (k) => {
-    const n = (canvas.nodes || []).find(nd => nd.dynamic_key === k)
+  // Collect dynamic keys from every page so the API example is complete
+  const allNodes = pages.flatMap(p => p.nodes || [])
+  const keyVal = (nodes, k) => {
+    const n = nodes.find(nd => nd.dynamic_key === k)
     return n?.type === 'image' ? 'https://image.url' : 'your text'
   }
-  const peerObj = (suffix) => Object.fromEntries(dynamicKeys.map(k => [`${k}_${suffix}`, keyVal(k)]))
+  const peerKeys = (type) => {
+    const page = pages.find(p => p.type === type)
+    const nodes = page?.nodes || []
+    const suffix = type === 'top_peer' ? 'top' : 'bottom'
+    return Object.fromEntries(
+      nodes.filter(n => n.dynamic_key).map(n => [`${n.dynamic_key}_${suffix}`, keyVal(nodes, n.dynamic_key)])
+    )
+  }
   const apiExample = {
     canva_id: canvas.id,
-    top_peer_data:    peerObj('top'),
-    content:          contentPages.map((_, i) => Object.fromEntries(dynamicKeys.map(k => [`${k}_${i + 1}`, keyVal(k)]))),
-    bottom_peer_data: peerObj('bottom'),
+    top_peer_data: peerKeys('top_peer'),
+    content: contentPages.map((p, i) => Object.fromEntries(
+      (p.nodes || []).filter(n => n.dynamic_key)
+        .map(n => [`${n.dynamic_key}_${i + 1}`, keyVal(p.nodes, n.dynamic_key)])
+    )),
+    bottom_peer_data: peerKeys('bottom_peer'),
   }
 
   return (
@@ -211,19 +233,6 @@ export default function CarouselManager() {
               </div>
             </div>
             <p className="text-[9px] text-muted-foreground">Applies to all pages instantly.</p>
-          </div>
-
-          {/* Shared design info */}
-          <div className="p-3 border-b-2 border-foreground/10 space-y-2">
-            <p className="text-[10px] font-bold uppercase tracking-widest text-muted-foreground flex items-center gap-1.5">
-              <FileImage className="w-3 h-3" />Shared Design
-            </p>
-            <p className="text-[10px] text-muted-foreground leading-relaxed">
-              One design used by all pages. Edit it in the canvas — every slide inherits it.
-            </p>
-            <div className="text-[10px] text-muted-foreground">
-              {canvas.nodes?.length || 0} layers · {dynamicKeys.length} dynamic key{dynamicKeys.length !== 1 ? 's' : ''}
-            </div>
           </div>
 
           {/* Add content page */}
@@ -292,23 +301,41 @@ export default function CarouselManager() {
           </div>
         </div>
 
-        {/* ── Center: shared canvas editor ──────────────────────────── */}
+        {/* ── Center: page editor iframe ─────────────────────────── */}
         <div className="flex-1 flex flex-col min-w-0">
           {/* Info bar */}
           <div className="h-8 border-b border-foreground/10 bg-muted/20 flex items-center px-4 gap-2 shrink-0">
-            <Layers className="w-3.5 h-3.5 text-muted-foreground" />
-            <span className="text-[11px] text-muted-foreground">
-              Shared design · {canvas.width}×{canvas.height} · editing updates all {pages.length} pages
-            </span>
+            {selectedPage ? (() => {
+              const pg = pages.find(p => p.id === selectedPage)
+              const color = PAGE_COLORS[pg?.type] || '#888'
+              return (
+                <>
+                  <div className="w-2 h-2 rounded-full shrink-0" style={{ background: color }} />
+                  <span className="text-[11px] font-semibold" style={{ color }}>{PAGE_LABELS[pg?.type]}</span>
+                  <span className="text-[11px] text-muted-foreground">·</span>
+                  <span className="text-[11px] text-muted-foreground">{pg?.name}</span>
+                  <span className="text-[11px] text-muted-foreground ml-auto">{canvas.width}×{canvas.height}</span>
+                </>
+              )
+            })() : (
+              <span className="text-[11px] text-muted-foreground">Select a page to edit</span>
+            )}
           </div>
           <div className="flex-1 min-h-0">
-            <iframe
-              key={`${id}-${canvas.width}-${canvas.height}`}
-              src={`/editor/${id}`}
-              className="w-full h-full border-0"
-              title="Shared canvas editor"
-              allow="clipboard-read; clipboard-write"
-            />
+            {selectedPage ? (
+              <iframe
+                key={`${selectedPage}-${iframeKey}`}
+                src={`/editor/${id}?page=${selectedPage}`}
+                className="w-full h-full border-0"
+                title="Page editor"
+                allow="clipboard-read; clipboard-write"
+              />
+            ) : (
+              <div className="h-full flex items-center justify-center text-muted-foreground flex-col gap-3">
+                <Layers className="w-10 h-10 opacity-30" />
+                <p className="text-sm">Select a page from the left panel</p>
+              </div>
+            )}
           </div>
         </div>
 

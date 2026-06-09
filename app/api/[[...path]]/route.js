@@ -70,24 +70,26 @@ async function handleRoute(request, { params }) {
     if (route === '/canvases' && method === 'POST') {
       const body = await request.json().catch(() => ({}))
       const isCarousel = body.type === 'carousel'
+      const w = body.width || 1080
+      const h = body.height || 1080
+      const bg = body.background || '#ffffff'
       const newCanvas = {
         id: uuidv4(),
         name: body.name || 'Untitled Canvas',
         type: isCarousel ? 'carousel' : 'single',
-        width: body.width || 1080,
-        height: body.height || 1080,
-        background: body.background || '#ffffff',
-        // Shared design — nodes/groups/classes live here for both single and carousel
+        width: w,
+        height: h,
+        background: bg,
         nodes: [],
         groups: [],
         classes: {},
-        // Carousel-specific: pages are just slots with type + name + order.
-        // No per-page design data — the shared design above is used for every page.
+        // Carousel: pages each have their own independent design.
+        // width/height are stored at root and shared (global preset).
         ...(isCarousel ? {
           pages: [
-            { id: uuidv4(), type: 'top_peer',    name: 'Top Peer (Hook)',   order: 0 },
-            { id: uuidv4(), type: 'content',     name: 'Page 1',            order: 1 },
-            { id: uuidv4(), type: 'bottom_peer', name: 'Bottom Peer (CTA)', order: 2 },
+            { id: uuidv4(), type: 'top_peer',    name: 'Top Peer (Hook)',   order: 0, nodes: [], groups: [], classes: {}, background: bg },
+            { id: uuidv4(), type: 'content',     name: 'Page 1',            order: 1, nodes: [], groups: [], classes: {}, background: bg },
+            { id: uuidv4(), type: 'bottom_peer', name: 'Bottom Peer (CTA)', order: 2, nodes: [], groups: [], classes: {}, background: bg },
           ]
         } : {}),
         createdAt: new Date(),
@@ -241,14 +243,14 @@ if (uploadMatch && method === 'GET') {
             Object.assign(pageData, raw)
           }
 
-          // All pages share the same design — use the canvas-level nodes/groups/classes.
-          // Only the dynamic data differs per page.
+          // Each page has its own design. Width/height come from root canvas (global).
           const pageCanvas = {
             ...canvas,
-            nodes: canvas.nodes || [],
-            groups: canvas.groups || [],
-            classes: canvas.classes || {},
-            background: canvas.background,
+            nodes:      page.nodes      || [],
+            groups:     page.groups     || [],
+            classes:    page.classes    || {},
+            background: page.background || canvas.background,
+            // width/height always from root
           }
           try {
             const png = await renderCanvasToPng(pageCanvas, pageData)
