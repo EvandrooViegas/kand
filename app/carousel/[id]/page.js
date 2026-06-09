@@ -87,15 +87,6 @@ export default function CarouselManager() {
     } else toast.error('Save failed')
   }
 
-  // Autosave
-  useEffect(() => {
-    if (!hasChanges || !canvas) return
-    const timer = setTimeout(() => {
-      save()
-    }, 3000)
-    return () => clearTimeout(timer)
-  }, [hasChanges, canvas])
-
   const enforcePeerTypes = (pages) => {
     if (!pages || pages.length === 0) return []
     return pages.map((p, i) => {

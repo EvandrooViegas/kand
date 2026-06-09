@@ -672,14 +672,6 @@ function Editor() {
   }, [canvas?.id, canvas?.nodes?.length, renderDialog])
 
   useEffect(() => {
-    if (!hasChanges || !canvas) return
-    const timer = setTimeout(() => {
-      save()
-    }, 3000)
-    return () => clearTimeout(timer)
-  }, [hasChanges, canvas])
-
-  useEffect(() => {
     const handler = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
       
