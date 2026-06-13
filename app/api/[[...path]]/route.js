@@ -338,6 +338,181 @@ if (uploadMatch && method === 'GET') {
       return corsify(NextResponse.json({ success: true }))
     }
 
+    // ── FLOW ROUTES ────────────────────────────────────────────────────────
+
+    // List flows
+    if (route === '/flows' && method === 'GET') {
+      const list = await db.collection('flows').find({}).sort({ updatedAt: -1 }).limit(200).toArray()
+      return corsify(NextResponse.json(list.map(({ _id, ...r }) => r)))
+    }
+
+    // Create flow
+    if (route === '/flows' && method === 'POST') {
+      const body = await request.json().catch(() => ({}))
+      const flow = {
+        id: uuidv4(),
+        name: body.name || 'Untitled Flow',
+        canvasConfigs: body.canvasConfigs || [], // [{ canvasId, sources: { [dynamicKey]: { type:'image'|'text', images?:[], style?:string } } }]
+        posts: [],
+        status: 'draft', // draft | generating | ready
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      }
+      await db.collection('flows').insertOne(flow)
+      const { _id, ...rest } = flow
+      return corsify(NextResponse.json(rest))
+    }
+
+    // Single flow CRUD
+    const flowMatch = route.match(/^\/flows\/([^/]+)$/)
+    if (flowMatch) {
+      const id = flowMatch[1]
+      if (method === 'GET') {
+        const f = await db.collection('flows').findOne({ id })
+        if (!f) return corsify(NextResponse.json({ error: 'Not found' }, { status: 404 }))
+        const { _id, ...rest } = f
+        return corsify(NextResponse.json(rest))
+      }
+      if (method === 'PUT') {
+        const body = await request.json()
+        const update = { ...body, id, updatedAt: new Date() }
+        delete update._id; delete update.createdAt
+        await db.collection('flows').updateOne({ id }, { $set: update })
+        const f = await db.collection('flows').findOne({ id })
+        const { _id, ...rest } = f || {}
+        return corsify(NextResponse.json(rest))
+      }
+      if (method === 'DELETE') {
+        await db.collection('flows').deleteOne({ id })
+        return corsify(NextResponse.json({ success: true }))
+      }
+    }
+
+    // Generate posts for a flow
+    // For each canvasConfig, renders the canvas 5 times with varied data drawn from sources.
+    // Text sources: style is stored — actual AI copy generation is mocked with style-based templates.
+    // Image sources: picks from the provided images list round-robin.
+    const flowGenerateMatch = route.match(/^\/flows\/([^/]+)\/generate$/)
+    if (flowGenerateMatch && method === 'POST') {
+      const flowId = flowGenerateMatch[1]
+      const flow = await db.collection('flows').findOne({ id: flowId })
+      if (!flow) return corsify(NextResponse.json({ error: 'Flow not found' }, { status: 404 }))
+
+      const baseUrl = getBaseUrl(request)
+      const posts = []
+
+      const COPY_TEMPLATES = {
+        informative: [
+          'Did you know? {topic} can transform your results.',
+          'Here\'s what you need to know about {topic}.',
+          'The facts about {topic} that everyone should understand.',
+          'Understanding {topic} — a clear guide.',
+          '{topic}: everything explained simply.',
+        ],
+        helpful: [
+          'Here\'s a tip: {topic} makes everything easier.',
+          'Struggling with {topic}? We\'ve got you covered.',
+          'Your step-by-step guide to {topic}.',
+          'Make {topic} work for you — here\'s how.',
+          '{topic} simplified — start here.',
+        ],
+        aggressive: [
+          'Stop wasting time. {topic} is your answer.',
+          'Your competition is already using {topic}. Are you?',
+          '{topic} or stay behind. Your choice.',
+          'No more excuses. {topic} starts today.',
+          'Winners use {topic}. Do you?',
+        ],
+      }
+
+      for (const config of flow.canvasConfigs || []) {
+        const canvas = await db.collection('canvases').findOne({ id: config.canvasId })
+        if (!canvas) continue
+
+        const isCarousel = canvas.type === 'carousel'
+
+        for (let i = 0; i < 5; i++) {
+          const postId = uuidv4()
+          const renderData = {}
+
+          for (const [key, src] of Object.entries(config.sources || {})) {
+            if (src.type === 'image' && src.images?.length) {
+              renderData[key] = src.images[i % src.images.length]
+            } else if (src.type === 'text') {
+              const style = src.style || 'informative'
+              const templates = COPY_TEMPLATES[style] || COPY_TEMPLATES.informative
+              renderData[key] = templates[i % templates.length].replace('{topic}', src.topic || 'your product')
+            }
+          }
+
+          // Render
+          let renderResult = null
+          const renderId = uuidv4()
+          try {
+            if (isCarousel) {
+              // Build carousel payload
+              const pages = [...(canvas.pages || [])].sort((a, b) => a.order - b.order)
+              const contentPages = pages.filter(p => p.type === 'content')
+              const top_peer_data = {}
+              const bottom_peer_data = {}
+              const content = contentPages.map(() => ({ ...renderData }))
+              for (const [k, v] of Object.entries(renderData)) {
+                top_peer_data[`${k}_top`] = v
+                bottom_peer_data[`${k}_bottom`] = v
+              }
+              const zip = new JSZip()
+              for (const page of pages) {
+                let pd = {}
+                if (page.type === 'top_peer') pd = { ...renderData, ...top_peer_data }
+                else if (page.type === 'bottom_peer') pd = { ...renderData, ...bottom_peer_data }
+                else pd = renderData
+                const pageCanvas = { ...canvas, nodes: page.nodes || [], groups: page.groups || [], classes: page.classes || {} }
+                const png = await renderCanvasToPng(pageCanvas, pd)
+                const label = page.type === 'top_peer' ? '00-top-peer' : page.type === 'bottom_peer' ? `${String(pages.indexOf(page)).padStart(2,'0')}-bottom-peer` : `${String(pages.indexOf(page)).padStart(2,'0')}-${(page.name||'page').replace(/\s+/g,'-')}`
+                zip.file(`${label}.png`, png)
+              }
+              const zipBuf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
+              await db.collection('renders').insertOne({ id: renderId, canvasId: canvas.id, type: 'carousel', zip: new Binary(zipBuf), payload: renderData, approved: false, createdAt: new Date() })
+              renderResult = { url: `${baseUrl}/api/rendered/${renderId}.zip`, render_id: renderId, type: 'carousel' }
+            } else {
+              const png = await renderCanvasToPng(canvas, renderData)
+              await db.collection('renders').insertOne({ id: renderId, canvasId: canvas.id, type: 'single', png: new Binary(png), payload: renderData, approved: false, createdAt: new Date() })
+              renderResult = { url: `${baseUrl}/api/rendered/${renderId}`, render_id: renderId, type: 'single' }
+            }
+          } catch (e) {
+            console.error('flow generate render error', e.message)
+          }
+
+          posts.push({
+            id: postId,
+            canvasId: config.canvasId,
+            canvasName: canvas.name,
+            canvasType: isCarousel ? 'carousel' : 'single',
+            data: renderData,
+            render: renderResult,
+            status: 'pending', // pending | accepted | rejected
+            scheduledAt: null,
+            createdAt: new Date(),
+          })
+        }
+      }
+
+      await db.collection('flows').updateOne({ id: flowId }, { $set: { posts, status: 'ready', updatedAt: new Date() } })
+      return corsify(NextResponse.json({ success: true, postCount: posts.length, posts }))
+    }
+
+    // Update a single post inside a flow (accept/reject/schedule)
+    const flowPostMatch = route.match(/^\/flows\/([^/]+)\/posts\/([^/]+)$/)
+    if (flowPostMatch && method === 'PATCH') {
+      const [, flowId, postId] = flowPostMatch
+      const body = await request.json().catch(() => ({}))
+      const flow = await db.collection('flows').findOne({ id: flowId })
+      if (!flow) return corsify(NextResponse.json({ error: 'Flow not found' }, { status: 404 }))
+      const posts = (flow.posts || []).map(p => p.id === postId ? { ...p, ...body } : p)
+      await db.collection('flows').updateOne({ id: flowId }, { $set: { posts, updatedAt: new Date() } })
+      return corsify(NextResponse.json({ success: true }))
+    }
+
     return corsify(NextResponse.json({ error: `Route ${route} not found` }, { status: 404 }))
   } catch (error) {
     console.error('API Error:', error)

@@ -132,6 +132,9 @@ function Dashboard() {
             <button onClick={() => router.push('/renders')} className="hidden sm:flex items-center gap-1 text-sm font-medium hover:opacity-70 transition" style={BEBAS}>
               RENDERS <ArrowRight className="w-3.5 h-3.5" />
             </button>
+            <button onClick={() => router.push('/flow')} className="hidden sm:flex items-center gap-1 text-sm font-medium hover:opacity-70 transition" style={BEBAS}>
+              FLOW <ArrowRight className="w-3.5 h-3.5" />
+            </button>
             <ThemeToggle />
             <input
               ref={importFileRef}
