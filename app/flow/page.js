@@ -10,9 +10,10 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
   ArrowLeft, Plus, Trash2, Moon, Sun, Zap, Check, X, Clock,
-  ImageIcon, ChevronRight, Layers, RefreshCw, Download,
+  ImageIcon, ChevronRight, ChevronLeft, Layers, RefreshCw, Download,
   Calendar, CheckCircle, XCircle, Pencil, ArrowRight, Sparkles,
   Building2, Users, Mic2, BookOpen, Upload, FolderOpen, Save, Type,
+  Globe, AlertCircle,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { KandLogo } from '@/components/logo'
@@ -24,6 +25,22 @@ const TONES = [
   { id: 'aggressive',  icon: '🔥', label: 'Aggressive',  desc: 'Bold, urgent, FOMO-driven' },
   { id: 'inspiring',   icon: '✨', label: 'Inspiring',   desc: 'Motivational, aspirational' },
   { id: 'playful',     icon: '😄', label: 'Playful',     desc: 'Fun, witty, conversational' },
+]
+const LANGUAGES = [
+  { id: 'english', label: 'English', flag: '🇬🇧' },
+  { id: 'spanish', label: 'Spanish', flag: '🇪🇸' },
+  { id: 'french', label: 'French', flag: '🇫🇷' },
+  { id: 'german', label: 'German', flag: '🇩🇪' },
+  { id: 'italian', label: 'Italian', flag: '🇮🇹' },
+  { id: 'portuguese', label: 'Portuguese', flag: '🇵🇹' },
+  { id: 'dutch', label: 'Dutch', flag: '🇳🇱' },
+  { id: 'polish', label: 'Polish', flag: '🇵🇱' },
+  { id: 'swedish', label: 'Swedish', flag: '🇸🇪' },
+  { id: 'russian', label: 'Russian', flag: '🇷🇺' },
+  { id: 'japanese', label: 'Japanese', flag: '🇯🇵' },
+  { id: 'chinese', label: 'Chinese (Simplified)', flag: '🇨🇳' },
+  { id: 'korean', label: 'Korean', flag: '🇰🇷' },
+  { id: 'arabic', label: 'Arabic', flag: '🇸🇦' },
 ]
 
 function ThemeToggle() {
@@ -73,6 +90,10 @@ function StepBar({ step, maxStep, onGoTo }) {
 
 // ── Step 1: Brand Context ─────────────────────────────────────────────────
 function StepBrand({ brand, onChange }) {
+  const [websiteUrl, setWebsiteUrl] = useState('')
+  const [contextLoading, setContextLoading] = useState(false)
+  const [contextError, setContextError] = useState(null)
+
   const fields = [
     { key: 'businessName', label: 'Business / Brand Name',        icon: Building2, placeholder: 'Acme Corp' },
     { key: 'description',  label: 'What you do (2-3 sentences)',  icon: BookOpen,  placeholder: 'We help small businesses automate social media.', multiline: true },
@@ -80,12 +101,89 @@ function StepBrand({ brand, onChange }) {
     { key: 'voice',        label: 'Brand Voice / Personality',    icon: Mic2,      placeholder: 'Professional but approachable, never jargony.', multiline: true },
     { key: 'extra',        label: 'Anything else the AI should know', icon: Sparkles, placeholder: 'Q4 holiday promo. Always end with a CTA.', multiline: true },
   ]
+
+  const fetchWebsiteContext = async () => {
+    if (!websiteUrl.trim()) {
+      setContextError('Please enter a valid URL')
+      return
+    }
+
+    setContextLoading(true)
+    setContextError(null)
+
+    try {
+      const res = await fetch('/api/website-context', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: websiteUrl.trim() })
+      })
+
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed to fetch website')
+
+      // Add website summary to the extra field
+      const currentExtra = brand.extra || ''
+      const newExtra = currentExtra
+        ? `Website context: ${data.summary}\n\nOther notes: ${currentExtra}`
+        : `Website context: ${data.summary}`
+
+      onChange({ ...brand, extra: newExtra })
+      setWebsiteUrl('')
+      toast.success('Website context added to brand info!')
+    } catch (e) {
+      setContextError(e.message || 'Failed to fetch website')
+      toast.error(e.message || 'Failed to fetch website')
+    } finally {
+      setContextLoading(false)
+    }
+  }
+
   return (
     <div className="max-w-2xl mx-auto space-y-6">
       <div>
         <h2 style={{ ...BEBAS, fontSize: 26 }}>BRAND CONTEXT</h2>
         <p className="text-sm text-muted-foreground mt-1">This is passed to the AI for every post in this flow. The more detail, the better the copy.</p>
       </div>
+
+      {/* Website Context Section */}
+      <div className="rounded-xl bg-indigo-600/10 border-2 border-indigo-600/30 p-4 space-y-3">
+        <div>
+          <Label className="text-xs font-semibold flex items-center gap-1.5 mb-1.5">
+            <Globe className="w-3.5 h-3.5 text-indigo-600" />Extract from Website
+          </Label>
+          <p className="text-[10px] text-muted-foreground mb-2">Paste your business website URL and the AI will analyze it to create context for better post suggestions.</p>
+        </div>
+        <div className="flex gap-2">
+          <Input
+            type="url"
+            className="text-sm flex-1"
+            placeholder="https://example.com"
+            value={websiteUrl}
+            onChange={e => { setWebsiteUrl(e.target.value); setContextError(null) }}
+            onKeyDown={e => e.key === 'Enter' && fetchWebsiteContext()}
+            disabled={contextLoading}
+          />
+          <Button
+            onClick={fetchWebsiteContext}
+            disabled={contextLoading || !websiteUrl.trim()}
+            className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold"
+          >
+            {contextLoading ? (
+              <><RefreshCw className="w-4 h-4 mr-2 animate-spin" />Analyzing...</>
+            ) : (
+              <>Extract</>
+            )}
+          </Button>
+        </div>
+        {contextError && (
+          <div className="flex items-start gap-2 p-2 rounded bg-destructive/10 border border-destructive/30">
+            <AlertCircle className="w-4 h-4 text-destructive mt-0.5 shrink-0" />
+            <p className="text-[10px] text-destructive">{contextError}</p>
+          </div>
+        )}
+      </div>
+
+      {/* Manual fields */}
       {fields.map(({ key, label, icon: Icon, placeholder, multiline }) => (
         <div key={key}>
           <Label className="text-xs font-semibold flex items-center gap-1.5 mb-1.5">
@@ -198,11 +296,13 @@ function GalleryManager({ galleries, onRefresh }) {
 }
 
 // ── Step 2: Configure (canvases + gallery + tone) ─────────────────────────
-function StepConfigure({ canvases, selectedCanvases, onToggleCanvas, galleryId, onSetGallery, tone, onSetTone, galleries, onRefreshGalleries }) {
+function StepConfigure({ canvases, selectedCanvases, onToggleCanvas, galleryId, onSetGallery, tone, onSetTone, galleries, onRefreshGalleries, carouselChance, onSetCarouselChance, language, onSetLanguage }) {
   const [galleryOpen, setGalleryOpen] = useState(false)
   const singles   = canvases.filter(c => c.type !== 'carousel')
   const carousels = canvases.filter(c => c.type === 'carousel')
   const selectedGallery = galleries.find(g => g.id === galleryId)
+  const selectedCarousels = selectedCanvases.filter(id => canvases.find(c => c.id === id)?.type === 'carousel')
+  const hasCarouselsAvailable = selectedCarousels.length > 0
 
   const CanvasCard = ({ c }) => {
     const isSel = selectedCanvases.includes(c.id)
@@ -283,6 +383,54 @@ function StepConfigure({ canvases, selectedCanvases, onToggleCanvas, galleryId, 
         </div>
       </div>
 
+      {/* Language */}
+      <div className="space-y-3">
+        <p className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Content Language</p>
+        <p className="text-xs text-muted-foreground">All generated content and ideas will be in this language.</p>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-2 max-w-2xl">
+          {LANGUAGES.map(lang => (
+            <button key={lang.id} type="button" onClick={() => onSetLanguage(lang.id)}
+              className={`flex items-center gap-2 p-2.5 rounded-xl border-2 transition-all text-left ${language === lang.id ? 'border-foreground bg-[#D4FF00]/10' : 'border-foreground/10 hover:border-foreground/30'}`}>
+              <span className="text-lg">{lang.flag}</span>
+              <span className="text-xs font-semibold">{lang.label}</span>
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Carousel Probability - Only show if carousels are selected */}
+      {hasCarouselsAvailable && (
+        <div className="space-y-3 rounded-xl bg-indigo-600/10 border-2 border-indigo-600/30 p-4">
+          <div>
+            <p className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Carousel Generation Probability</p>
+            <p className="text-xs text-muted-foreground mt-1">When generating posts, what % chance should each post be a carousel vs a single image?</p>
+          </div>
+          <div className="flex items-center gap-4">
+            <input 
+              type="range" 
+              min="0" 
+              max="100" 
+              step="5"
+              value={carouselChance}
+              onChange={e => onSetCarouselChance(parseInt(e.target.value))}
+              className="flex-1 h-2 bg-indigo-600/20 rounded-lg appearance-none cursor-pointer"
+              style={{
+                background: `linear-gradient(to right, #4f46e5 0%, #4f46e5 ${carouselChance}%, rgba(79, 70, 229, 0.2) ${carouselChance}%, rgba(79, 70, 229, 0.2) 100%)`
+              }}
+            />
+            <div className="w-16 text-center">
+              <div className="text-2xl font-bold text-indigo-600">{carouselChance}%</div>
+              <p className="text-[9px] text-muted-foreground">Carousel</p>
+            </div>
+          </div>
+          <p className="text-[9px] text-muted-foreground">
+            {carouselChance === 0 && 'All posts will be single images.'}
+            {carouselChance === 100 && 'All posts will be carousels.'}
+            {carouselChance > 0 && carouselChance < 100 && `Each post has a ${carouselChance}% chance to be a carousel, ${100 - carouselChance}% chance to be a single image.`}
+          </p>
+        </div>
+      )}
+
       <Dialog open={galleryOpen} onOpenChange={setGalleryOpen}>
         <DialogContent className="max-w-3xl">
           <DialogHeader><p className="text-xl font-bold" style={BEBAS}>IMAGE GALLERIES</p></DialogHeader>
@@ -296,10 +444,11 @@ function StepConfigure({ canvases, selectedCanvases, onToggleCanvas, galleryId, 
 // ── Edit Post Dialog ──────────────────────────────────────────────────────
 function EditPostDialog({ post, canvases, open, onClose, onSave, brand, tone }) {
   const [data, setData] = useState({})
+  const [caption, setCaption] = useState('')
   const [regen, setRegen] = useState({})
   const canvas = canvases.find(c => c.id === post?.canvasId)
 
-  useEffect(() => { if (post) setData({ ...post.data }) }, [post?.id])
+  useEffect(() => { if (post) { setData({ ...post.data }); setCaption(post.caption || '') } }, [post?.id])
 
   const allNodes = canvas ? [
     ...(canvas.nodes || []),
@@ -325,37 +474,53 @@ function EditPostDialog({ post, canvases, open, onClose, onSave, brand, tone }) 
   if (!post) return null
   return (
     <Dialog open={open} onOpenChange={onClose}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader><p className="font-bold">Edit Post — {post.canvasName}</p></DialogHeader>
-        <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
-          {allNodes.map(node => {
-            const key = node.dynamic_key
-            return (
-              <div key={key} className="space-y-1">
-                <div className="flex items-center gap-2">
-                  {node.type === 'image' ? <ImageIcon className="w-3 h-3 text-muted-foreground" /> : <Type className="w-3 h-3 text-muted-foreground" />}
-                  <code className="text-xs font-mono font-bold">{`{${key}}`}</code>
-                  {node.type === 'text' && (
-                    <Button size="sm" variant="ghost" className="h-5 text-[10px] ml-auto" disabled={regen[key]} onClick={() => regenKey(key)}>
-                      {regen[key] ? <RefreshCw className="w-3 h-3 animate-spin mr-1" /> : <Sparkles className="w-3 h-3 mr-1" />}Regen
-                    </Button>
+        <div className="space-y-4">
+          {/* Caption Field */}
+          <div className="space-y-2 border-b border-foreground/10 pb-4">
+            <Label className="text-xs font-semibold">Instagram Caption</Label>
+            <Textarea 
+              rows={3} 
+              className="text-sm" 
+              placeholder="Write the Instagram caption for this post..." 
+              value={caption} 
+              onChange={e => setCaption(e.target.value)} 
+            />
+            <p className="text-[9px] text-muted-foreground">{caption.length} characters</p>
+          </div>
+
+          {/* Dynamic Fields */}
+          <div className="space-y-3 max-h-96 overflow-y-auto">
+            {allNodes.map(node => {
+              const key = node.dynamic_key
+              return (
+                <div key={key} className="space-y-1">
+                  <div className="flex items-center gap-2">
+                    {node.type === 'image' ? <ImageIcon className="w-3 h-3 text-muted-foreground" /> : <Type className="w-3 h-3 text-muted-foreground" />}
+                    <code className="text-xs font-mono font-bold">{`{${key}}`}</code>
+                    {node.type === 'text' && (
+                      <Button size="sm" variant="ghost" className="h-5 text-[10px] ml-auto" disabled={regen[key]} onClick={() => regenKey(key)}>
+                        {regen[key] ? <RefreshCw className="w-3 h-3 animate-spin mr-1" /> : <Sparkles className="w-3 h-3 mr-1" />}Regen
+                      </Button>
+                    )}
+                  </div>
+                  {node.type === 'image' ? (
+                    <div className="space-y-1">
+                      {data[key] && <img src={data[key]} alt="" className="h-14 rounded object-cover" onError={e => { e.target.style.display = 'none' }} />}
+                      <Input className="h-7 text-xs" placeholder="Image URL" value={data[key] || ''} onChange={e => setData(d => ({ ...d, [key]: e.target.value }))} />
+                    </div>
+                  ) : (
+                    <Textarea rows={2} className="text-xs" value={data[key] || ''} onChange={e => setData(d => ({ ...d, [key]: e.target.value }))} />
                   )}
                 </div>
-                {node.type === 'image' ? (
-                  <div className="space-y-1">
-                    {data[key] && <img src={data[key]} alt="" className="h-14 rounded object-cover" onError={e => { e.target.style.display = 'none' }} />}
-                    <Input className="h-7 text-xs" placeholder="Image URL" value={data[key] || ''} onChange={e => setData(d => ({ ...d, [key]: e.target.value }))} />
-                  </div>
-                ) : (
-                  <Textarea rows={2} className="text-xs" value={data[key] || ''} onChange={e => setData(d => ({ ...d, [key]: e.target.value }))} />
-                )}
-              </div>
-            )
-          })}
+              )
+            })}
+          </div>
         </div>
-        <div className="flex gap-2 pt-2">
+        <div className="flex gap-2 pt-2 border-t border-foreground/10">
           <Button variant="outline" className="flex-1" onClick={onClose}>Cancel</Button>
-          <Button className="flex-1" onClick={() => onSave(data)}><Save className="w-4 h-4 mr-1.5" />Save & Re-render</Button>
+          <Button className="flex-1" onClick={() => onSave({ ...data, caption })}><Save className="w-4 h-4 mr-1.5" />Save & Re-render</Button>
         </div>
       </DialogContent>
     </Dialog>
@@ -363,41 +528,137 @@ function EditPostDialog({ post, canvases, open, onClose, onSave, brand, tone }) 
 }
 
 // ── Step 3: Generate & Review ─────────────────────────────────────────────
-function StepGenerate({ flow, canvases, onGenerate, onUpdatePost, onRerender, generating, brand, tone }) {
-  const posts = flow?.posts || []
+function StepGenerate({ flow, canvases, onGenerate, onUpdatePost, onRerender, generating, brand, tone, language }) {
+  const posts = (flow?.posts || []).filter(p => p.status !== 'deleted')
   const [editPost, setEditPost] = useState(null)
   const pending  = posts.filter(p => p.status === 'pending')
   const accepted = posts.filter(p => p.status === 'accepted')
-  const rejected = posts.filter(p => p.status === 'rejected')
 
   const PostCard = ({ post }) => {
     const url = post.render?.url
     const isCarousel = post.canvasType === 'carousel'
+    const [carouselIndex, setCarouselIndex] = useState(0)
+    const [carouselPages, setCarouselPages] = useState(null)
+    const [loadingCarousel, setLoadingCarousel] = useState(false)
+
+    // Load carousel pages from ZIP when component mounts or url changes
+    useEffect(() => {
+      if (!isCarousel || !url || carouselPages) return
+      
+      const loadCarousel = async () => {
+        setLoadingCarousel(true)
+        try {
+          const response = await fetch(url)
+          const blob = await response.blob()
+          const jsZip = new (await import('jszip')).default()
+          const zip = await jsZip.loadAsync(blob)
+          const pages = []
+          
+          // Get all PNG files from ZIP, sorted by filename
+          const files = Object.keys(zip.files).filter(f => f.endsWith('.png')).sort()
+          
+          for (const filename of files) {
+            const file = zip.files[filename]
+            const data = await file.async('blob')
+            const url = URL.createObjectURL(data)
+            pages.push({ filename, url })
+          }
+          
+          setCarouselPages(pages)
+          setCarouselIndex(0)
+        } catch (e) {
+          console.error('Failed to load carousel:', e)
+        } finally {
+          setLoadingCarousel(false)
+        }
+      }
+      
+      loadCarousel()
+    }, [isCarousel, url, carouselPages])
+
     return (
-      <div className={`rounded-xl border-2 overflow-hidden transition-all ${
+      <div className={`rounded-xl border-2 overflow-hidden transition-all flex flex-col ${
         post.status === 'accepted' ? 'border-[#9AB800]' :
         post.status === 'rejected' ? 'border-foreground/10 opacity-40' : 'border-foreground/15'
       }`}>
-        <div className="aspect-square bg-muted relative overflow-hidden">
-          {url && !isCarousel
-            ? <img src={url} alt="" className="w-full h-full object-cover" />
-            : <div className="h-full flex flex-col items-center justify-center gap-1 text-muted-foreground"><Layers className="w-6 h-6 opacity-30" /><span className="text-[9px]">{isCarousel ? 'Carousel' : '…'}</span></div>
-          }
+        {/* Image Section */}
+        <div className="bg-muted relative overflow-hidden shrink-0 flex items-center justify-center max-h-96" style={{ minHeight: '300px' }}>
+          {isCarousel && carouselPages && carouselPages.length > 0 ? (
+            // Carousel viewer
+            <div className="w-full h-full flex flex-col items-center justify-center">
+              <img 
+                src={carouselPages[carouselIndex].url} 
+                alt={`Slide ${carouselIndex + 1}`}
+                className="max-w-full max-h-full object-contain"
+              />
+              {carouselPages.length > 1 && (
+                <div className="absolute bottom-0 left-0 right-0 flex items-center justify-between p-2 bg-black/20">
+                  <button
+                    onClick={() => setCarouselIndex(Math.max(0, carouselIndex - 1))}
+                    disabled={carouselIndex === 0}
+                    className="text-white hover:text-white/70 disabled:opacity-30 transition"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                  </button>
+                  <span className="text-xs text-white font-bold">{carouselIndex + 1} / {carouselPages.length}</span>
+                  <button
+                    onClick={() => setCarouselIndex(Math.min(carouselPages.length - 1, carouselIndex + 1))}
+                    disabled={carouselIndex === carouselPages.length - 1}
+                    className="text-white hover:text-white/70 disabled:opacity-30 transition"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : isCarousel && loadingCarousel ? (
+            <div className="h-full flex items-center justify-center">
+              <RefreshCw className="w-6 h-6 text-muted-foreground animate-spin" />
+            </div>
+          ) : isCarousel && url ? (
+            // Fallback with download link
+            <div className="h-full flex flex-col items-center justify-center gap-2 text-muted-foreground group">
+              <Layers className="w-6 h-6 opacity-30 group-hover:opacity-50 transition" />
+              <span className="text-[9px]">Carousel</span>
+              <a 
+                href={url} 
+                target="_blank" 
+                rel="noreferrer"
+                className="text-[9px] text-muted-foreground hover:text-foreground underline"
+              >
+                Download ZIP
+              </a>
+            </div>
+          ) : !isCarousel && url ? (
+            <img src={url} alt="" className="max-w-full max-h-full object-contain" />
+          ) : (
+            <div className="h-full flex flex-col items-center justify-center gap-1 text-muted-foreground">
+              <Layers className="w-6 h-6 opacity-30" />
+              <span className="text-[9px]">{isCarousel ? 'Carousel' : 'Rendering...'}</span>
+            </div>
+          )}
           {post.status === 'accepted' && <div className="absolute top-2 right-2 bg-[#9AB800] rounded-full p-1"><Check className="w-3 h-3 text-white" /></div>}
         </div>
-        <div className="p-2 border-b border-foreground/10">
-          <p className="text-[10px] font-bold truncate">{post.canvasName}</p>
-          {/* Show generated text preview */}
-          {Object.entries(post.data || {}).filter(([, v]) => typeof v === 'string' && !v.startsWith('http')).slice(0, 1).map(([k, v]) => (
-            <p key={k} className="text-[9px] text-muted-foreground truncate mt-0.5">"{v}"</p>
-          ))}
+
+        {/* Content Section */}
+        <div className="flex flex-col flex-1 min-h-0">
+          <div className="p-3 border-b border-foreground/10">
+            <div className="flex items-start justify-between gap-2 mb-1">
+              <p className="text-[10px] font-bold truncate flex-1">{post.canvasName}</p>
+              <div title={post.canvasName} className="text-muted-foreground hover:text-foreground transition cursor-help shrink-0">
+                <Layers className="w-3 h-3" />
+              </div>
+            </div>
+            {post.caption && <p className="text-[9px] text-foreground/70 leading-snug">"{post.caption.substring(0, 80)}{post.caption.length > 80 ? '...' : ''}"</p>}
+          </div>
         </div>
-        <div className="flex">
+
+        {/* Action buttons */}
+        <div className="flex border-t border-foreground/10">
           <button onClick={() => setEditPost(post)} className="flex-1 h-7 text-[10px] text-muted-foreground hover:bg-muted transition flex items-center justify-center gap-1"><Pencil className="w-3 h-3" />Edit</button>
           {url && <a href={url} target="_blank" rel="noreferrer" className="flex-1"><button className="w-full h-7 text-[10px] text-muted-foreground hover:bg-muted transition flex items-center justify-center"><Download className="w-3 h-3" /></button></a>}
           {post.status !== 'accepted' && <button onClick={() => onUpdatePost(post.id, { status: 'accepted' })} className="flex-1 h-7 text-[10px] text-[#9AB800] hover:bg-[#9AB800]/10 transition flex items-center justify-center"><CheckCircle className="w-3.5 h-3.5" /></button>}
-          {post.status !== 'rejected' && <button onClick={() => onUpdatePost(post.id, { status: 'rejected' })} className="flex-1 h-7 text-[10px] text-destructive hover:bg-destructive/10 transition flex items-center justify-center"><XCircle className="w-3.5 h-3.5" /></button>}
-          {post.status === 'rejected' && <button onClick={() => onUpdatePost(post.id, { status: 'pending' })} className="flex-1 h-7 text-[10px] text-muted-foreground hover:bg-muted transition flex items-center justify-center"><RefreshCw className="w-3 h-3" /></button>}
+          <button onClick={() => { if (confirm('Delete this post?')) onUpdatePost(post.id, { status: 'deleted' }) }} className="flex-1 h-7 text-[10px] text-destructive hover:bg-destructive/10 transition flex items-center justify-center"><Trash2 className="w-3.5 h-3.5" /></button>
         </div>
       </div>
     )
@@ -408,7 +669,7 @@ function StepGenerate({ flow, canvases, onGenerate, onUpdatePost, onRerender, ge
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
           <h2 style={{ ...BEBAS, fontSize: 26 }}>GENERATED POSTS</h2>
-          <p className="text-sm text-muted-foreground mt-1">AI picks a random layout, reads its dynamic keys, and generates the content. Review below.</p>
+          <p className="text-sm text-muted-foreground mt-1">Generate batches of 3 posts. All generated posts appear in the review below.</p>
         </div>
         <Button onClick={onGenerate} disabled={generating} className="bg-[#D4FF00] text-foreground hover:bg-[#D4FF00]/80 font-bold rounded-full px-6">
           {generating ? <><RefreshCw className="w-4 h-4 mr-2 animate-spin" />Generating…</> : <><Sparkles className="w-4 h-4 mr-2" />{posts.length > 0 ? 'Generate 3 more' : 'Generate 3 Posts'}</>}
@@ -419,7 +680,7 @@ function StepGenerate({ flow, canvases, onGenerate, onUpdatePost, onRerender, ge
         <div className="text-center py-20 border-2 border-dashed border-foreground/15 rounded-2xl text-muted-foreground">
           <Sparkles className="w-10 h-10 mx-auto mb-3 opacity-30" />
           <p className="font-medium">Ready to generate</p>
-          <p className="text-sm mt-1">Click the button above. The AI will write all the copy using your brand context and chosen tone.</p>
+          <p className="text-sm mt-1">Click the button above. The AI will generate 3 posts at a time, each with their own content and caption.</p>
         </div>
       )}
 
@@ -428,12 +689,11 @@ function StepGenerate({ flow, canvases, onGenerate, onUpdatePost, onRerender, ge
           <TabsList className="border-2 border-foreground/15 bg-card mb-4">
             <TabsTrigger value="pending" className="data-[state=active]:bg-[#D4FF00] data-[state=active]:text-foreground text-xs font-bold uppercase tracking-wider">Review ({pending.length})</TabsTrigger>
             <TabsTrigger value="accepted" className="data-[state=active]:bg-[#D4FF00] data-[state=active]:text-foreground text-xs font-bold uppercase tracking-wider">Accepted ({accepted.length})</TabsTrigger>
-            <TabsTrigger value="rejected" className="data-[state=active]:bg-[#D4FF00] data-[state=active]:text-foreground text-xs font-bold uppercase tracking-wider">Rejected ({rejected.length})</TabsTrigger>
           </TabsList>
-          {[['pending', pending], ['accepted', accepted], ['rejected', rejected]].map(([tab, list]) => (
-            <TabsContent key={tab} value={tab}>
+          {[['pending', pending], ['accepted', accepted]].map(([tab, list]) => (
+            <TabsContent key={tab} value={tab} className="space-y-4">
               {list.length === 0 ? <p className="text-center py-10 text-muted-foreground text-sm">No {tab} posts.</p> : (
-                <div className="grid grid-cols-2 sm:grid-cols-3 gap-4">{list.map(p => <PostCard key={p.id} post={p} />)}</div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-4">{list.map(p => <PostCard key={p.id} post={p} />)}</div>
               )}
             </TabsContent>
           ))}
@@ -502,14 +762,18 @@ function StepSchedule({ flow, onUpdatePost }) {
 }
 
 // ── Step 3: Content Ideas ─────────────────────────────────────────────────
-function StepIdeas({ ideas, onSetIdeas, flowId }) {
+function StepIdeas({ ideas, onSetIdeas, flowId, brand, language }) {
   const [generating, setGenerating] = useState(false)
   const [custom, setCustom] = useState('')
 
   const generateIdeas = async () => {
     setGenerating(true)
     try {
-      const res = await fetch(`/api/flows/${flowId}/generate-ideas`, { method: 'POST' })
+      const res = await fetch(`/api/flows/${flowId}/generate-ideas`, { 
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ language, brand })
+      })
       const data = await res.json()
       if (data.ideas && Array.isArray(data.ideas)) {
         const next = data.ideas.map(text => ({ id: Math.random().toString(36).slice(2), text, selected: true }))
@@ -618,6 +882,8 @@ export default function FlowPage() {
   const [selectedCanvases, setSelectedCanvases] = useState([])
   const [galleryId, setGalleryId]   = useState(null)
   const [tone, setTone]             = useState('informative')
+  const [language, setLanguage]     = useState('english')
+  const [carouselChance, setCarouselChance] = useState(30)
   const [generating, setGenerating] = useState(false)
   const [showList, setShowList]     = useState(true)
   const [newName, setNewName]       = useState('')
@@ -635,7 +901,7 @@ export default function FlowPage() {
 
   const saveFlow = async (extra = {}) => {
     if (!activeFlow) return
-    const body = { ...activeFlow, brandContext: brand, selectedCanvases, galleryId, tone, contentIdeas, ...extra }
+    const body = { ...activeFlow, brandContext: brand, selectedCanvases, galleryId, tone, language, contentIdeas, ...extra }
     const res = await fetch(`/api/flows/${activeFlow.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     const saved = await res.json()
     setActiveFlow(saved)
@@ -655,7 +921,11 @@ export default function FlowPage() {
     if (!saved) return
     setGenerating(true)
     try {
-      const res = await fetch(`/api/flows/${saved.id}/generate`, { method: 'POST' })
+      const res = await fetch(`/api/flows/${saved.id}/generate`, { 
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ carouselChance, language })
+      })
       const data = await res.json()
       if (data.success) {
         const refreshed = await fetch(`/api/flows/${saved.id}`).then(r => r.json())
@@ -672,6 +942,7 @@ export default function FlowPage() {
     await fetch(`/api/flows/${activeFlow.id}/posts/${postId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
     const refreshed = await fetch(`/api/flows/${activeFlow.id}`).then(r => r.json())
     setActiveFlow(refreshed)
+    if (patch.status === 'deleted') toast.success('Post deleted')
   }
 
   const rerenderPost = async (postId, newData) => {
@@ -689,13 +960,13 @@ export default function FlowPage() {
     const res = await fetch('/api/flows', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newName.trim() }) })
     const flow = await res.json()
     setFlows(prev => [flow, ...prev])
-    setActiveFlow(flow); setBrand({}); setSelectedCanvases([]); setGalleryId(null); setTone('informative'); setContentIdeas([])
+    setActiveFlow(flow); setBrand({}); setSelectedCanvases([]); setGalleryId(null); setTone('informative'); setLanguage('english'); setContentIdeas([])
     setStep(1); setMaxStep(1); setNewName(''); setShowList(false)
   }
 
   const openFlow = (flow) => {
     setActiveFlow(flow); setBrand(flow.brandContext || {}); setSelectedCanvases(flow.selectedCanvases || [])
-    setGalleryId(flow.galleryId || null); setTone(flow.tone || 'informative')
+    setGalleryId(flow.galleryId || null); setTone(flow.tone || 'informative'); setLanguage(flow.language || 'english')
     setContentIdeas(flow.contentIdeas || [])
     const ms = flow.posts?.length > 0 ? 5 : (flow.selectedCanvases?.length > 0 ? 4 : 2)
     setMaxStep(ms); setStep(flow.posts?.length > 0 ? 4 : 2); setShowList(false)
@@ -773,9 +1044,9 @@ export default function FlowPage() {
 
       <div className="flex-1 max-w-6xl w-full mx-auto px-6 py-8">
         {step === 1 && <StepBrand brand={brand} onChange={setBrand} />}
-        {step === 2 && <StepConfigure canvases={canvases} selectedCanvases={selectedCanvases} onToggleCanvas={id => setSelectedCanvases(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])} galleryId={galleryId} onSetGallery={setGalleryId} tone={tone} onSetTone={setTone} galleries={galleries} onRefreshGalleries={loadGalleries} />}
-        {step === 3 && <StepIdeas ideas={contentIdeas} onSetIdeas={setContentIdeas} flowId={activeFlow?.id} />}
-        {step === 4 && <StepGenerate flow={activeFlow} canvases={canvases} onGenerate={generate} onUpdatePost={updatePost} onRerender={rerenderPost} generating={generating} brand={brand} tone={tone} />}
+        {step === 2 && <StepConfigure canvases={canvases} selectedCanvases={selectedCanvases} onToggleCanvas={id => setSelectedCanvases(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])} galleryId={galleryId} onSetGallery={setGalleryId} tone={tone} onSetTone={setTone} galleries={galleries} onRefreshGalleries={loadGalleries} carouselChance={carouselChance} onSetCarouselChance={setCarouselChance} language={language} onSetLanguage={setLanguage} />}
+        {step === 3 && <StepIdeas ideas={contentIdeas} onSetIdeas={setContentIdeas} flowId={activeFlow?.id} brand={brand} language={language} />}
+        {step === 4 && <StepGenerate flow={activeFlow} canvases={canvases} onGenerate={generate} onUpdatePost={updatePost} onRerender={rerenderPost} generating={generating} brand={brand} tone={tone} language={language} />}
         {step === 5 && <StepSchedule flow={activeFlow} onUpdatePost={updatePost} />}
       </div>
 

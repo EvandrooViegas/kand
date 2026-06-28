@@ -324,24 +324,4 @@ function Dashboard() {
   )
 }
 
-function EmptyState({ onNew }) {
-  return (
-    <div className="rounded-3xl border-2 border-dashed border-foreground/30 p-12 sm:p-16 text-center bg-card relative overflow-hidden">
-      <div className="absolute -top-10 -right-10 w-48 h-48 rounded-full bg-[#D4FF00]/30 blur-3xl pointer-events-none" />
-      <div className="relative">
-        <div className="inline-flex p-3 rounded-2xl bg-foreground text-background mb-6">
-          <KandMark size={48} />
-        </div>
-        <h3 className="text-3xl mb-1" style={BEBAS}>NOTHING HERE — YET.</h3>
-        <p className="text-foreground/60 max-w-md mx-auto mb-7">
-          Spin up your first template. Pick a font, drop in a placeholder, and you'll have a render-ready endpoint in two minutes.
-        </p>
-        <Button onClick={onNew} className="bg-foreground text-background hover:bg-foreground/85 h-12 px-7 rounded-full text-base">
-          Create your first design <ArrowRight className="w-4 h-4 ml-2" />
-        </Button>
-      </div>
-    </div>
-  )
-}
-
 export default Dashboard
