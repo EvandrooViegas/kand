@@ -733,63 +733,15 @@ if (uploadMatch && method === 'GET') {
           else if (adjustedMaxWords <= 50) sizeCategory = 'long'
           else sizeCategory = 'extra-long'
           
-          // LAYER 7: INFER SEMANTIC ROLE FROM FIELD NAME
-          // ──────────────────────────────────────────────
-          const fieldNameLower = k.toLowerCase()
-          let purposeHint = ''
-          let fieldRole = 'content'
-          let semanticContext = ''
-          
-          if (fieldNameLower.match(/^(title|headline|heading|main|primary)$/i) || 
-              fieldNameLower.includes('headline') || fieldNameLower.includes('heading')) {
-            purposeHint = '. HEADLINE — make it bold, attention-grabbing, high-impact'
-            fieldRole = 'headline'
-            semanticContext = 'Your primary message hook. This field is the visual hero.'
-          } else if (fieldNameLower.match(/^(subtitle|description|desc|context|detail|supporting)$/i) || 
-                     fieldNameLower.includes('subtitle') || fieldNameLower.includes('description')) {
-            purposeHint = '. SUPPORTING TEXT — provide context, intrigue, narrative depth'
-            fieldRole = 'subtitle'
-            semanticContext = 'Secondary information that builds on the headline.'
-          } else if (fieldNameLower.match(/^(cta|call|button|action|click|tap)$/i) || 
-                     fieldNameLower.includes('cta') || fieldNameLower.includes('button')) {
-            purposeHint = '. CALL-TO-ACTION — urgent, action-oriented, must compel clicking'
-            fieldRole = 'cta'
-            semanticContext = 'Drives conversion. Use power verbs: "Get," "Join," "Start," "Learn."'
-          } else if (fieldNameLower.match(/^(hook|intro|preview|open|first)$/i) || 
-                     fieldNameLower.includes('hook') || fieldNameLower.includes('intro')) {
-            purposeHint = '. SCROLL-STOP HOOK — stop the infinite scroll immediately'
-            fieldRole = 'hook'
-            semanticContext = 'Make them stop swiping and read the next field.'
-          } else if (fieldNameLower.match(/^(caption|byline|footer|credit)$/i) || 
-                     fieldNameLower.includes('caption')) {
-            purposeHint = '. CAPTION TEXT — brief, supporting, secondary'
-            fieldRole = 'caption'
-            semanticContext = 'Provides attribution or light context.'
-          } else if (fieldNameLower.includes('benefit') || fieldNameLower.includes('value') || fieldNameLower.includes('result')) {
-            purposeHint = '. BENEFIT STATEMENT — articulate why the user should care'
-            fieldRole = 'benefit'
-            semanticContext = 'Focus on outcome, not features.'
-          }
-          
-          // LAYER 8: VISUAL LAYOUT POSITION INFERENCE
-          // ────────────────────────────────────────
-          // Position in the canvas (x, y) can hint at reading order
-          // Top fields = seen first (usually more important)
-          // Bottom fields = CTA or reinforcement
-          let positionContext = ''
-          if (node.y < canvas.height * 0.3) positionContext = 'top of design (primary focal point)'
-          else if (node.y > canvas.height * 0.7) positionContext = 'bottom of design (CTA or reinforcement)'
-          else positionContext = 'middle of design (supporting content)'
-          
-          // FINAL: Build comprehensive hint with multi-layer analysis
-          const hint = `${adjustedMaxWords} word${adjustedMaxWords !== 1 ? 's' : ''} max (${sizeCategory}${purposeHint})`
+          // LAYER 7: BUILD COMPREHENSIVE HINT
+          // ────────────────────────────────
+          const hint = `${adjustedMaxWords} word${adjustedMaxWords !== 1 ? 's' : ''} max (${sizeCategory})`
           
           return { 
             key: k, 
             hint, 
             maxWords: adjustedMaxWords,
             sizeCategory,
-            fieldRole,
             fs,
             w,
             h,
@@ -797,7 +749,6 @@ if (uploadMatch && method === 'GET') {
             availableLines,
             hierarchyIndicator,
             fontSizeReasoning,
-            semanticContext,
             positionContext,
             originalCalc: maxWords,
             avgCharWidth,
@@ -866,8 +817,8 @@ if (uploadMatch && method === 'GET') {
             ``
           ].join('\n') : `SINGLE IMAGE POST:\nGOAL: Tell complete story in one visual. All key info in one field.`,
           ``,
-          `TEXT FIELDS (field name: max words | role):`,
-          fieldMeta.map(({ key, hint, fieldRole }) => `  • ${key}: ${hint} | Role: ${fieldRole}`).join('\n'),
+          `TEXT FIELDS (field name: max words):`,
+          fieldMeta.map(({ key, hint }) => `  • ${key}: ${hint}`).join('\n'),
           ``,
           `RULES:`,
           `1. Respect word limits strictly`,
@@ -889,11 +840,7 @@ if (uploadMatch && method === 'GET') {
           // Fallback without API key - generate smart fallbacks by field type
           const result = {}
           for (const field of fieldMeta) {
-            if (field.fieldRole === 'headline') result[field.key] = 'Discover Our Solution'
-            else if (field.fieldRole === 'cta') result[field.key] = 'Learn More'
-            else if (field.fieldRole === 'hook') result[field.key] = 'Stop scrolling'
-            else if (field.fieldRole === 'subtitle') result[field.key] = 'See what makes us different'
-            else result[field.key] = 'Explore now'
+            result[field.key] = 'Discover what makes us special'
           }
           return result
         }
@@ -932,13 +879,8 @@ if (uploadMatch && method === 'GET') {
               if (val && String(val).trim()) {
                 result[k] = String(val)
               } else {
-                // Fallback for missing fields - generate smart default by role
-                const field = fieldMeta.find(f => f.key === k)
-                if (field?.fieldRole === 'headline') result[k] = 'Discover Our Solution'
-                else if (field?.fieldRole === 'cta') result[k] = 'Learn More'
-                else if (field?.fieldRole === 'hook') result[k] = 'Stop scrolling'
-                else if (field?.fieldRole === 'subtitle') result[k] = 'See what makes us different'
-                else result[k] = 'Explore now'
+                // Fallback: generic placeholder
+                result[k] = 'Discover what makes us special'
               }
             }
             return result
@@ -955,11 +897,7 @@ if (uploadMatch && method === 'GET') {
         // Final fallback - generate unique fallbacks per field based on their roles
         const result = {}
         for (const field of fieldMeta) {
-          if (field.fieldRole === 'headline') result[field.key] = 'Discover Our Solution'
-          else if (field.fieldRole === 'cta') result[field.key] = 'Learn More'
-          else if (field.fieldRole === 'hook') result[field.key] = 'Stop scrolling'
-          else if (field.fieldRole === 'subtitle') result[field.key] = 'See what makes us different'
-          else result[field.key] = 'Explore now'
+          result[field.key] = 'Discover what makes us special'
         }
         return result
       }
@@ -1020,20 +958,12 @@ if (uploadMatch && method === 'GET') {
           }
           
           // Detect field role from name
-          let fieldRole = 'body'
-          const lowerKey = k.toLowerCase()
-          if (lowerKey.includes('headline') || lowerKey.includes('title') || lowerKey.includes('heading')) fieldRole = 'headline'
-          else if (lowerKey.includes('hook') || lowerKey.includes('catch')) fieldRole = 'hook'
-          else if (lowerKey.includes('cta') || lowerKey.includes('action') || lowerKey.includes('button')) fieldRole = 'cta'
-          else if (lowerKey.includes('subtitle') || lowerKey.includes('description')) fieldRole = 'subtitle'
-          
           const hint = `${maxWords} word${maxWords !== 1 ? 's' : ''} max (${sizeCategory})`
           return { 
             key: k, 
             hint, 
             maxWords,
-            sizeCategory,
-            fieldRole
+            sizeCategory
           }
         })
 
@@ -1095,8 +1025,8 @@ if (uploadMatch && method === 'GET') {
             `  3. Do NOT provide the full answer here - save that for page 2`,
             `  4. Do NOT list "steps" or "tips" in detail - hint at them instead`,
             ``,
-            `TEXT FIELDS (field name: max words | role):`,
-            fieldMeta.map(({ key, hint, fieldRole }) => `  • ${key}: ${hint} | Role: ${fieldRole}`).join('\n'),
+            `TEXT FIELDS (field name: max words):`,
+            fieldMeta.map(({ key, hint }) => `  • ${key}: ${hint}`).join('\n'),
             ``,
             `RULES:`,
             `1. Respect word limits strictly`,
@@ -1125,8 +1055,8 @@ if (uploadMatch && method === 'GET') {
             `  • Make this page feel like the natural continuation after page 1`,
             `  • Do NOT introduce new hooks or separate topics`,
             ``,
-            `TEXT FIELDS (field name: max words | role):`,
-            fieldMeta.map(({ key, hint, fieldRole }) => `  • ${key}: ${hint} | Role: ${fieldRole}`).join('\n'),
+            `TEXT FIELDS (field name: max words):`,
+            fieldMeta.map(({ key, hint }) => `  • ${key}: ${hint}`).join('\n'),
             ``,
             `RULES:`,
             `1. Respect word limits strictly`,
@@ -1155,8 +1085,8 @@ if (uploadMatch && method === 'GET') {
             `  • Create urgency or compelling reason to act NOW`,
             `  • Reference the hook/topic to tie everything together`,
             ``,
-            `TEXT FIELDS (field name: max words | role):`,
-            fieldMeta.map(({ key, hint, fieldRole }) => `  • ${key}: ${hint} | Role: ${fieldRole}`).join('\n'),
+            `TEXT FIELDS (field name: max words):`,
+            fieldMeta.map(({ key, hint }) => `  • ${key}: ${hint}`).join('\n'),
             ``,
             `RULES:`,
             `1. Respect word limits strictly`,
@@ -1224,21 +1154,8 @@ if (uploadMatch && method === 'GET') {
               if (val && String(val).trim()) {
                 result[k] = String(val)
               } else {
-                const field = fieldMeta.find(f => f.key === k)
-                if (field?.fieldRole === 'headline') {
-                  if (pageType === 'top_peer') result[k] = 'Unlock the secret'
-                  else if (pageType === 'bottom_peer') result[k] = 'Ready to start?'
-                  else result[k] = 'Here\'s what matters'
-                }
-                else if (field?.fieldRole === 'cta') {
-                  if (pageType === 'bottom_peer') result[k] = 'Take action now'
-                  else result[k] = 'Learn more'
-                }
-                else if (field?.fieldRole === 'hook') {
-                  if (pageType === 'top_peer') result[k] = 'Wait for page 2'
-                  else result[k] = 'Follow for details'
-                }
-                else result[k] = 'Discover now'
+                // Fallback: generic placeholder
+                result[k] = 'Discover what makes us special'
               }
             }
             return result
@@ -1252,20 +1169,7 @@ if (uploadMatch && method === 'GET') {
         console.error('Carousel page generation error:', lastError?.message)
         const result = {}
         for (const field of fieldMeta) {
-          if (field.fieldRole === 'headline') {
-            if (pageType === 'top_peer') result[field.key] = 'Unlock the secret'
-            else if (pageType === 'bottom_peer') result[field.key] = 'Ready to start?'
-            else result[field.key] = 'Here\'s what matters'
-          }
-          else if (field.fieldRole === 'cta') {
-            if (pageType === 'bottom_peer') result[field.key] = 'Take action now'
-            else result[field.key] = 'Learn more'
-          }
-          else if (field.fieldRole === 'hook') {
-            if (pageType === 'top_peer') result[field.key] = 'Wait for page 2'
-            else result[field.key] = 'Follow for details'
-          }
-          else result[field.key] = 'Discover now'
+          result[field.key] = 'Discover what makes us special'
         }
         return result
       }
@@ -1323,20 +1227,12 @@ if (uploadMatch && method === 'GET') {
             maxWords = Math.max(50, maxWords)
           }
           
-          let fieldRole = 'body'
-          const lowerKey = k.toLowerCase()
-          if (lowerKey.includes('headline') || lowerKey.includes('title') || lowerKey.includes('heading')) fieldRole = 'headline'
-          else if (lowerKey.includes('hook') || lowerKey.includes('catch')) fieldRole = 'hook'
-          else if (lowerKey.includes('cta') || lowerKey.includes('action') || lowerKey.includes('button')) fieldRole = 'cta'
-          else if (lowerKey.includes('subtitle') || lowerKey.includes('description')) fieldRole = 'subtitle'
-          
           const hint = `${maxWords} word${maxWords !== 1 ? 's' : ''} max (${sizeCategory})`
           return { 
             key: k, 
             hint, 
             maxWords,
-            sizeCategory,
-            fieldRole
+            sizeCategory
           }
         })
 
@@ -1362,8 +1258,8 @@ if (uploadMatch && method === 'GET') {
           ``,
           `Strategy: Headline/hook → complete explanation → clear CTA, all SELF-CONTAINED on one visual.`,
           ``,
-          `TEXT FIELDS (field name: max words | role):`,
-          fieldMeta.map(({ key, hint, fieldRole }) => `  • ${key}: ${hint} | Role: ${fieldRole}`).join('\n'),
+          `TEXT FIELDS (field name: max words):`,
+          fieldMeta.map(({ key, hint }) => `  • ${key}: ${hint}`).join('\n'),
           ``,
           `RULES:`,
           `1. Respect word limits strictly`,
@@ -1442,10 +1338,7 @@ if (uploadMatch && method === 'GET') {
         console.error('Single image generation error:', lastError?.message)
         const result = {}
         for (const field of fieldMeta) {
-          if (field.fieldRole === 'headline') result[field.key] = 'Discover what\'s next'
-          else if (field.fieldRole === 'cta') result[field.key] = 'Learn more today'
-          else if (field.fieldRole === 'hook') result[field.key] = 'This changes everything'
-          else result[field.key] = 'Explore the possibilities'
+          result[field.key] = 'Discover what makes us special'
         }
         return result
       }
