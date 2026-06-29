@@ -1,6 +1,6 @@
 'use client'
 import { useEffect, useState, useRef } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -91,8 +91,8 @@ function StepBar({ step, maxStep, onGoTo }) {
 // ── Step 1: Brand Context ─────────────────────────────────────────────────
 function StepBrand({ brand, onChange }) {
   const [websiteUrl, setWebsiteUrl] = useState('')
-  const [contextLoading, setContextLoading] = useState(false)
-  const [contextError, setContextError] = useState(null)
+  const [extractLoading, setExtractLoading] = useState(false)
+  const [extractError, setExtractError] = useState(null)
 
   const fields = [
     { key: 'businessName', label: 'Business / Brand Name',        icon: Building2, placeholder: 'Acme Corp' },
@@ -102,39 +102,60 @@ function StepBrand({ brand, onChange }) {
     { key: 'extra',        label: 'Anything else the AI should know', icon: Sparkles, placeholder: 'Q4 holiday promo. Always end with a CTA.', multiline: true },
   ]
 
-  const fetchWebsiteContext = async () => {
+  const extractFromWebsite = async () => {
     if (!websiteUrl.trim()) {
-      setContextError('Please enter a valid URL')
+      setExtractError('Please enter a valid URL')
       return
     }
 
-    setContextLoading(true)
-    setContextError(null)
+    setExtractLoading(true)
+    setExtractError(null)
 
     try {
-      const res = await fetch('/api/website-context', {
+      const res = await fetch('/api/extract-brand-info', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: websiteUrl.trim() })
       })
 
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Failed to fetch website')
+      
+      // Check if API returned an info message (not found)
+      if (data.info) {
+        setExtractError(data.info)
+        toast.info(data.info)
+        setWebsiteUrl('')
+        setExtractLoading(false)
+        return
+      }
 
-      // Add website summary to the extra field
-      const currentExtra = brand.extra || ''
-      const newExtra = currentExtra
-        ? `Website context: ${data.summary}\n\nOther notes: ${currentExtra}`
-        : `Website context: ${data.summary}`
+      // Check if API returned an error message (network/parse error)
+      if (data.error) {
+        setExtractError(data.error)
+        toast.error(data.error)
+        setWebsiteUrl('')
+        setExtractLoading(false)
+        return
+      }
 
-      onChange({ ...brand, extra: newExtra })
+      if (!res.ok) throw new Error(data.error || 'Failed to extract brand info')
+
+      // Merge extracted info with existing brand data (only fill empty fields)
+      const updated = { ...brand }
+      if (data.businessName && !updated.businessName) updated.businessName = data.businessName
+      if (data.description && !updated.description) updated.description = data.description
+      if (data.targetAudience && !updated.audience) updated.audience = data.targetAudience
+      if (data.brandVoice && !updated.voice) updated.voice = data.brandVoice
+      if (data.extra && !updated.extra) updated.extra = data.extra
+
+      onChange(updated)
       setWebsiteUrl('')
-      toast.success('Website context added to brand info!')
+      toast.success('Brand info extracted from website!')
     } catch (e) {
-      setContextError(e.message || 'Failed to fetch website')
-      toast.error(e.message || 'Failed to fetch website')
+      setExtractError(e.message || 'Failed to extract brand info')
+      toast.error(e.message || 'Failed to extract brand info')
     } finally {
-      setContextLoading(false)
+      setExtractLoading(false)
     }
   }
 
@@ -145,42 +166,44 @@ function StepBrand({ brand, onChange }) {
         <p className="text-sm text-muted-foreground mt-1">This is passed to the AI for every post in this flow. The more detail, the better the copy.</p>
       </div>
 
-      {/* Website Context Section */}
-      <div className="rounded-xl bg-indigo-600/10 border-2 border-indigo-600/30 p-4 space-y-3">
-        <div>
-          <Label className="text-xs font-semibold flex items-center gap-1.5 mb-1.5">
-            <Globe className="w-3.5 h-3.5 text-indigo-600" />Extract from Website
-          </Label>
-          <p className="text-[10px] text-muted-foreground mb-2">Paste your business website URL and the AI will analyze it to create context for better post suggestions.</p>
-        </div>
-        <div className="flex gap-2">
-          <Input
-            type="url"
-            className="text-sm flex-1"
-            placeholder="https://example.com"
-            value={websiteUrl}
-            onChange={e => { setWebsiteUrl(e.target.value); setContextError(null) }}
-            onKeyDown={e => e.key === 'Enter' && fetchWebsiteContext()}
-            disabled={contextLoading}
-          />
-          <Button
-            onClick={fetchWebsiteContext}
-            disabled={contextLoading || !websiteUrl.trim()}
-            className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold"
-          >
-            {contextLoading ? (
-              <><RefreshCw className="w-4 h-4 mr-2 animate-spin" />Analyzing...</>
-            ) : (
-              <>Extract</>
-            )}
-          </Button>
-        </div>
-        {contextError && (
-          <div className="flex items-start gap-2 p-2 rounded bg-destructive/10 border border-destructive/30">
-            <AlertCircle className="w-4 h-4 text-destructive mt-0.5 shrink-0" />
-            <p className="text-[10px] text-destructive">{contextError}</p>
+      {/* Extract Brand Info & Website Context Section */}
+      <div className="space-y-3">
+        <div className="rounded-xl bg-indigo-600/10 border-2 border-indigo-600/30 p-4 space-y-3">
+          <div>
+            <Label className="text-xs font-semibold flex items-center gap-1.5 mb-1.5">
+              <Globe className="w-3.5 h-3.5 text-indigo-600" />Extract from Website
+            </Label>
+            <p className="text-[10px] text-muted-foreground mb-2">Paste your business website URL and the AI will analyze it to extract business details and add context.</p>
           </div>
-        )}
+          <div className="flex gap-2">
+            <Input
+              type="url"
+              className="text-sm flex-1"
+              placeholder="https://example.com"
+              value={websiteUrl}
+              onChange={e => { setWebsiteUrl(e.target.value); setExtractError(null) }}
+              onKeyDown={e => e.key === 'Enter' && extractFromWebsite()}
+              disabled={extractLoading}
+            />
+            <Button
+              onClick={extractFromWebsite}
+              disabled={extractLoading || !websiteUrl.trim()}
+              className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold"
+            >
+              {extractLoading ? (
+                <><RefreshCw className="w-4 h-4 mr-2 animate-spin" />Extracting...</>
+              ) : (
+                <>Extract</>
+              )}
+            </Button>
+          </div>
+          {extractError && (
+            <div className="flex items-start gap-2 p-2 rounded bg-blue-600/10 border border-blue-600/30">
+              <AlertCircle className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
+              <p className="text-[10px] text-blue-600">{extractError}</p>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Manual fields */}
@@ -872,6 +895,8 @@ function StepIdeas({ ideas, onSetIdeas, flowId, brand, language }) {
 // ── Main ──────────────────────────────────────────────────────────────────
 export default function FlowPage() {
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const flowIdParam = searchParams.get('id')
   const [step, setStep]             = useState(1)
   const [maxStep, setMaxStep]       = useState(1)
   const [canvases, setCanvases]     = useState([])
@@ -885,7 +910,6 @@ export default function FlowPage() {
   const [language, setLanguage]     = useState('english')
   const [carouselChance, setCarouselChance] = useState(30)
   const [generating, setGenerating] = useState(false)
-  const [showList, setShowList]     = useState(true)
   const [newName, setNewName]       = useState('')
   const [contentIdeas, setContentIdeas] = useState([])
 
@@ -896,6 +920,16 @@ export default function FlowPage() {
     fetch('/api/flows').then(r => r.json()).then(d => setFlows(Array.isArray(d) ? d : []))
     loadGalleries()
   }, [])
+
+  // Auto-open flow if ID is in URL params
+  useEffect(() => {
+    if (flowIdParam && flows.length > 0 && !activeFlow) {
+      const flowToOpen = flows.find(f => f.id === flowIdParam)
+      if (flowToOpen) {
+        openFlow(flowToOpen)
+      }
+    }
+  }, [flowIdParam, flows, activeFlow])
 
   const goTo = (n) => { if (n <= maxStep) setStep(n) }
 
@@ -960,8 +994,9 @@ export default function FlowPage() {
     const res = await fetch('/api/flows', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: newName.trim() }) })
     const flow = await res.json()
     setFlows(prev => [flow, ...prev])
-    setActiveFlow(flow); setBrand({}); setSelectedCanvases([]); setGalleryId(null); setTone('informative'); setLanguage('english'); setContentIdeas([])
-    setStep(1); setMaxStep(1); setNewName(''); setShowList(false)
+    setNewName('')
+    // Open the new flow
+    openFlow(flow)
   }
 
   const openFlow = (flow) => {
@@ -969,7 +1004,9 @@ export default function FlowPage() {
     setGalleryId(flow.galleryId || null); setTone(flow.tone || 'informative'); setLanguage(flow.language || 'english')
     setContentIdeas(flow.contentIdeas || [])
     const ms = flow.posts?.length > 0 ? 5 : (flow.selectedCanvases?.length > 0 ? 4 : 2)
-    setMaxStep(ms); setStep(flow.posts?.length > 0 ? 4 : 2); setShowList(false)
+    setMaxStep(ms); setStep(flow.posts?.length > 0 ? 4 : 2)
+    // Navigate to add id to URL
+    router.push(`?id=${flow.id}`)
   }
 
   const canAdvance = () => {
@@ -980,8 +1017,8 @@ export default function FlowPage() {
     return false
   }
 
-  // ── Flow list ─────────────────────────────────────────────────────────
-  if (showList) {
+  // ── Flow list (when no flowId in URL) ─────────────────────────────────────────────────────────
+  if (!flowIdParam) {
     return (
       <div className="min-h-screen bg-[#FAF7F2] dark:bg-[#0E0D0B] text-foreground">
         <header className="border-b-2 border-foreground/90 bg-[#FAF7F2] dark:bg-[#0E0D0B] sticky top-0 z-20 px-6 py-3 flex items-center justify-between">
@@ -1031,11 +1068,11 @@ export default function FlowPage() {
     )
   }
 
-  // ── Active flow ──────────────────────────────────────────────────────
+  // ── Active flow (when flowId in URL and activeFlow is loaded) ──────────────────────────────────
   return (
     <div className="min-h-screen bg-[#FAF7F2] dark:bg-[#0E0D0B] text-foreground flex flex-col">
       <header className="border-b-2 border-foreground/90 bg-[#FAF7F2] dark:bg-[#0E0D0B] sticky top-0 z-20 px-6 py-3 flex items-center gap-4">
-        <Button variant="ghost" size="icon" onClick={() => { saveFlow(); setShowList(true) }}><ArrowLeft className="w-4 h-4" /></Button>
+        <Button variant="ghost" size="icon" onClick={() => { saveFlow(); router.push('?') }}><ArrowLeft className="w-4 h-4" /></Button>
         <KandLogo size={26} />
         <span className="font-bold text-sm truncate max-w-36">{activeFlow?.name}</span>
         <div className="flex-1 flex justify-center"><StepBar step={step} maxStep={maxStep} onGoTo={goTo} /></div>
@@ -1051,7 +1088,7 @@ export default function FlowPage() {
       </div>
 
       <div className="sticky bottom-0 border-t-2 border-foreground/90 bg-[#FAF7F2] dark:bg-[#0E0D0B] px-6 py-3 flex items-center justify-between">
-        <Button variant="outline" className="border-2" onClick={() => step > 1 ? setStep(s => s - 1) : (saveFlow(), setShowList(true))}>
+        <Button variant="outline" className="border-2" onClick={async () => { if (step > 1) { await saveFlow(); setStep(s => s - 1) } else { await saveFlow(); router.push('?') } }}>
           <ArrowLeft className="w-4 h-4 mr-1.5" />{step === 1 ? 'Flows' : 'Back'}
         </Button>
         <span className="text-[11px] text-muted-foreground hidden sm:block">
@@ -1064,7 +1101,15 @@ export default function FlowPage() {
         {step < 5 ? (
           <Button disabled={!canAdvance()}
             className="bg-foreground text-background hover:bg-foreground/85 rounded-full px-6 font-semibold"
-            onClick={async () => { if (step === 4) { await saveFlow(); setStep(5); setMaxStep(prev => Math.max(prev, 5)) } else await advance() }}>
+            onClick={async () => { 
+              if (step === 4) { 
+                await saveFlow()
+                setStep(5)
+                setMaxStep(prev => Math.max(prev, 5))
+              } else {
+                await advance()
+              }
+            }}>
             Continue <ArrowRight className="w-4 h-4 ml-1.5" />
           </Button>
         ) : (

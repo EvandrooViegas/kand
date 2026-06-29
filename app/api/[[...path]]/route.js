@@ -577,15 +577,15 @@ if (uploadMatch && method === 'GET') {
         }
       }
 
-      // Brand context string
+      // Brand context string - comprehensive business information for the AI
       const brandCtx = [
-        brand.businessName && `Business: ${brand.businessName}`,
-        brand.description  && `About: ${brand.description}`,
-        brand.audience     && `Audience: ${brand.audience}`,
-        brand.voice        && `Voice: ${brand.voice}`,
+        brand.businessName && `Business Name: ${brand.businessName}`,
+        brand.description  && `What They Do: ${brand.description}`,
+        brand.audience     && `Target Audience: ${brand.audience}`,
+        brand.voice        && `Brand Voice: ${brand.voice}`,
         brand.instagram    && `Instagram: @${brand.instagram}`,
-        brand.extra        && `Extra context: ${brand.extra}`,
-      ].filter(Boolean).join('. ')
+        brand.extra        && `Additional Context: ${brand.extra}`,
+      ].filter(Boolean).join('\n')
 
       const TONE_DESCS = {
         informative: 'Clear, factual, educational — share a useful insight.',
@@ -853,7 +853,7 @@ if (uploadMatch && method === 'GET') {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
               body: JSON.stringify({ 
-                model: 'llama-3.1-8b-instant', 
+                model: 'mixtral-8x7b-32768', 
                 messages: [{ role: 'user', content: prompt }], 
                 max_tokens: 500, 
                 temperature: 0.85 + (attempt * 0.05) // Slightly increase temperature on retries for variation
@@ -1013,7 +1013,11 @@ if (uploadMatch && method === 'GET') {
           pagePrompt = [
             `You are an expert social media copywriter. Creating PAGE 1 of a ${totalPages}-page carousel.`,
             `Language: Write EVERYTHING in ${languageName} ONLY. Do not use any other language.`,
-            `Brand: ${brand.businessName || 'Our brand'} | Tone: ${toneDesc}`,
+            ``,
+            `BUSINESS CONTEXT:`,
+            `${brandCtx}`,
+            ``,
+            `Tone: ${toneDesc}`,
             `Post #${postIndex + 1}${idea ? ` — Focus: "${idea}"` : ''}`,
             ``,
             `PAGE 1 ROLE: THE HOOK - Make viewers STOP and WANT to swipe.`,
@@ -1041,7 +1045,11 @@ if (uploadMatch && method === 'GET') {
           pagePrompt = [
             `You are an expert social media copywriter. Creating CONTENT PAGE of a ${totalPages}-page carousel.`,
             `Language: Write EVERYTHING in ${languageName} ONLY. Do not use any other language.`,
-            `Brand: ${brand.businessName || 'Our brand'} | Tone: ${toneDesc}`,
+            ``,
+            `BUSINESS CONTEXT:`,
+            `${brandCtx}`,
+            ``,
+            `Tone: ${toneDesc}`,
             `Post #${postIndex + 1}${idea ? ` — Focus: "${idea}"` : ''}`,
             ``,
             `PAGE ${pageIdx + 1} ROLE: SUPPORT AND EXPAND THE HOOK.`,
@@ -1071,7 +1079,11 @@ if (uploadMatch && method === 'GET') {
           pagePrompt = [
             `You are an expert social media copywriter. Creating PAGE ${totalPages} (FINAL CTA) of a ${totalPages}-page carousel.`,
             `Language: Write EVERYTHING in ${languageName} ONLY. Do not use any other language.`,
-            `Brand: ${brand.businessName || 'Our brand'} | Tone: ${toneDesc}`,
+            ``,
+            `BUSINESS CONTEXT:`,
+            `${brandCtx}`,
+            ``,
+            `Tone: ${toneDesc}`,
             `Post #${postIndex + 1}${idea ? ` — Focus: "${idea}"` : ''}`,
             ``,
             `PAGE ${totalPages} ROLE: FINAL CALL-TO-ACTION tied to the hook.`,
@@ -1240,7 +1252,11 @@ if (uploadMatch && method === 'GET') {
         const singlePrompt = [
           `You are an expert social media copywriter creating a complete single-image post.`,
           `Language: Write EVERYTHING in ${languageName} ONLY. Do not use any other language.`,
-          `Brand: ${brand.businessName || 'Our brand'} | Tone: ${toneDesc}`,
+          ``,
+          `BUSINESS CONTEXT:`,
+          `${brandCtx}`,
+          ``,
+          `Tone: ${toneDesc}`,
           `Post #${postIndex + 1}${idea ? ` — Focus: "${idea}"` : ' — Make this unique and compelling'}`,
           ``,
           `SINGLE IMAGE POST (NOT A CAROUSEL):`,
@@ -1793,7 +1809,7 @@ if (uploadMatch && method === 'GET') {
         const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
-          body: JSON.stringify({ model: 'llama-3.1-8b-instant', messages: [{ role: 'user', content: prompt }], max_tokens: 120, temperature: 0.85 })
+          body: JSON.stringify({ model: 'mixtral-8x7b-32768', messages: [{ role: 'user', content: prompt }], max_tokens: 120, temperature: 0.85 })
         })
         const data = await res.json()
         const text = data.choices?.[0]?.message?.content?.trim() || `${topic || key} — discover more.`
@@ -1854,34 +1870,22 @@ if (uploadMatch && method === 'GET') {
         const contentForAI = textContent.substring(0, 3000)
 
         // Call Groq to generate 120-word summary
-        const summaryPrompt = [
-          `You are a content analyzer. You will read website content and create a concise business context summary.`,
-          ``,
-          `Website content:`,
-          `${contentForAI}`,
-          ``,
-          `Create a 120-word summary that captures:`,
-          `1. What the business/website is about`,
-          `2. Key offerings or services`,
-          `3. Target audience or value proposition`,
-          `4. Unique selling points or key differentiators`,
-          ``,
-          `Write ONLY the 120-word summary. Be specific and factual. No intro/outro.`,
-        ].join('\n')
-
+        const cleanContent = contentForAI.substring(0, 2500).replace(/\n/g, ' ').replace(/\s+/g, ' ')
         const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
           body: JSON.stringify({
             model: 'llama-3.1-8b-instant',
-            messages: [{ role: 'user', content: summaryPrompt }],
+            messages: [{ role: 'user', content: `Summarize this website (120 words): ${cleanContent}` }],
             max_tokens: 200,
             temperature: 0.7
           })
         })
 
         if (!res.ok) {
-          throw new Error(`Groq API error: ${res.status}`)
+          const errData = await res.json().catch(() => ({}))
+          console.error('Groq website context error:', { status: res.status, error: errData })
+          throw new Error(`Groq API error: ${res.status} - ${errData.error?.message || 'Unknown'}`)
         }
 
         const aiData = await res.json()
@@ -1896,6 +1900,163 @@ if (uploadMatch && method === 'GET') {
       } catch (e) {
         console.error('Website context error:', e.message)
         return corsify(NextResponse.json({ error: `Failed to process URL: ${e.message}` }, { status: 400 }))
+      }
+    }
+
+    // Extract brand information from website
+    if (route === '/extract-brand-info' && method === 'POST') {
+      const { url } = await request.json().catch(() => ({}))
+      if (!url || typeof url !== 'string') {
+        return corsify(NextResponse.json({ error: 'url is required' }, { status: 400 }))
+      }
+
+      // Validate URL format
+      let parsedUrl
+      try {
+        parsedUrl = new URL(url)
+      } catch (e) {
+        return corsify(NextResponse.json({ error: 'Invalid URL format' }, { status: 400 }))
+      }
+
+      const groqKey = process.env.GROQ_API_KEY
+      if (!groqKey) {
+        return corsify(NextResponse.json({ error: 'Groq API key not configured' }, { status: 500 }))
+      }
+
+      try {
+        // Fetch website content
+        const response = await fetch(url, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          },
+          timeout: 10000
+        })
+
+        if (!response.ok) {
+          return corsify(NextResponse.json({ 
+            businessName: '',
+            description: '',
+            targetAudience: '',
+            brandVoice: '',
+            extra: '',
+            error: `Failed to fetch URL (${response.status})`
+          }))
+        }
+
+        const html = await response.text()
+
+        // Extract text content
+        const textContent = html
+          .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+          .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+
+        if (!textContent || textContent.length < 50) {
+          return corsify(NextResponse.json({ 
+            businessName: '',
+            description: '',
+            targetAudience: '',
+            brandVoice: '',
+            extra: '',
+            error: 'Could not extract meaningful content from URL'
+          }))
+        }
+
+        // Limit content for API efficiency
+        const contentForAI = textContent.substring(0, 3000)
+
+        // Call Groq to extract brand information - with clean content
+        const cleanContent = contentForAI.substring(0, 2500).replace(/\n/g, ' ').replace(/\s+/g, ' ')
+        const extractPrompt = `Extract business information from this website content. Be practical - if you can reasonably infer information from context clues, include it. For example, "we help small businesses with software" tells you what they do and their audience.
+
+Website: ${cleanContent}
+
+Return JSON with these fields (use empty string "" if you truly cannot determine):
+- businessName: The company name
+- description: What the business does/offers - provide 2-3 sentences with as much detail as possible. Include their main services, products, or solutions. Be comprehensive.
+- targetAudience: Who they serve (keep concise)
+- brandVoice: The tone/personality you detect from their content (professional, playful, formal, casual, etc)
+- extra: Any other important business details
+
+Return ONLY valid JSON, no explanation.`
+
+        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
+          body: JSON.stringify({
+            model: 'llama-3.1-8b-instant',
+            messages: [{ role: 'user', content: extractPrompt }],
+            max_tokens: 400,
+            temperature: 0.3
+          })
+        })
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}))
+          console.error('Groq brand extraction error:', { status: res.status, error: errData })
+          throw new Error(`Groq API error: ${res.status} - ${errData.error?.message || 'Unknown'}`)
+        }
+
+        const aiData = await res.json()
+        const responseText = aiData.choices?.[0]?.message?.content?.trim() || '{}'
+        
+        // Extract JSON from response
+        const jsonMatch = responseText.match(/\{[\s\S]*\}/)
+        let brandInfo = {
+          businessName: '',
+          description: '',
+          targetAudience: '',
+          brandVoice: '',
+          extra: ''
+        }
+
+        if (jsonMatch) {
+          try {
+            const parsed = JSON.parse(jsonMatch[0])
+            // Only keep non-empty values
+            brandInfo.businessName = (parsed.businessName || '').trim()
+            brandInfo.description = (parsed.description || '').trim()
+            brandInfo.targetAudience = (parsed.targetAudience || '').trim()
+            brandInfo.brandVoice = (parsed.brandVoice || '').trim()
+            brandInfo.extra = (parsed.extra || '').trim()
+          } catch (e) {
+            console.error('JSON parse error:', e.message)
+          }
+        }
+
+        // Check if any useful information was extracted
+        const hasUsefulInfo = brandInfo.businessName || brandInfo.description || brandInfo.targetAudience || brandInfo.brandVoice || brandInfo.extra
+        
+        if (!hasUsefulInfo) {
+          return corsify(NextResponse.json({ 
+            businessName: '',
+            description: '',
+            targetAudience: '',
+            brandVoice: '',
+            extra: '',
+            info: 'No business information found on this website. Please fill in the details manually or try a different URL.',
+            sourceUrl: url,
+            timestamp: new Date()
+          }, { status: 200 }))
+        }
+
+        return corsify(NextResponse.json({ 
+          ...brandInfo,
+          sourceUrl: url,
+          timestamp: new Date()
+        }))
+      } catch (e) {
+        console.error('Brand extraction error:', e.message)
+        return corsify(NextResponse.json({ 
+          businessName: '',
+          description: '',
+          targetAudience: '',
+          brandVoice: '',
+          extra: '',
+          error: `Failed to process URL: ${e.message}`
+        }, { status: 400 }))
       }
     }
 
