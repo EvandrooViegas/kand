@@ -28,6 +28,23 @@ function ThemeToggle() {
   )
 }
 
+function EmptyState({ onNew }) {
+  return (
+    <div className="text-center py-20 border-2 border-dashed border-foreground/15 rounded-2xl">
+      <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-[#D4FF00]/20 border-2 border-foreground/90 flex items-center justify-center">
+        <ImageIcon className="w-7 h-7 text-foreground" />
+      </div>
+      <h3 className="text-xl font-bold mb-1" style={BEBAS}>NO DESIGNS YET</h3>
+      <p className="text-sm text-muted-foreground mb-5 max-w-sm mx-auto">
+        Create your first canvas — lay out the design once, then render fresh PNGs by tagging any layer as dynamic.
+      </p>
+      <Button onClick={onNew} className="bg-foreground text-background hover:bg-foreground/85 rounded-full px-5 h-10 font-semibold">
+        <Plus className="w-4 h-4 mr-1.5" />New Design
+      </Button>
+    </div>
+  )
+}
+
 function Dashboard() {
   const router = useRouter()
   const [canvases, setCanvases] = useState([])
