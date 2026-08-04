@@ -502,6 +502,7 @@ if (uploadMatch && method === 'GET') {
       ].join('\n')
 
       try {
+        console.log('🤖 CONTENT IDEAS GENERATION PROMPT:\n', prompt)
         const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
@@ -844,6 +845,9 @@ if (uploadMatch && method === 'GET') {
           }
           return result
         }
+
+        // Log the prompt being sent to AI
+        console.log('🤖 POST GENERATION PROMPT:\n', prompt)
 
         // Retry logic with exponential backoff for reliability
         let lastError = null
@@ -1395,6 +1399,7 @@ if (uploadMatch && method === 'GET') {
         ].join('\n')
 
         try {
+          console.log('🤖 CAPTION GENERATION PROMPT:\n', prompt)
           const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
@@ -1767,8 +1772,23 @@ if (uploadMatch && method === 'GET') {
       }
 
       // Append new posts to existing posts instead of replacing
-      await db.collection('flows').updateOne({ id: flowId }, { $push: { posts: { $each: posts } }, $set: { status: 'ready', updatedAt: new Date() } })
-      return corsify(NextResponse.json({ success: true, postCount: posts.length, posts }))
+      // IMPORTANT: Don't store full renderData in DB - it makes the document too large (>16MB MongoDB limit)
+      // Only store post metadata and IDs
+      const postsForDB = posts.map(p => ({
+        id: p.id,
+        canvasId: p.canvasId,
+        canvasName: p.canvasName,
+        canvasType: p.canvasType,
+        caption: p.caption,
+        render: p.render,
+        status: p.status,
+        scheduledAt: p.scheduledAt,
+        createdAt: p.createdAt,
+        // DO NOT store: data (renderData) - it's too large and not needed for display
+      }))
+      
+      await db.collection('flows').updateOne({ id: flowId }, { $push: { posts: { $each: postsForDB } }, $set: { status: 'ready', updatedAt: new Date() } })
+      return corsify(NextResponse.json({ success: true, postCount: posts.length, posts: postsForDB }))
     }
 
     // Update a single post inside a flow (accept/reject/schedule)
@@ -1778,7 +1798,64 @@ if (uploadMatch && method === 'GET') {
       const body = await request.json().catch(() => ({}))
       const flow = await db.collection('flows').findOne({ id: flowId })
       if (!flow) return corsify(NextResponse.json({ error: 'Flow not found' }, { status: 404 }))
-      const posts = (flow.posts || []).map(p => p.id === postId ? { ...p, ...body } : p)
+      
+      // Only update safe fields - don't store large renderData
+      const safeUpdateFields = ['status', 'scheduledAt', 'caption']
+      const updateData = {}
+      for (const field of safeUpdateFields) {
+        if (body.hasOwnProperty(field)) {
+          updateData[field] = body[field]
+        }
+      }
+      
+      const posts = (flow.posts || []).map(p => p.id === postId ? { ...p, ...updateData } : p)
+      await db.collection('flows').updateOne({ id: flowId }, { $set: { posts, updatedAt: new Date() } })
+      return corsify(NextResponse.json({ success: true }))
+    }
+
+    // Re-render a single post with updated data
+    const rerenderMatch = route.match(/^\/flows\/([^/]+)\/rerender-post$/)
+    if (rerenderMatch && method === 'POST') {
+      const flowId = rerenderMatch[1]
+      const { postId, data: newData } = await request.json().catch(() => ({}))
+      const flow = await db.collection('flows').findOne({ id: flowId })
+      if (!flow) return corsify(NextResponse.json({ error: 'Flow not found' }, { status: 404 }))
+      const post = (flow.posts || []).find(p => p.id === postId)
+      if (!post) return corsify(NextResponse.json({ error: 'Post not found' }, { status: 404 }))
+      const canvas = await db.collection('canvases').findOne({ id: post.canvasId })
+      if (!canvas) return corsify(NextResponse.json({ error: 'Canvas not found' }, { status: 404 }))
+
+      const baseUrl = getBaseUrl(request)
+      const renderId = uuidv4()
+      let renderResult = null
+      try {
+        if (canvas.type === 'carousel') {
+          const pages = [...(canvas.pages || [])].sort((a, b) => a.order - b.order)
+          const zip = new JSZip()
+          for (const page of pages) {
+            let pd = { ...newData }
+            if (page.type === 'top_peer') for (const [k, v] of Object.entries(newData)) pd[`${k}_top`] = v
+            else if (page.type === 'bottom_peer') for (const [k, v] of Object.entries(newData)) pd[`${k}_bottom`] = v
+            const pageCanvas = { ...canvas, nodes: page.nodes || [], groups: page.groups || [], classes: page.classes || {} }
+            const png = await renderCanvasToPng(pageCanvas, pd)
+            const label = page.type === 'top_peer' ? '00-top-peer' : page.type === 'bottom_peer' ? `${String(pages.indexOf(page)).padStart(2,'0')}-bottom-peer` : `${String(pages.indexOf(page)).padStart(2,'0')}-${(page.name||'page').replace(/\s+/g,'-')}`
+            zip.file(`${label}.png`, png)
+          }
+          const zipBuf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' })
+          await db.collection('renders').insertOne({ id: renderId, canvasId: canvas.id, type: 'carousel', zip: new Binary(zipBuf), payload: newData, approved: false, createdAt: new Date() })
+          renderResult = { url: `${baseUrl}/api/rendered/${renderId}.zip`, render_id: renderId, type: 'carousel' }
+        } else {
+          const png = await renderCanvasToPng(canvas, newData)
+          await db.collection('renders').insertOne({ id: renderId, canvasId: canvas.id, type: 'single', png: new Binary(png), payload: newData, approved: false, createdAt: new Date() })
+          renderResult = { url: `${baseUrl}/api/rendered/${renderId}`, render_id: renderId, type: 'single' }
+        }
+      } catch (e) { 
+        console.error('rerender error', e.message)
+        return corsify(NextResponse.json({ success: false, error: 'Failed to render post' }, { status: 400 }))
+      }
+
+      // Update post with new render - ONLY store render URL, not the data
+      const posts = (flow.posts || []).map(p => p.id === postId ? { ...p, render: renderResult, updatedAt: new Date() } : p)
       await db.collection('flows').updateOne({ id: flowId }, { $set: { posts, updatedAt: new Date() } })
       return corsify(NextResponse.json({ success: true }))
     }
@@ -1903,6 +1980,96 @@ if (uploadMatch && method === 'GET') {
       }
     }
 
+    // Generate strategic brand questions from context
+    if (route === '/generate-brand-questions' && method === 'POST') {
+      const { brandContext } = await request.json().catch(() => ({}))
+      if (!brandContext) {
+        return corsify(NextResponse.json({ error: 'brandContext is required', success: false }, { status: 400 }))
+      }
+
+      const groqKey = process.env.GROQ_API_KEY
+      if (!groqKey) {
+        return corsify(NextResponse.json({ error: 'Groq API key not configured', success: false }, { status: 500 }))
+      }
+
+      try {
+        const prompt = [
+          `You are a social media strategist. Generate EXACTLY 4 simple questions to help create better Instagram content.`,
+          ``,
+          `These questions should be:`,
+          `- VERY SIMPLE to answer (quick 1-3 words or 1 sentence max)`,
+          `- Actionable for social media content creation`,
+          `- Not on the website (require insider knowledge)`,
+          `- Focused on what makes content stick on social media`,
+          ``,
+          `Brand Context:`,
+          brandContext,
+          ``,
+          `Examples of PERFECT questions:`,
+          `- "What's your #1 product/service?"`,
+          `- "In 3 words, what makes you different?"`,
+          `- "What do customers thank you for most?"`,
+          `- "What quick tip would help your audience?"`,
+          `- "What's a common mistake your audience makes?"`,
+          `- "What problem do you solve best?"`,
+          `- "What's your biggest competitor doing wrong?"`,
+          `- "What's one thing you wish customers knew?"`,
+          ``,
+          `Generate 4 of these simple, specific questions. Return ONLY a JSON array.`,
+          `Format: ["Question 1?", "Question 2?", "Question 3?", "Question 4?"]`,
+        ].join('\n')
+
+        console.log('🤖 BRAND QUESTIONS GENERATION PROMPT:\n', prompt)
+        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
+          body: JSON.stringify({ 
+            model: 'llama-3.1-8b-instant', 
+            messages: [{ role: 'user', content: prompt }], 
+            max_tokens: 400, 
+            temperature: 0.7 
+          }),
+        })
+
+        if (!res.ok) throw new Error(`Groq ${res.status}`)
+        const data = await res.json()
+        const responseText = data.choices?.[0]?.message?.content?.trim() || '[]'
+        
+        // Parse JSON from response
+        const jsonMatch = responseText.match(/\[[\s\S]*\]/)
+        let questions = []
+
+        if (jsonMatch) {
+          try {
+            questions = JSON.parse(jsonMatch[0])
+            if (!Array.isArray(questions)) questions = []
+            // Ensure exactly 4 items and all are strings
+            questions = questions.filter(q => typeof q === 'string' && q.trim()).slice(0, 4)
+          } catch (e) {
+            console.error('JSON parse error:', e.message)
+          }
+        }
+
+        if (questions.length < 4) {
+          // Fallback questions - very simple, directly useful for content
+          questions = [
+            'What\'s your #1 product or service?',
+            'In 3 words, what makes you different?',
+            'What do customers always ask or thank you for?',
+            'What\'s one quick tip or hack you\'d share with your audience?',
+          ].slice(0, 4)
+        }
+
+        return corsify(NextResponse.json({ success: true, questions: questions.slice(0, 4) }))
+      } catch (e) {
+        console.error('Brand questions generation error:', e.message)
+        return corsify(NextResponse.json({ 
+          error: `Failed to generate questions: ${e.message}`,
+          success: false
+        }, { status: 400 }))
+      }
+    }
+
     // Extract brand information from website
     if (route === '/extract-brand-info' && method === 'POST') {
       const { url } = await request.json().catch(() => ({}))
@@ -1982,6 +2149,7 @@ Return JSON with these fields (use empty string "" if you truly cannot determine
 
 Return ONLY valid JSON, no explanation.`
 
+        console.log('🤖 BRAND EXTRACTION PROMPT:\n', extractPrompt)
         const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },

@@ -88,11 +88,13 @@ function StepBar({ step, maxStep, onGoTo }) {
   )
 }
 
-// ── Step 1: Brand Context ─────────────────────────────────────────────────
-function StepBrand({ brand, onChange }) {
+// ── Step 1: Brand Context with Strategic Questions ─────────────────────────────────────────────────
+function StepBrand({ brand, onChange, questions, onQuestionsChange, answers, onAnswersChange, extractedContext, onExtractedContextChange, onAdvance }) {
   const [websiteUrl, setWebsiteUrl] = useState('')
   const [extractLoading, setExtractLoading] = useState(false)
   const [extractError, setExtractError] = useState(null)
+  const [generateQuestionsLoading, setGenerateQuestionsLoading] = useState(false)
+  const [manualMode, setManualMode] = useState(questions.length > 0)
 
   const fields = [
     { key: 'businessName', label: 'Business / Brand Name',        icon: Building2, placeholder: 'Acme Corp' },
@@ -120,7 +122,6 @@ function StepBrand({ brand, onChange }) {
 
       const data = await res.json()
       
-      // Check if API returned an info message (not found)
       if (data.info) {
         setExtractError(data.info)
         toast.info(data.info)
@@ -129,7 +130,6 @@ function StepBrand({ brand, onChange }) {
         return
       }
 
-      // Check if API returned an error message (network/parse error)
       if (data.error) {
         setExtractError(data.error)
         toast.error(data.error)
@@ -140,7 +140,11 @@ function StepBrand({ brand, onChange }) {
 
       if (!res.ok) throw new Error(data.error || 'Failed to extract brand info')
 
-      // Merge extracted info with existing brand data (only fill empty fields)
+      // Store extracted context as a string
+      const contextString = [data.businessName, data.description, data.targetAudience, data.brandVoice, data.extra].filter(Boolean).join('\n')
+      onExtractedContextChange(contextString)
+
+      // Merge extracted info with existing brand data
       const updated = { ...brand }
       if (data.businessName && !updated.businessName) updated.businessName = data.businessName
       if (data.description && !updated.description) updated.description = data.description
@@ -150,7 +154,11 @@ function StepBrand({ brand, onChange }) {
 
       onChange(updated)
       setWebsiteUrl('')
-      toast.success('Brand info extracted from website!')
+      setManualMode(false)
+      toast.success('Brand info extracted! Now generating strategic questions...')
+      
+      // Generate questions automatically after extraction
+      await generateStrategicQuestions(contextString)
     } catch (e) {
       setExtractError(e.message || 'Failed to extract brand info')
       toast.error(e.message || 'Failed to extract brand info')
@@ -159,65 +167,170 @@ function StepBrand({ brand, onChange }) {
     }
   }
 
+  const generateStrategicQuestions = async (contextToUse) => {
+    setGenerateQuestionsLoading(true)
+    try {
+      const brandContext = [
+        extractedContext || contextToUse,
+        brand.businessName && `Business: ${brand.businessName}`,
+        brand.description && `What they do: ${brand.description}`,
+        brand.audience && `Audience: ${brand.audience}`,
+        brand.voice && `Voice: ${brand.voice}`,
+      ].filter(Boolean).join('\n')
+
+      const res = await fetch('/api/generate-brand-questions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ brandContext })
+      })
+
+      const data = await res.json()
+      if (data.success && data.questions) {
+        onQuestionsChange(data.questions)
+        onAnswersChange({})
+        toast.success('Strategic questions generated!')
+      } else {
+        toast.error(data.error || 'Failed to generate questions')
+      }
+    } catch (e) {
+      toast.error(e.message || 'Failed to generate questions')
+    } finally {
+      setGenerateQuestionsLoading(false)
+    }
+  }
+
   return (
-    <div className="max-w-2xl mx-auto space-y-6">
+    <div className="max-w-3xl mx-auto space-y-6">
       <div>
         <h2 style={{ ...BEBAS, fontSize: 26 }}>BRAND CONTEXT</h2>
-        <p className="text-sm text-muted-foreground mt-1">This is passed to the AI for every post in this flow. The more detail, the better the copy.</p>
+        <p className="text-sm text-muted-foreground mt-1">Extract your brand context from your website OR enter it manually.</p>
       </div>
 
-      {/* Extract Brand Info & Website Context Section */}
-      <div className="space-y-3">
-        <div className="rounded-xl bg-indigo-600/10 border-2 border-indigo-600/30 p-4 space-y-3">
-          <div>
-            <Label className="text-xs font-semibold flex items-center gap-1.5 mb-1.5">
-              <Globe className="w-3.5 h-3.5 text-indigo-600" />Extract from Website
-            </Label>
-            <p className="text-[10px] text-muted-foreground mb-2">Paste your business website URL and the AI will analyze it to extract business details and add context.</p>
+      {/* Extract Brand Info or Manual Entry */}
+      {questions.length === 0 ? (
+        <div className="space-y-3">
+          <div className="rounded-xl bg-indigo-600/10 border-2 border-indigo-600/30 p-4 space-y-3">
+            <div>
+              <Label className="text-xs font-semibold flex items-center gap-1.5 mb-1.5">
+                <Globe className="w-3.5 h-3.5 text-indigo-600" />Extract from Website (Recommended)
+              </Label>
+              <p className="text-[10px] text-muted-foreground mb-2">Paste your business website URL and the AI will analyze it to extract business details.</p>
+            </div>
+            <div className="flex gap-2">
+              <Input
+                type="url"
+                className="text-sm flex-1"
+                placeholder="https://example.com"
+                value={websiteUrl}
+                onChange={e => { setWebsiteUrl(e.target.value); setExtractError(null) }}
+                onKeyDown={e => e.key === 'Enter' && extractFromWebsite()}
+                disabled={extractLoading}
+              />
+              <Button
+                onClick={extractFromWebsite}
+                disabled={extractLoading || !websiteUrl.trim()}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold"
+              >
+                {extractLoading ? (
+                  <><RefreshCw className="w-4 h-4 mr-2 animate-spin" />Extracting...</>
+                ) : (
+                  <>Extract</>
+                )}
+              </Button>
+            </div>
+            {extractError && (
+              <div className="flex items-start gap-2 p-2 rounded bg-blue-600/10 border border-blue-600/30">
+                <AlertCircle className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
+                <p className="text-[10px] text-blue-600">{extractError}</p>
+              </div>
+            )}
           </div>
+
+          <div className="relative flex items-center gap-3 my-4">
+            <div className="flex-1 border-t border-foreground/10"></div>
+            <span className="text-xs text-muted-foreground px-2">OR</span>
+            <div className="flex-1 border-t border-foreground/10"></div>
+          </div>
+
+          <Button
+            onClick={() => { setManualMode(true); onExtractedContextChange('') }}
+            variant="outline"
+            className="w-full border-2"
+          >
+            Enter Brand Info Manually
+          </Button>
+        </div>
+      ) : null}
+
+      {/* Manual Fields or Questions Section */}
+      {questions.length === 0 && manualMode ? (
+        <div className="space-y-4">
+          <p className="text-xs font-semibold text-muted-foreground uppercase">Enter your brand information</p>
+          {fields.map(({ key, label, icon: Icon, placeholder, multiline }) => (
+            <div key={key}>
+              <Label className="text-xs font-semibold flex items-center gap-1.5 mb-1.5">
+                <Icon className="w-3.5 h-3.5 text-muted-foreground" />{label}
+              </Label>
+              {multiline
+                ? <Textarea rows={3} className="text-sm" placeholder={placeholder} value={brand[key] || ''} onChange={e => onChange({ ...brand, [key]: e.target.value })} />
+                : <Input className="text-sm" placeholder={placeholder} value={brand[key] || ''} onChange={e => onChange({ ...brand, [key]: e.target.value })} />
+              }
+            </div>
+          ))}
+          <Button
+            onClick={() => generateStrategicQuestions('')}
+            disabled={generateQuestionsLoading || !brand.businessName?.trim()}
+            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold"
+          >
+            {generateQuestionsLoading ? (
+              <><RefreshCw className="w-4 h-4 mr-2 animate-spin" />Generating Questions...</>
+            ) : (
+              <>Generate Strategic Questions</>
+            )}
+          </Button>
+        </div>
+      ) : null}
+
+      {/* Strategic Questions Section */}
+      {questions.length > 0 ? (
+        <div className="space-y-4">
+          <div className="rounded-xl bg-purple-600/10 border-2 border-purple-600/30 p-4">
+            <h3 className="text-sm font-bold mb-1">Strategic Questions</h3>
+            <p className="text-xs text-muted-foreground mb-4">Answer these questions to help the AI understand your brand better and generate more targeted content ideas.</p>
+            <div className="space-y-3 max-h-96 overflow-y-auto">
+              {questions.map((q, idx) => (
+                <div key={idx} className="space-y-1.5">
+                  <label className="text-xs font-semibold text-foreground">{idx + 1}. {q}</label>
+                  <Textarea
+                    rows={2}
+                    className="text-sm"
+                    placeholder="Your answer..."
+                    value={answers[idx] || ''}
+                    onChange={e => onAnswersChange({ ...answers, [idx]: e.target.value })}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
+
           <div className="flex gap-2">
-            <Input
-              type="url"
-              className="text-sm flex-1"
-              placeholder="https://example.com"
-              value={websiteUrl}
-              onChange={e => { setWebsiteUrl(e.target.value); setExtractError(null) }}
-              onKeyDown={e => e.key === 'Enter' && extractFromWebsite()}
-              disabled={extractLoading}
-            />
             <Button
-              onClick={extractFromWebsite}
-              disabled={extractLoading || !websiteUrl.trim()}
-              className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold"
+              onClick={() => { onQuestionsChange([]); onAnswersChange({}); setManualMode(false) }}
+              variant="outline"
+              className="flex-1 border-2"
             >
-              {extractLoading ? (
-                <><RefreshCw className="w-4 h-4 mr-2 animate-spin" />Extracting...</>
-              ) : (
-                <>Extract</>
-              )}
+              Change Approach
+            </Button>
+            <Button
+              onClick={onAdvance}
+              disabled={Object.keys(answers).length < questions.length || Object.values(answers).some(a => !a?.trim())}
+              className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white"
+            >
+              Continue to Next Step
             </Button>
           </div>
-          {extractError && (
-            <div className="flex items-start gap-2 p-2 rounded bg-blue-600/10 border border-blue-600/30">
-              <AlertCircle className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
-              <p className="text-[10px] text-blue-600">{extractError}</p>
-            </div>
-          )}
         </div>
-      </div>
-
-      {/* Manual fields */}
-      {fields.map(({ key, label, icon: Icon, placeholder, multiline }) => (
-        <div key={key}>
-          <Label className="text-xs font-semibold flex items-center gap-1.5 mb-1.5">
-            <Icon className="w-3.5 h-3.5 text-muted-foreground" />{label}
-          </Label>
-          {multiline
-            ? <Textarea rows={3} className="text-sm" placeholder={placeholder} value={brand[key] || ''} onChange={e => onChange({ ...brand, [key]: e.target.value })} />
-            : <Input className="text-sm" placeholder={placeholder} value={brand[key] || ''} onChange={e => onChange({ ...brand, [key]: e.target.value })} />
-          }
-        </div>
-      ))}
+      ) : null}
     </div>
   )
 }
@@ -912,6 +1025,9 @@ export default function FlowPage() {
   const [generating, setGenerating] = useState(false)
   const [newName, setNewName]       = useState('')
   const [contentIdeas, setContentIdeas] = useState([])
+  const [brandQuestions, setBrandQuestions] = useState([])
+  const [brandAnswers, setBrandAnswers] = useState({})
+  const [extractedContext, setExtractedContext] = useState('')
 
   const loadGalleries = () => fetch('/api/galleries').then(r => r.json()).then(d => setGalleries(Array.isArray(d) ? d : []))
 
@@ -935,7 +1051,7 @@ export default function FlowPage() {
 
   const saveFlow = async (extra = {}) => {
     if (!activeFlow) return
-    const body = { ...activeFlow, brandContext: brand, selectedCanvases, galleryId, tone, language, contentIdeas, ...extra }
+    const body = { ...activeFlow, brandContext: brand, selectedCanvases, galleryId, tone, language, contentIdeas, brandQuestions, brandAnswers, extractedContext, ...extra }
     const res = await fetch(`/api/flows/${activeFlow.id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
     const saved = await res.json()
     setActiveFlow(saved)
@@ -1003,6 +1119,9 @@ export default function FlowPage() {
     setActiveFlow(flow); setBrand(flow.brandContext || {}); setSelectedCanvases(flow.selectedCanvases || [])
     setGalleryId(flow.galleryId || null); setTone(flow.tone || 'informative'); setLanguage(flow.language || 'english')
     setContentIdeas(flow.contentIdeas || [])
+    setBrandQuestions(flow.brandQuestions || [])
+    setBrandAnswers(flow.brandAnswers || {})
+    setExtractedContext(flow.extractedContext || '')
     const ms = flow.posts?.length > 0 ? 5 : (flow.selectedCanvases?.length > 0 ? 4 : 2)
     setMaxStep(ms); setStep(flow.posts?.length > 0 ? 4 : 2)
     // Navigate to add id to URL
@@ -1080,7 +1199,7 @@ export default function FlowPage() {
       </header>
 
       <div className="flex-1 max-w-6xl w-full mx-auto px-6 py-8">
-        {step === 1 && <StepBrand brand={brand} onChange={setBrand} />}
+        {step === 1 && <StepBrand brand={brand} onChange={setBrand} questions={brandQuestions} onQuestionsChange={setBrandQuestions} answers={brandAnswers} onAnswersChange={setBrandAnswers} extractedContext={extractedContext} onExtractedContextChange={setExtractedContext} onAdvance={advance} />}
         {step === 2 && <StepConfigure canvases={canvases} selectedCanvases={selectedCanvases} onToggleCanvas={id => setSelectedCanvases(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])} galleryId={galleryId} onSetGallery={setGalleryId} tone={tone} onSetTone={setTone} galleries={galleries} onRefreshGalleries={loadGalleries} carouselChance={carouselChance} onSetCarouselChance={setCarouselChance} language={language} onSetLanguage={setLanguage} />}
         {step === 3 && <StepIdeas ideas={contentIdeas} onSetIdeas={setContentIdeas} flowId={activeFlow?.id} brand={brand} language={language} />}
         {step === 4 && <StepGenerate flow={activeFlow} canvases={canvases} onGenerate={generate} onUpdatePost={updatePost} onRerender={rerenderPost} generating={generating} brand={brand} tone={tone} language={language} />}
