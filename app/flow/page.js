@@ -89,248 +89,146 @@ function StepBar({ step, maxStep, onGoTo }) {
 }
 
 // ── Step 1: Brand Context with Strategic Questions ─────────────────────────────────────────────────
-function StepBrand({ brand, onChange, questions, onQuestionsChange, answers, onAnswersChange, extractedContext, onExtractedContextChange, onAdvance }) {
+function StepBrand({ brand, onChange, extractedContext, onExtractedContextChange, onAdvance }) {
   const [websiteUrl, setWebsiteUrl] = useState('')
   const [extractLoading, setExtractLoading] = useState(false)
   const [extractError, setExtractError] = useState(null)
-  const [generateQuestionsLoading, setGenerateQuestionsLoading] = useState(false)
-  const [manualMode, setManualMode] = useState(questions.length > 0)
+  const [extractedFlash, setExtractedFlash] = useState(false)
 
+  // Five essential fields — these ARE the questions we need answered.
+  // If the user extracts from a website, they get pre-filled and become editable.
   const fields = [
-    { key: 'businessName', label: 'Business / Brand Name',        icon: Building2, placeholder: 'Acme Corp' },
-    { key: 'description',  label: 'What you do (2-3 sentences)',  icon: BookOpen,  placeholder: 'We help small businesses automate social media.', multiline: true },
-    { key: 'audience',     label: 'Target Audience',              icon: Users,     placeholder: 'Small business owners aged 25-45.' },
-    { key: 'voice',        label: 'Brand Voice / Personality',    icon: Mic2,      placeholder: 'Professional but approachable, never jargony.', multiline: true },
-    { key: 'extra',        label: 'Anything else the AI should know', icon: Sparkles, placeholder: 'Q4 holiday promo. Always end with a CTA.', multiline: true },
+    { key: 'businessName', label: 'Business name',                icon: Building2, placeholder: 'Acme Coffee Co.',                                          question: 'What is your business called?',                    required: true },
+    { key: 'description',  label: 'What you do',                  icon: BookOpen,  placeholder: 'We roast single-origin beans and ship them fresh across Europe.', question: 'In 2-3 sentences, what do you actually do?',       required: true, multiline: true },
+    { key: 'audience',     label: 'Who you serve',                icon: Users,     placeholder: 'Home baristas who care about specialty coffee.',           question: 'Who is your ideal customer?',                      multiline: false },
+    { key: 'voice',        label: 'Voice / personality',          icon: Mic2,      placeholder: 'Warm, curious, a little nerdy about the craft.',          question: 'How does your brand sound in one sentence?',       multiline: false },
+    { key: 'extra',        label: 'One insider truth',            icon: Sparkles,  placeholder: 'Most competitors over-roast to hide bad beans. We do the opposite.', question: 'What is the ONE thing you wish customers knew?',   multiline: true },
   ]
 
+  const requiredKeys = fields.filter(f => f.required).map(f => f.key)
+  const canContinue = requiredKeys.every(k => (brand[k] || '').trim().length > 0)
+
   const extractFromWebsite = async () => {
-    if (!websiteUrl.trim()) {
-      setExtractError('Please enter a valid URL')
-      return
-    }
-
-    setExtractLoading(true)
-    setExtractError(null)
-
+    if (!websiteUrl.trim()) { setExtractError('Please enter a valid URL'); return }
+    setExtractLoading(true); setExtractError(null)
     try {
       const res = await fetch('/api/extract-brand-info', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: websiteUrl.trim() })
       })
-
       const data = await res.json()
-      
-      if (data.info) {
-        setExtractError(data.info)
-        toast.info(data.info)
-        setWebsiteUrl('')
-        setExtractLoading(false)
-        return
-      }
-
-      if (data.error) {
-        setExtractError(data.error)
-        toast.error(data.error)
-        setWebsiteUrl('')
-        setExtractLoading(false)
-        return
-      }
-
+      if (data.info) { setExtractError(data.info); toast.info(data.info); return }
+      if (data.error) { setExtractError(data.error); toast.error(data.error); return }
       if (!res.ok) throw new Error(data.error || 'Failed to extract brand info')
 
-      // Store extracted context as a string
+      // Merge extracted into brand fields
+      const updated = { ...brand }
+      if (data.businessName)    updated.businessName = data.businessName
+      if (data.description)     updated.description  = data.description
+      if (data.targetAudience)  updated.audience     = data.targetAudience
+      if (data.brandVoice)      updated.voice        = data.brandVoice
+      if (data.extra)           updated.extra        = data.extra
+      onChange(updated)
+
       const contextString = [data.businessName, data.description, data.targetAudience, data.brandVoice, data.extra].filter(Boolean).join('\n')
       onExtractedContextChange(contextString)
 
-      // Merge extracted info with existing brand data
-      const updated = { ...brand }
-      if (data.businessName && !updated.businessName) updated.businessName = data.businessName
-      if (data.description && !updated.description) updated.description = data.description
-      if (data.targetAudience && !updated.audience) updated.audience = data.targetAudience
-      if (data.brandVoice && !updated.voice) updated.voice = data.brandVoice
-      if (data.extra && !updated.extra) updated.extra = data.extra
-
-      onChange(updated)
-      setWebsiteUrl('')
-      setManualMode(false)
-      toast.success('Brand info extracted! Now generating strategic questions...')
-      
-      // Generate questions automatically after extraction
-      await generateStrategicQuestions(contextString)
+      setExtractedFlash(true)
+      setTimeout(() => setExtractedFlash(false), 1400)
+      toast.success('Website analysed. Review the details below and continue.')
     } catch (e) {
       setExtractError(e.message || 'Failed to extract brand info')
       toast.error(e.message || 'Failed to extract brand info')
-    } finally {
-      setExtractLoading(false)
-    }
+    } finally { setExtractLoading(false) }
   }
 
-  const generateStrategicQuestions = async (contextToUse) => {
-    setGenerateQuestionsLoading(true)
-    try {
-      const brandContext = [
-        extractedContext || contextToUse,
-        brand.businessName && `Business: ${brand.businessName}`,
-        brand.description && `What they do: ${brand.description}`,
-        brand.audience && `Audience: ${brand.audience}`,
-        brand.voice && `Voice: ${brand.voice}`,
-      ].filter(Boolean).join('\n')
-
-      const res = await fetch('/api/generate-brand-questions', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brandContext })
-      })
-
-      const data = await res.json()
-      if (data.success && data.questions) {
-        onQuestionsChange(data.questions)
-        onAnswersChange({})
-        toast.success('Strategic questions generated!')
-      } else {
-        toast.error(data.error || 'Failed to generate questions')
-      }
-    } catch (e) {
-      toast.error(e.message || 'Failed to generate questions')
-    } finally {
-      setGenerateQuestionsLoading(false)
-    }
-  }
+  const filledCount = fields.filter(f => (brand[f.key] || '').trim().length > 0).length
 
   return (
-    <div className="max-w-3xl mx-auto space-y-6">
-      <div>
-        <h2 style={{ ...BEBAS, fontSize: 26 }}>BRAND CONTEXT</h2>
-        <p className="text-sm text-muted-foreground mt-1">Extract your brand context from your website OR enter it manually.</p>
+    <div className="max-w-3xl mx-auto space-y-6 animate-in fade-in duration-300">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h2 style={{ ...BEBAS, fontSize: 26 }}>TELL US ABOUT YOU</h2>
+          <p className="text-sm text-muted-foreground mt-1">Paste a website to auto-fill the essentials, or answer the questions below directly.</p>
+        </div>
+        <div className="text-right shrink-0">
+          <p className="text-[10px] uppercase tracking-widest text-muted-foreground">Filled</p>
+          <p className="text-2xl font-bold" style={BEBAS}>{filledCount}/{fields.length}</p>
+        </div>
       </div>
 
-      {/* Extract Brand Info or Manual Entry */}
-      {questions.length === 0 ? (
-        <div className="space-y-3">
-          <div className="rounded-xl bg-indigo-600/10 border-2 border-indigo-600/30 p-4 space-y-3">
-            <div>
-              <Label className="text-xs font-semibold flex items-center gap-1.5 mb-1.5">
-                <Globe className="w-3.5 h-3.5 text-indigo-600" />Extract from Website (Recommended)
-              </Label>
-              <p className="text-[10px] text-muted-foreground mb-2">Paste your business website URL and the AI will analyze it to extract business details.</p>
-            </div>
-            <div className="flex gap-2">
-              <Input
-                type="url"
-                className="text-sm flex-1"
-                placeholder="https://example.com"
-                value={websiteUrl}
-                onChange={e => { setWebsiteUrl(e.target.value); setExtractError(null) }}
-                onKeyDown={e => e.key === 'Enter' && extractFromWebsite()}
-                disabled={extractLoading}
-              />
-              <Button
-                onClick={extractFromWebsite}
-                disabled={extractLoading || !websiteUrl.trim()}
-                className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold"
-              >
-                {extractLoading ? (
-                  <><RefreshCw className="w-4 h-4 mr-2 animate-spin" />Extracting...</>
-                ) : (
-                  <>Extract</>
-                )}
-              </Button>
-            </div>
-            {extractError && (
-              <div className="flex items-start gap-2 p-2 rounded bg-blue-600/10 border border-blue-600/30">
-                <AlertCircle className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
-                <p className="text-[10px] text-blue-600">{extractError}</p>
-              </div>
-            )}
-          </div>
-
-          <div className="relative flex items-center gap-3 my-4">
-            <div className="flex-1 border-t border-foreground/10"></div>
-            <span className="text-xs text-muted-foreground px-2">OR</span>
-            <div className="flex-1 border-t border-foreground/10"></div>
-          </div>
-
+      {/* Auto-fill from website */}
+      <div className={`rounded-2xl border-2 p-4 transition-colors ${extractedFlash ? 'border-[#D4FF00] bg-[#D4FF00]/10' : 'border-foreground/10 bg-foreground/[0.02]'}`}>
+        <Label className="text-xs font-semibold flex items-center gap-1.5 mb-1.5">
+          <Globe className="w-3.5 h-3.5 text-foreground" />Auto-fill from your website
+        </Label>
+        <p className="text-[11px] text-muted-foreground mb-2.5">We read your homepage (title, meta description, structured data) and pre-fill the answers below.</p>
+        <div className="flex gap-2">
+          <Input
+            type="url"
+            className="text-sm flex-1"
+            placeholder="https://your-brand.com"
+            value={websiteUrl}
+            onChange={e => { setWebsiteUrl(e.target.value); setExtractError(null) }}
+            onKeyDown={e => e.key === 'Enter' && extractFromWebsite()}
+            disabled={extractLoading}
+          />
           <Button
-            onClick={() => { setManualMode(true); onExtractedContextChange('') }}
-            variant="outline"
-            className="w-full border-2"
+            onClick={extractFromWebsite}
+            disabled={extractLoading || !websiteUrl.trim()}
+            className="bg-foreground text-background hover:bg-foreground/85 font-semibold px-5"
           >
-            Enter Brand Info Manually
+            {extractLoading ? (<><RefreshCw className="w-4 h-4 mr-2 animate-spin" />Reading...</>) : ('Auto-fill')}
           </Button>
         </div>
-      ) : null}
+        {extractError && (
+          <div className="flex items-start gap-2 p-2 rounded mt-2 bg-blue-600/10 border border-blue-600/30">
+            <AlertCircle className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
+            <p className="text-[10px] text-blue-600">{extractError}</p>
+          </div>
+        )}
+      </div>
 
-      {/* Manual Fields or Questions Section */}
-      {questions.length === 0 && manualMode ? (
-        <div className="space-y-4">
-          <p className="text-xs font-semibold text-muted-foreground uppercase">Enter your brand information</p>
-          {fields.map(({ key, label, icon: Icon, placeholder, multiline }) => (
-            <div key={key}>
-              <Label className="text-xs font-semibold flex items-center gap-1.5 mb-1.5">
-                <Icon className="w-3.5 h-3.5 text-muted-foreground" />{label}
-              </Label>
+      <div className="relative flex items-center gap-3">
+        <div className="flex-1 border-t border-foreground/10"></div>
+        <span className="text-[10px] uppercase tracking-widest text-muted-foreground px-2">or answer directly</span>
+        <div className="flex-1 border-t border-foreground/10"></div>
+      </div>
+
+      {/* Essential questions / fields */}
+      <div className="space-y-4">
+        {fields.map(({ key, label, icon: Icon, placeholder, multiline, question, required }, idx) => {
+          const filled = (brand[key] || '').trim().length > 0
+          return (
+            <div key={key} className="animate-in fade-in slide-in-from-bottom-1 duration-300" style={{ animationDelay: `${idx * 40}ms` }}>
+              <div className="flex items-baseline justify-between mb-1.5">
+                <Label className="text-xs font-semibold flex items-center gap-1.5">
+                  <Icon className="w-3.5 h-3.5 text-muted-foreground" />
+                  {label}
+                  {required && <span className="text-[10px] text-muted-foreground font-normal">(required)</span>}
+                </Label>
+                {filled && <Check className="w-3.5 h-3.5 text-emerald-600" />}
+              </div>
+              <p className="text-[11px] text-muted-foreground mb-1.5 italic">{question}</p>
               {multiline
                 ? <Textarea rows={3} className="text-sm" placeholder={placeholder} value={brand[key] || ''} onChange={e => onChange({ ...brand, [key]: e.target.value })} />
                 : <Input className="text-sm" placeholder={placeholder} value={brand[key] || ''} onChange={e => onChange({ ...brand, [key]: e.target.value })} />
               }
             </div>
-          ))}
-          <Button
-            onClick={() => generateStrategicQuestions('')}
-            disabled={generateQuestionsLoading || !brand.businessName?.trim()}
-            className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold"
-          >
-            {generateQuestionsLoading ? (
-              <><RefreshCw className="w-4 h-4 mr-2 animate-spin" />Generating Questions...</>
-            ) : (
-              <>Generate Strategic Questions</>
-            )}
-          </Button>
-        </div>
-      ) : null}
+          )
+        })}
+      </div>
 
-      {/* Strategic Questions Section */}
-      {questions.length > 0 ? (
-        <div className="space-y-4">
-          <div className="rounded-xl bg-purple-600/10 border-2 border-purple-600/30 p-4">
-            <h3 className="text-sm font-bold mb-1">Strategic Questions</h3>
-            <p className="text-xs text-muted-foreground mb-4">Answer these questions to help the AI understand your brand better and generate more targeted content ideas.</p>
-            <div className="space-y-3 max-h-96 overflow-y-auto">
-              {questions.map((q, idx) => (
-                <div key={idx} className="space-y-1.5">
-                  <label className="text-xs font-semibold text-foreground">{idx + 1}. {q}</label>
-                  <Textarea
-                    rows={2}
-                    className="text-sm"
-                    placeholder="Your answer..."
-                    value={answers[idx] || ''}
-                    onChange={e => onAnswersChange({ ...answers, [idx]: e.target.value })}
-                  />
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="flex gap-2">
-            <Button
-              onClick={() => { onQuestionsChange([]); onAnswersChange({}); setManualMode(false) }}
-              variant="outline"
-              className="flex-1 border-2"
-            >
-              Change Approach
-            </Button>
-            <Button
-              onClick={onAdvance}
-              disabled={Object.keys(answers).length < questions.length || Object.values(answers).some(a => !a?.trim())}
-              className="flex-1 bg-indigo-600 hover:bg-indigo-700 text-white"
-            >
-              Continue to Next Step
-            </Button>
-          </div>
-        </div>
-      ) : null}
+      <div className="flex justify-end pt-2">
+        <Button
+          onClick={onAdvance}
+          disabled={!canContinue}
+          className="bg-foreground text-background hover:bg-foreground/85 font-semibold rounded-full px-6 h-10"
+        >
+          Continue<ArrowRight className="w-4 h-4 ml-1.5" />
+        </Button>
+      </div>
     </div>
   )
 }
@@ -462,7 +360,7 @@ function StepConfigure({ canvases, selectedCanvases, onToggleCanvas, galleryId, 
   return (
     <div className="space-y-8">
       <div><h2 style={{ ...BEBAS, fontSize: 26 }}>CONFIGURE</h2>
-      <p className="text-sm text-muted-foreground mt-1">Select which layouts to use, pick a gallery for images, and set the tone for the AI copy.</p></div>
+      <p className="text-sm text-muted-foreground mt-1">Select which layouts to use, pick a gallery for images, and set the tone of voice.</p></div>
 
       {/* Canvas selection */}
       <div className="space-y-4">
@@ -484,7 +382,7 @@ function StepConfigure({ canvases, selectedCanvases, onToggleCanvas, galleryId, 
       {/* Gallery */}
       <div className="space-y-3">
         <p className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Image Gallery</p>
-        <p className="text-xs text-muted-foreground">The AI picks random images from this gallery for any image dynamic keys.</p>
+        <p className="text-xs text-muted-foreground">A random image from this gallery is used for every image dynamic key.</p>
         <div className="flex items-center gap-3">
           <select className="h-9 border-2 border-foreground/20 rounded-lg px-3 text-sm bg-background flex-1 max-w-xs"
             value={galleryId || ''} onChange={e => onSetGallery(e.target.value || null)}>
@@ -671,6 +569,43 @@ function EditPostDialog({ post, canvases, open, onClose, onSave, brand, tone }) 
 }
 
 // ── Step 3: Generate & Review ─────────────────────────────────────────────
+// ── Live progress ticker shown while posts are being generated ───────────
+function GenerationProgress() {
+  const steps = [
+    'Reading your brand profile',
+    'Studying the canvas layout',
+    'Choosing an angle from your ideas',
+    'Writing the hook',
+    'Filling in the body copy',
+    'Writing a matching caption',
+    'Picking imagery',
+    'Rendering the artwork',
+  ]
+  const [idx, setIdx] = useState(0)
+  useEffect(() => {
+    const t = setInterval(() => setIdx(i => (i + 1) % steps.length), 1600)
+    return () => clearInterval(t)
+  }, [steps.length])
+  return (
+    <div className="rounded-2xl border-2 border-foreground/10 bg-[#D4FF00]/5 p-5 flex items-center gap-4 animate-in fade-in duration-300">
+      <div className="relative w-10 h-10 shrink-0">
+        <RefreshCw className="w-10 h-10 animate-spin text-foreground/80" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="text-[10px] uppercase tracking-widest text-muted-foreground mb-0.5">Working</p>
+        <p key={idx} className="text-sm font-semibold animate-in fade-in slide-in-from-left-1 duration-200 truncate">
+          {steps[idx]}…
+        </p>
+        <div className="mt-2 flex gap-1">
+          {steps.map((_, i) => (
+            <div key={i} className={`h-0.5 flex-1 rounded-full transition-colors ${i <= idx ? 'bg-foreground' : 'bg-foreground/15'}`} />
+          ))}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function StepGenerate({ flow, canvases, onGenerate, onUpdatePost, onRerender, generating, brand, tone, language }) {
   const posts = (flow?.posts || []).filter(p => p.status !== 'deleted')
   const [editPost, setEditPost] = useState(null)
@@ -811,19 +746,21 @@ function StepGenerate({ flow, canvases, onGenerate, onUpdatePost, onRerender, ge
     <div className="space-y-6">
       <div className="flex items-start justify-between flex-wrap gap-3">
         <div>
-          <h2 style={{ ...BEBAS, fontSize: 26 }}>GENERATED POSTS</h2>
-          <p className="text-sm text-muted-foreground mt-1">Generate batches of 3 posts. All generated posts appear in the review below.</p>
+          <h2 style={{ ...BEBAS, fontSize: 26 }}>YOUR POSTS</h2>
+          <p className="text-sm text-muted-foreground mt-1">Generate 3 at a time. Review, tweak, then send them to the schedule.</p>
         </div>
         <Button onClick={onGenerate} disabled={generating} className="bg-[#D4FF00] text-foreground hover:bg-[#D4FF00]/80 font-bold rounded-full px-6">
-          {generating ? <><RefreshCw className="w-4 h-4 mr-2 animate-spin" />Generating…</> : <><Sparkles className="w-4 h-4 mr-2" />{posts.length > 0 ? 'Generate 3 more' : 'Generate 3 Posts'}</>}
+          {generating ? <><RefreshCw className="w-4 h-4 mr-2 animate-spin" />Working…</> : <><Sparkles className="w-4 h-4 mr-2" />{posts.length > 0 ? 'Generate 3 more' : 'Generate 3 posts'}</>}
         </Button>
       </div>
 
+      {generating && <GenerationProgress />}
+
       {posts.length === 0 && !generating && (
-        <div className="text-center py-20 border-2 border-dashed border-foreground/15 rounded-2xl text-muted-foreground">
+        <div className="text-center py-20 border-2 border-dashed border-foreground/15 rounded-2xl text-muted-foreground animate-in fade-in duration-300">
           <Sparkles className="w-10 h-10 mx-auto mb-3 opacity-30" />
-          <p className="font-medium">Ready to generate</p>
-          <p className="text-sm mt-1">Click the button above. The AI will generate 3 posts at a time, each with their own content and caption.</p>
+          <p className="font-medium">Ready when you are</p>
+          <p className="text-sm mt-1">Hit the button above. You will get 3 posts — each with copy tailored to one of your chosen angles.</p>
         </div>
       )}
 
@@ -944,7 +881,7 @@ function StepIdeas({ ideas, onSetIdeas, flowId, brand, language }) {
     <div className="max-w-3xl mx-auto space-y-6">
       <div>
         <h2 style={{ ...BEBAS, fontSize: 26 }}>CONTENT IDEAS</h2>
-        <p className="text-sm text-muted-foreground mt-1">AI brainstorms post angles from your brand context. Select the ones you like — each selected idea will guide the AI when generating your posts.</p>
+        <p className="text-sm text-muted-foreground mt-1">Fresh angles based on your brand. Pick the ones you like — each selected idea will steer one of your posts.</p>
       </div>
 
       <div className="flex items-center gap-4 flex-wrap">
@@ -963,7 +900,7 @@ function StepIdeas({ ideas, onSetIdeas, flowId, brand, language }) {
         <div className="text-center py-16 border-2 border-dashed border-foreground/15 rounded-2xl text-muted-foreground">
           <Sparkles className="w-10 h-10 mx-auto mb-3 opacity-30" />
           <p className="font-medium">No ideas yet</p>
-          <p className="text-sm mt-1">Click Generate Ideas to get AI-powered post angles based on your brand context.<br />You can also skip this step — the AI will write varied copy on its own.</p>
+          <p className="text-sm mt-1">Click Generate Ideas to see fresh post angles based on your brand.<br />You can also skip this step — copy will still be crafted for you.</p>
         </div>
       )}
 
@@ -1159,7 +1096,7 @@ export default function FlowPage() {
         <div className="max-w-4xl mx-auto px-6 py-10 space-y-8">
           <div>
             <h1 style={{ ...BEBAS, fontSize: 'clamp(36px, 6vw, 72px)', lineHeight: 0.9 }}>AUTOMATE YOUR<br /><span style={{ color: '#9AB800' }}>INSTAGRAM FEED.</span></h1>
-            <p className="mt-4 text-foreground/70 max-w-xl">Give context about your brand, pick layouts, and let the AI do the rest — copy, images, and scheduling in one flow.</p>
+            <p className="mt-4 text-foreground/70 max-w-xl">Share a bit about your brand, pick a few layouts, and get scroll-stopping posts ready to publish — copy, imagery, and scheduling in one flow.</p>
           </div>
           <div className="flex gap-3">
             <Input placeholder="Name your flow (e.g. Weekly Product Posts)" value={newName} onChange={e => setNewName(e.target.value)} onKeyDown={e => e.key === 'Enter' && createFlow()} className="max-w-sm border-2 border-foreground/20" />
@@ -1206,11 +1143,13 @@ export default function FlowPage() {
       </header>
 
       <div className="flex-1 max-w-6xl w-full mx-auto px-6 py-8">
-        {step === 1 && <StepBrand brand={brand} onChange={setBrand} questions={brandQuestions} onQuestionsChange={setBrandQuestions} answers={brandAnswers} onAnswersChange={setBrandAnswers} extractedContext={extractedContext} onExtractedContextChange={setExtractedContext} onAdvance={advance} />}
-        {step === 2 && <StepConfigure canvases={canvases} selectedCanvases={selectedCanvases} onToggleCanvas={id => setSelectedCanvases(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])} galleryId={galleryId} onSetGallery={setGalleryId} tone={tone} onSetTone={setTone} galleries={galleries} onRefreshGalleries={loadGalleries} carouselChance={carouselChance} onSetCarouselChance={setCarouselChance} language={language} onSetLanguage={setLanguage} />}
-        {step === 3 && <StepIdeas ideas={contentIdeas} onSetIdeas={setContentIdeas} flowId={activeFlow?.id} brand={brand} language={language} />}
-        {step === 4 && <StepGenerate flow={activeFlow} canvases={canvases} onGenerate={generate} onUpdatePost={updatePost} onRerender={rerenderPost} generating={generating} brand={brand} tone={tone} language={language} />}
-        {step === 5 && <StepSchedule flow={activeFlow} onUpdatePost={updatePost} />}
+        <div key={step} className="animate-in fade-in slide-in-from-right-2 duration-300">
+          {step === 1 && <StepBrand brand={brand} onChange={setBrand} extractedContext={extractedContext} onExtractedContextChange={setExtractedContext} onAdvance={advance} />}
+          {step === 2 && <StepConfigure canvases={canvases} selectedCanvases={selectedCanvases} onToggleCanvas={id => setSelectedCanvases(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id])} galleryId={galleryId} onSetGallery={setGalleryId} tone={tone} onSetTone={setTone} galleries={galleries} onRefreshGalleries={loadGalleries} carouselChance={carouselChance} onSetCarouselChance={setCarouselChance} language={language} onSetLanguage={setLanguage} />}
+          {step === 3 && <StepIdeas ideas={contentIdeas} onSetIdeas={setContentIdeas} flowId={activeFlow?.id} brand={brand} language={language} />}
+          {step === 4 && <StepGenerate flow={activeFlow} canvases={canvases} onGenerate={generate} onUpdatePost={updatePost} onRerender={rerenderPost} generating={generating} brand={brand} tone={tone} language={language} />}
+          {step === 5 && <StepSchedule flow={activeFlow} onUpdatePost={updatePost} />}
+        </div>
       </div>
 
       <div className="sticky bottom-0 border-t-2 border-foreground/90 bg-[#FAF7F2] dark:bg-[#0E0D0B] px-6 py-3 flex items-center justify-between">
@@ -1218,7 +1157,7 @@ export default function FlowPage() {
           <ArrowLeft className="w-4 h-4 mr-1.5" />{step === 1 ? 'Flows' : 'Back'}
         </Button>
         <span className="text-[11px] text-muted-foreground hidden sm:block">
-          {step === 1 && 'Brand context is used by the AI for all copy generation'}
+          {step === 1 && 'The more you share, the sharper the copy'}
           {step === 2 && `${selectedCanvases.length} layout${selectedCanvases.length !== 1 ? 's' : ''} selected · ${tone} tone`}
           {step === 3 && `${contentIdeas.filter(i => i.selected !== false).length} idea${contentIdeas.filter(i => i.selected !== false).length !== 1 ? 's' : ''} selected`}
           {step === 4 && `${(activeFlow?.posts || []).filter(p => p.status === 'accepted').length} posts accepted`}

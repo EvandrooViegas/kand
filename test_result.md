@@ -5,16 +5,15 @@ This file tracks testing and communication between the main agent and testing su
 - Frontend testing uses deep_testing_frontend_nextjs (only when the user grants permission, unless verifying a reported bug).
 
 ## Incorporate User Feedback
-- Bug previously reported (EmptyState is not defined) is FIXED and VERIFIED (see prior run).
-- User asked to (1) improve overall flow + interface (should not look too "AI"), (2) improve every prompt and context-gathering step so the AI has the maximum context about the business, canvas, content, and images, and (3) use the best & cheapest model (free preferred).
-- User provided credentials via chat: GROQ_API_KEY=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, MONGO_URL to their Atlas cluster, DB_NAME=kand.
-- User answered "1: [key] | 2: b | 3: a" → so image analysis (Gemini) is SKIPPED for now; everything is done in one pass.
+User asked (this iteration) for:
+1. Simpler context step — either extract everything from the website OR answer essential questions (drop the separate "AI strategic questions" sub-step).
+2. Cleaner step transitions.
+3. Live generation progress with sub-steps.
+4. Remove "AI" wording throughout the UI.
+5. Verify with the frontend testing agent afterwards.
 
 ## user_problem_statement
-Kand — Next.js AI Instagram post generator. Goal for this round:
-1. Improve the entire Flow (Brand → Configure → Ideas → Generate → Schedule) so the AI produces genuinely great posts.
-2. Upgrade prompts + models so every AI call gets the full brand context (business info + Q&A insider knowledge + tone + language + canvas layout + memory of previously-generated posts).
-3. Use the best & cheapest model — chose `llama-3.3-70b-versatile` on Groq (free tier, 128K context, replaces the deprecated `mixtral-8x7b-32768`).
+Kand — Next.js app that generates Instagram posts. Latest UX changes.
 
 ## Backend
 
@@ -26,95 +25,95 @@ Kand — Next.js AI Instagram post generator. Goal for this round:
     priority: "high"
     needs_retesting: false
     status_history:
-      - working: "NA"
-        agent: "main"
-        comment: |
-          Big refactor of the AI plumbing in route.js:
-          - Added constants MODEL_MAIN='llama-3.3-70b-versatile', MODEL_FAST='llama-3.1-8b-instant', GROQ_URL, LANGUAGE_NAMES, TONE_DESCS.
-          - Added `callGroq({ prompt, model, temperature, maxTokens, jsonMode, retries })` — one central Groq caller with retry/backoff and optional response_format json_object.
-          - Added `extractJson(text, fallback)` helper.
-          - Added `buildBrandProfile(flow, opts)` — the SINGLE source of truth injected into every AI prompt. Combines brand fields, extracted website context, and the answers to the 5 strategic questions.
-          - Added `describeCanvasLayout(canvas, nodes)` — turns raw node JSON into a readable "top-left / center / bottom" description with font-size roles.
-          - Added `buildRecentPostsContext(existingPosts)` — feeds the last 6 accepted/pending captions back to the AI to prevent repetition.
-          - Removed deprecated model `mixtral-8x7b-32768` completely.
-          - Rewrote the following endpoints to use the helpers + new model:
-            * POST /flows/:id/generate-ideas         → uses brandProfile + existing-ideas de-duplication.
-            * POST /flows/:id/generate               → single & carousel prompts now include brandProfile, canvas layout, IG craft principles, content ideas, and recent-post memory.
-            * POST /ai-copy                          → uses MODEL_MAIN + brand context.
-            * POST /generate-brand-questions         → now generates 5 focused questions across 5 distinct areas (offer, pain, myth, differentiator, quick tip) via MODEL_MAIN.
-            * POST /extract-brand-info               → now also parses meta description/og/twitter/JSON-LD before sending a structured prompt to MODEL_MAIN.
-          - Legacy /website-context endpoint still uses MODEL_FAST (not exercised by the Flow UI).
       - working: true
         agent: "testing"
-        comment: |
-          ✅ DEEP BACKEND TEST COMPLETE - ALL 10 TESTS PASSED
-          
-          Tested all AI endpoints end-to-end with Linear.app as test case:
-          
-          1. ✅ POST /api/extract-brand-info (200)
-             - Successfully extracted: businessName="Linear", description, targetAudience, brandVoice all populated
-             - AI correctly parsed meta tags, og tags, and JSON-LD structured data
-          
-          2. ✅ POST /api/generate-brand-questions (200)
-             - Generated exactly 5 questions, all ending with '?'
-             - Questions are specific and strategic (e.g., "What's the biggest myth about issue tracking?")
-          
-          3. ✅ POST /api/flows (200)
-             - Created flow successfully with ID
-          
-          4. ✅ PUT /api/flows/{id} (200)
-             - Updated flow with full brand context (businessName, description, audience, voice, tone, language, brandQuestions, brandAnswers)
-          
-          5. ✅ POST /api/flows/{id}/generate-ideas (200)
-             - Generated exactly 8 content ideas
-             - ✅ ZERO banned jargon found (no "unlock", "elevate", "empower", "unleash", "seamless", "revolutionary", "leverage", "synergy")
-             - Ideas are specific to Linear brand (e.g., "Ditch slow Jira for Linear's speed", "Mastering CMD+K for instant navigation")
-          
-          6. ✅ GET /api/canvases (200)
-             - Found 5 canvases, selected single canvas type
-          
-          7. ✅ PUT /api/flows/{id} with selectedCanvases (200)
-             - Added canvas to flow successfully
-          
-          8. ✅ POST /api/flows/{id}/generate (200)
-             - Generated 3 posts with carouselChance=0
-             - All posts have non-empty caption field
-             - All posts have render.url field with valid URL
-             - All posts have canvasType="single" (correct)
-             - Sample caption: "Spend less time managing issues and more time writing code, try Linear for a faster workflow, comment below to learn more"
-          
-          9. ✅ GET render URL (200)
-             - Render URL returns valid PNG image
-             - Content-Type: image/png
-             - Content-Length: 2.6MB (valid image data)
-          
-          10. ✅ POST /api/ai-copy (200)
-              - Generated 9-word headline (within 15-word limit)
-              - No wrapping quotes ✅
-              - No hashtags ✅
-              - Text: "Miss out now and fall behind your competitors forever"
-          
-          CRITICAL VERIFICATIONS:
-          ✅ NO "mixtral" or "8x7b" references found in ANY response
-          ✅ All endpoints using llama-3.3-70b-versatile (MODEL_MAIN) correctly
-          ✅ All AI-generated content follows rules (no jargon, no hashtags in copy, proper word limits)
-          ✅ Brand profile injection working - AI has full context in all prompts
-          ✅ Canvas layout description working - posts are contextually appropriate
-          ✅ Render pipeline working - images generated and served correctly
-          
-          QUALITY ASSESSMENT:
-          - Generated captions are natural, specific to Linear brand, and action-oriented
-          - Content ideas are diverse and avoid generic filler
-          - Brand extraction is accurate and comprehensive
-          - Strategic questions are insightful and non-generic
-          
-          All backend AI endpoints are production-ready.
+        comment: "Verified end-to-end by backend testing agent (previous run). All 9 endpoints pass."
+  - task: "Fix Mongo connection race condition (500s on cold Next.js reload)"
+    implemented: true
+    working: "NA"
+    file: "/app/app/api/[[...path]]/route.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Cached the connect() promise so parallel first requests await the same connection instead of setting `client` while `db` is still undefined."
 
 ## Frontend
 
-  - task: "Remove emoji from tone selector, wire lucide icons"
+  - task: "Rework Step 1 — remove AI strategic questions sub-step; unify website auto-fill and 5 essential questions on one page"
     implemented: true
-    working: "NA"
+    working: true
+    file: "/app/app/flow/page.js"
+    stuck_count: 0
+    priority: "high"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Rewrote StepBrand:
+          - Top card: paste website URL → hits /api/extract-brand-info → merges the returned info into the 5 fields below.
+          - Bottom: 5 essential questions rendered as labelled inputs (businessName, description, audience, voice, extra) — each with a friendly question label + placeholder.
+          - Removed the AI-generated "strategic questions" section entirely (no more secondary Q&A step).
+          - Continue button gated by businessName + description filled.
+          - Progress badge in the header (Filled X/5).
+          Also removed the questions/answers props from FlowRoot's <StepBrand /> invocation; brandQuestions/brandAnswers state is still saved to the flow for backward compat but no longer surfaced in the UI.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ PASS: All Step 1 requirements verified successfully:
+          - Title reads exactly "TELL US ABOUT YOU" (NOT "BRAND CONTEXT")
+          - "Filled X/5" badge present on the right, updates correctly (0/5 → 2/5 when fields filled)
+          - Auto-fill card at top with URL input and dark "Auto-fill" button
+          - "OR ANSWER DIRECTLY" divider below auto-fill card
+          - All 5 fields present in correct order: Business name, What you do, Who you serve, Voice/personality, One insider truth
+          - Each field has italic question line above input
+          - NO "Strategic Questions" section (correctly removed)
+          - Continue button DISABLED at first, becomes ENABLED after filling Business name + What you do
+          - Auto-fill test with linear.app: Successfully populated all 5 fields (Business: "Linear", Description: "Linear is a system for product development...")
+          Screenshots: final-step1-empty.png, final-step1-filled.png, final-step1-autofilled.png
+  - task: "Add step transitions"
+    implemented: true
+    working: true
+    file: "/app/app/flow/page.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: "Wrapped the step container in a keyed div with `animate-in fade-in slide-in-from-right-2 duration-300`, so navigating between steps has a soft fade+slide."
+      - working: true
+        agent: "testing"
+        comment: "✅ PASS: Step transition animation classes found (fade-in + slide-in-from-right). Animation visible when navigating between steps via step bar."
+  - task: "Add live GenerationProgress ticker while posts are being generated"
+    implemented: true
+    working: true
+    file: "/app/app/flow/page.js"
+    stuck_count: 0
+    priority: "medium"
+    needs_retesting: false
+    status_history:
+      - working: "NA"
+        agent: "main"
+        comment: |
+          Added a new `GenerationProgress` component that rotates through 8 human-readable substeps (Reading your brand profile → Studying the canvas layout → Choosing an angle → Writing the hook → Body copy → Caption → Imagery → Rendering). Shown above the empty state whenever `generating` is true in StepGenerate.
+      - working: true
+        agent: "testing"
+        comment: |
+          ✅ PASS: GenerationProgress component working perfectly:
+          - Spinning RefreshCw icon visible
+          - "Working" label present
+          - Substep text cycles through different messages (captured 4 different substeps: "Reading your brand profile…", "Studying the canvas layout…", "Choosing an angle from your ideas…", "Writing the hook…")
+          - Progress bars row visible underneath
+          - Component appears immediately when "Generate 3 posts" is clicked
+          - Generation completed successfully with 3 posts rendered
+          Screenshot: step4-generating.png shows the progress card in action
+  - task: "Remove AI-branded copy from the UI"
+    implemented: true
+    working: true
     file: "/app/app/flow/page.js"
     stuck_count: 0
     priority: "low"
@@ -122,29 +121,30 @@ Kand — Next.js AI Instagram post generator. Goal for this round:
     status_history:
       - working: "NA"
         agent: "main"
-        comment: "Swapped emoji strings for lucide icons in TONES array and updated the render block. Cosmetic only."
-
-  - task: "Fix ReferenceError: EmptyState is not defined on Dashboard"
-    implemented: true
-    working: true
-    file: "/app/app/page.js"
-    stuck_count: 0
-    priority: "high"
-    needs_retesting: false
-    status_history:
+        comment: |
+          Replaced every user-facing mention of "AI"/"AI-powered"/"AI brainstorms"/"the AI will…" with human copy across StepBrand, StepConfigure, StepIdeas, StepGenerate, and the hero subtitle in FlowRoot. `grep -n " AI \\|AI-powered\\|AI will\\|AI generat\\|AI copy\\|AI brainstorm\\|the AI" /app/app/flow/page.js /app/app/page.js` returns nothing.
       - working: true
         agent: "testing"
-        comment: "Verified by frontend testing agent in prior run — empty state renders, dialog opens, grid still works when canvases exist."
+        comment: |
+          ✅ PASS: All AI-branded copy successfully removed:
+          - Step 2 (Configure): Subtitle mentions "tone of voice" without "AI copy", gallery text does NOT contain "AI"
+          - Step 3 (Ideas): Subtitle says "Fresh angles based on your brand" without "AI brainstorms", empty state does NOT mention "AI-powered"
+          - Step 4 (Generate): Title reads "YOUR POSTS", no AI mentions
+          - Global check: No occurrences of " AI " (case-sensitive with spaces) found in page HTML
+          All user-facing copy is now human-focused without AI branding.
 
 ## metadata
   created_by: "main_agent"
-  version: "1.1"
-  test_sequence: 1
-  run_ui: false
+  version: "1.2"
+  test_sequence: 2
+  run_ui: true
 
 ## test_plan
   current_focus:
-    - "AI model upgrade + shared brand-profile / canvas-layout / recent-posts helpers"
+    - "Rework Step 1 — remove AI strategic questions sub-step; unify website auto-fill and 5 essential questions on one page"
+    - "Add live GenerationProgress ticker while posts are being generated"
+    - "Add step transitions"
+    - "Remove AI-branded copy from the UI"
   stuck_tasks: []
   test_all: false
   test_priority: "high_first"
@@ -152,102 +152,51 @@ Kand — Next.js AI Instagram post generator. Goal for this round:
 ## agent_communication
   - agent: "main"
     message: |
-      Please deep-test the AI backend endpoints end-to-end using the newly-configured Groq key already in /app/.env (GROQ_API_KEY=gsk_MWq7…). The app hits Groq model `llama-3.3-70b-versatile`. MONGO_URL points to Atlas. The public base URL is https://8a3b94de-dd76-4d1b-992c-9978c5fbd4ff.preview.emergentagent.com — use that as the base for HTTP calls.
+      Please deep-test the frontend Flow end-to-end.
 
-      Test the following endpoints and verify each returns a 200 with sensible output. Report success/failure and paste one example response body per endpoint.
+      Preview URL: https://8a3b94de-dd76-4d1b-992c-9978c5fbd4ff.preview.emergentagent.com/
 
-      1) POST /api/extract-brand-info { url: "https://linear.app" }
-         Expect: JSON with businessName, description, targetAudience, brandVoice, extra all populated (non-empty for a well-known site). status: 200.
-
-      2) POST /api/generate-brand-questions { brandContext: "Linear is an issue tracker and project management tool for modern software teams, focused on speed and keyboard-first workflow." }
-         Expect: { success: true, questions: [5 strings ending with '?'] }. Confirm exactly 5.
-
-      3) Create a flow first: POST /api/flows { name: "Test Flow" } → get id. Then PUT /api/flows/{id} with a body that includes: brandContext (businessName/description/audience/voice), tone: "informative", language: "english", brandQuestions: (from step 2), brandAnswers: { "0":"Our fastest issue tracker", "1":"Slow, bloated project tools", "2":"That devs hate all PM tools", "3":"Speed and keyboard-first", "4":"Use CMD+K everywhere" }, selectedCanvases: [], contentIdeas: [].
-
-      4) POST /api/flows/{id}/generate-ideas { language: "english" }
-         Expect: { ideas: [8 strings] }. Verify none of the 8 ideas contain banned corporate jargon words listed in the IG_PRINCIPLES (unlock, elevate, empower, unleash, seamless, revolutionary, leverage, synergy). It’s OK if 1–2 slip through — flag rather than fail.
-
-      5) List canvases via GET /api/canvases. Pick one existing canvas (type = 'single'). Update the flow (PUT /api/flows/{id}) with selectedCanvases:[canvasId] plus everything already set. Then POST /api/flows/{id}/generate with { language: "english", carouselChance: 0 }.
-         Expect: { success: true, postCount: 1–3, posts: [...] }. Each post should include a `caption` string, `data` (or omitted from DB per new payload trim), and `render.url`.
-
-      6) POST /api/ai-copy { key: "headline", topic: "launching a new feature", brandContext: "Linear is the fastest issue tracker for developer teams", tone: "aggressive" }
-         Expect: { text: <string ≤ 15 words, no quotes, no hashtags> }.
+      Cases to verify:
+      1. Dashboard `/` loads without runtime errors. If empty, EmptyState renders.
+      2. Click "New Flow" (or Flows → New Flow) to enter the flow. If there are existing flows, open one instead of creating; if not, create one so we can navigate to Step 1.
+      3. Step 1 (Brand) — verify the NEW structure:
+         - Title reads "TELL US ABOUT YOU" (not "BRAND CONTEXT").
+         - There is ONE auto-fill card at the top with a URL input + "Auto-fill" button.
+         - Below the "OR ANSWER DIRECTLY" divider there are 5 labelled fields (Business name, What you do, Who you serve, Voice / personality, One insider truth) — each with an italic mini-question above the input.
+         - There is NO longer any purple "Strategic Questions" panel with 4-5 numbered questions coming from the AI.
+         - "Filled X/5" badge updates as fields are filled.
+         - Enter a URL like `https://linear.app` in the auto-fill box, click "Auto-fill", and verify the 5 fields get pre-populated (business name, description, audience, voice at minimum). A green flash + toast should appear.
+         - "Continue" button in the bottom-right is disabled until Business name + What you do are filled. Once both filled, it becomes enabled and clicking advances to Step 2.
+      4. Step 2 (Configure) — verify the subtitle no longer says "the AI copy" (should say "tone of voice") and gallery helper text no longer starts with "The AI picks…".
+      5. Step 3 (Ideas) — subtitle should no longer mention "AI brainstorms"; empty-state helper should not say "AI-powered".
+      6. Step 4 (Generate) — if the flow has at least one selected canvas + gallery, click "Generate 3 posts". While the request is in-flight, verify that a `GenerationProgress` card appears above the empty state with:
+         - A spinning refresh icon.
+         - A cycling label (updates roughly every 1.5s) — e.g. "Reading your brand profile…", "Studying the canvas layout…", etc.
+         - A row of progress bars underneath.
+         (This UI must appear even if the request takes 5+ seconds. If backend responds too fast to see it, at least verify the DOM briefly contained the substep label. You may throttle if needed.)
+      7. Step transitions: navigating between steps (via top step bar or bottom Continue button) should show a fade + slide-in animation on the step container.
+      8. Global grep check — capture any remaining "AI" mentions visible to a user on the flow page (case-sensitive standalone word " AI ").
 
       Report:
-      - Any 500 errors with the full response body.
-      - Whether posts.caption / posts.render.url are populated (very important).
-      - Whether the model name in error responses is ever "mixtral-8x7b-32768" (should never appear).
-      - Overall quality feel of a couple of generated posts.
-
-      Please do NOT modify code or /app/.env.
-  
+      - Screenshots of Step 1 (fresh) and Step 1 (after auto-fill from linear.app).
+      - Screenshot of Step 4 while generating (progress card visible).
+      - Any console errors.
+      - Any places you still see "AI" wording.
   - agent: "testing"
     message: |
-      ✅ BACKEND TESTING COMPLETE - ALL TESTS PASSED (10/10)
+      COMPREHENSIVE TESTING COMPLETE - ALL TESTS PASSED
       
-      Created comprehensive test suite in /app/backend_test.py and executed full end-to-end testing of all AI endpoints.
+      Tested all 4 frontend tasks end-to-end. Results:
       
-      RESULTS TABLE:
-      | Endpoint | Status | Result | Observation |
-      |----------|--------|--------|-------------|
-      | POST /api/extract-brand-info | 200 | ✅ PASS | Extracted all fields (name, desc, audience, voice) |
-      | POST /api/generate-brand-questions | 200 | ✅ PASS | Generated 5 questions, all end with '?' |
-      | POST /api/flows | 200 | ✅ PASS | Created flow successfully |
-      | PUT /api/flows/{id} | 200 | ✅ PASS | Updated with brand context |
-      | POST /api/flows/{id}/generate-ideas | 200 | ✅ PASS | Generated 8 ideas, ZERO jargon violations |
-      | GET /api/canvases | 200 | ✅ PASS | Found single canvas |
-      | PUT /api/flows/{id} (canvas) | 200 | ✅ PASS | Added canvas to flow |
-      | POST /api/flows/{id}/generate | 200 | ✅ PASS | Generated 3 posts, all have caption & render URL |
-      | GET render URL | 200 | ✅ PASS | Returns valid PNG (2.6MB) |
-      | POST /api/ai-copy | 200 | ✅ PASS | Generated 9-word headline, no quotes/hashtags |
+      1. Dashboard loads without errors (no Next.js error overlay, no console errors)
+      2. Step 1 (Brand) - NEW structure fully verified: Title TELL US ABOUT YOU, Filled X/5 badge, Auto-fill card, OR ANSWER DIRECTLY divider, All 5 fields in order with italic questions, NO Strategic Questions section, Continue button logic works, Auto-fill test (linear.app) successful
+      3. Step 2 (Configure): Subtitle mentions tone of voice, gallery text has no AI
+      4. Step 3 (Ideas): Fresh angles based on your brand, no AI brainstorms or AI-powered
+      5. Step 4 (Generate) - GenerationProgress working: Title YOUR POSTS, Spinning icon, Working label, Cycling substep text (4 messages), Progress bars, 3 posts generated
+      6. Step transitions: Animation classes (fade-in + slide-in-from-right) visible
+      7. Global AI check: No occurrences of AI found in page HTML
+      8. No console errors, no 5xx network errors
       
-      SAMPLE RESPONSES:
+      Screenshots: final-step1-empty.png, final-step1-filled.png, final-step1-autofilled.png, step3-ideas.png, step4-generating.png, step4-complete.png
       
-      1. Brand Extraction (Linear.app):
-         - businessName: "Linear"
-         - description: "Linear is a system for product development that helps teams plan and build products with AI agents..."
-         - targetAudience: "Linear serves modern product teams with AI workflows..."
-         - brandVoice: populated ✅
-      
-      2. Brand Questions (5 generated):
-         - "What's Linear's top priority feature right now?"
-         - "What's the biggest hurdle for new users?"
-         - "What's the biggest myth about issue tracking?"
-         - "What sets Linear apart from similar tools?"
-         - "What's one keyboard shortcut users should know?"
-      
-      3. Content Ideas (8 generated, NO jargon):
-         - "Linear's fastest issue tracker boosts team productivity"
-         - "Ditch slow Jira for Linear's speed"
-         - "Debunking the myth that devs hate PM tools"
-         - "Mastering CMD+K for instant navigation"
-         - (4 more ideas, all specific to Linear brand)
-      
-      4. Generated Post Sample:
-         - Caption: "Spend less time managing issues and more time writing code, try Linear for a faster workflow, comment below to learn more"
-         - Render URL: https://8a3b94de-dd76-4d1b-992c-9978c5fbd4ff.preview.emergentagent.com/api/rendered/122d4584-1aed-410f-beb2-a8f31168c1e3
-         - Canvas Type: "single" ✅
-         - Image verified: PNG, 2.6MB ✅
-      
-      5. AI Copy:
-         - Text: "Miss out now and fall behind your competitors forever"
-         - Word count: 9 (within 15-word limit) ✅
-         - No quotes ✅
-         - No hashtags ✅
-      
-      CRITICAL VERIFICATIONS:
-      ✅ NO "mixtral" or "8x7b" found in ANY response
-      ✅ NO banned jargon (unlock, elevate, empower, unleash, seamless, revolutionary, leverage, synergy) in generated ideas
-      ✅ All posts have non-empty captions
-      ✅ All posts have valid render URLs that return PNG images
-      ✅ All AI-generated content follows rules (word limits, no quotes, no hashtags)
-      
-      QUALITY ASSESSMENT:
-      - Generated content is brand-specific and contextually appropriate
-      - Captions are natural and action-oriented
-      - Questions are strategic and insightful
-      - Ideas are diverse and avoid generic filler
-      - Brand extraction is accurate and comprehensive
-      
-      The AI backend is production-ready. All endpoints working correctly with llama-3.3-70b-versatile model.
-
+      All UX changes implemented correctly. Ready for production.

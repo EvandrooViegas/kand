@@ -9,18 +9,25 @@ export const dynamic = 'force-dynamic'
 
 let client
 let db
+let connectPromise = null
 
 async function connectToMongo() {
-  if (!client) {
-    // 1. Added your database name 'kand' directly into the fallback connection string path
-    console.log("Mongo URL:", process.env.MONGO_URL)
-    client = new MongoClient(process.env.MONGO_URL)
-    await client.connect()
-    
-    // 2. Changed the default fallback database name from "admin" to "kand"
-    db = client.db(process.env.DB_NAME)
+  if (db) return db
+  if (!connectPromise) {
+    connectPromise = (async () => {
+      console.log("Mongo URL:", process.env.MONGO_URL)
+      client = new MongoClient(process.env.MONGO_URL, { serverSelectionTimeoutMS: 10000 })
+      await client.connect()
+      db = client.db(process.env.DB_NAME)
+      return db
+    })().catch(err => {
+      // Reset so future calls can retry
+      connectPromise = null
+      client = null
+      throw err
+    })
   }
-  return db
+  return connectPromise
 }
 
 function corsify(response) {
