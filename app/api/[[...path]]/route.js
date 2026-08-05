@@ -48,6 +48,202 @@ function getBaseUrl(request) {
   return `${proto}://${host}`
 }
 
+// ────────────────────────────────────────────────────────────────
+// AI MODEL CONFIG
+// ────────────────────────────────────────────────────────────────
+// Groq is free-tier friendly and fast. Model choice matters a lot:
+// - llama-3.3-70b-versatile  → main model for copywriting/ideation (best quality on Groq free tier)
+// - llama-3.1-8b-instant     → fast/cheap model for tiny tasks (short captions, JSON extraction)
+const GROQ_URL = 'https://api.groq.com/openai/v1/chat/completions'
+const MODEL_MAIN  = 'llama-3.3-70b-versatile'
+const MODEL_FAST  = 'llama-3.1-8b-instant'
+
+const LANGUAGE_NAMES = {
+  english: 'English', spanish: 'Spanish', french: 'French', german: 'German',
+  italian: 'Italian', portuguese: 'Portuguese', dutch: 'Dutch', polish: 'Polish',
+  swedish: 'Swedish', russian: 'Russian', japanese: 'Japanese',
+  chinese: 'Chinese (Simplified)', korean: 'Korean', arabic: 'Arabic',
+}
+
+const TONE_DESCS = {
+  informative: 'Clear, factual, educational — deliver a useful insight in a calm authoritative way.',
+  helpful:     'Warm, empathetic, solution-focused — talk to the reader like a trusted friend giving real help.',
+  aggressive:  'Bold, urgent, FOMO-driven — challenge the reader, break patterns, create urgency to act NOW.',
+  inspiring:   'Motivational, aspirational, emotional — make the reader feel that change is possible for them.',
+  playful:     'Fun, witty, conversational — light-hearted, a bit surprising, human in every sentence.',
+}
+
+// Groq call with retry + exponential backoff. Always returns the raw text (or throws after N attempts).
+async function callGroq({ prompt, model = MODEL_MAIN, temperature = 0.85, maxTokens = 500, jsonMode = false, retries = 3 }) {
+  const key = process.env.GROQ_API_KEY
+  if (!key) throw new Error('GROQ_API_KEY not set')
+  let lastError = null
+  for (let attempt = 0; attempt < retries; attempt++) {
+    try {
+      const body = {
+        model,
+        messages: [{ role: 'user', content: prompt }],
+        max_tokens: maxTokens,
+        temperature: temperature + (attempt * 0.03),
+      }
+      if (jsonMode) body.response_format = { type: 'json_object' }
+      const res = await fetch(GROQ_URL, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${key}` },
+        body: JSON.stringify(body),
+      })
+      if (!res.ok) {
+        const err = await res.text().catch(() => '')
+        lastError = new Error(`Groq ${res.status}: ${err.slice(0, 200)}`)
+        if (res.status === 429 || res.status >= 500) {
+          await new Promise(r => setTimeout(r, 900 * (attempt + 1)))
+          continue
+        }
+        throw lastError
+      }
+      const data = await res.json()
+      return data.choices?.[0]?.message?.content?.trim() || ''
+    } catch (e) {
+      lastError = e
+      if (attempt < retries - 1) await new Promise(r => setTimeout(r, 500 * (attempt + 1)))
+    }
+  }
+  throw lastError || new Error('Groq call failed')
+}
+
+function extractJson(text, fallback = null) {
+  if (!text) return fallback
+  // Try direct parse first (works with jsonMode)
+  try { return JSON.parse(text) } catch (_) { /* pass */ }
+  // Try to find a JSON object or array in the text
+  const objMatch = text.match(/\{[\s\S]*\}/)
+  const arrMatch = text.match(/\[[\s\S]*\]/)
+  const candidates = [objMatch?.[0], arrMatch?.[0]].filter(Boolean)
+  for (const c of candidates) {
+    try { return JSON.parse(c) } catch (_) { /* pass */ }
+  }
+  return fallback
+}
+
+// ────────────────────────────────────────────────────────────────
+// BRAND PROFILE BUILDER
+// ────────────────────────────────────────────────────────────────
+// Assembles ALL brand context into a single structured markdown-like
+// block that's injected into every downstream AI prompt.
+// This is the single source of truth for "what the AI knows about the brand".
+function buildBrandProfile(flow, opts = {}) {
+  const brand      = flow?.brandContext || {}
+  const answers    = flow?.brandAnswers || {}
+  const questions  = flow?.brandQuestions || []
+  const extracted  = flow?.extractedContext || ''
+  const tone       = flow?.tone || 'informative'
+  const language   = flow?.language || 'english'
+  const languageName = LANGUAGE_NAMES[language] || 'English'
+  const toneDesc     = TONE_DESCS[tone] || TONE_DESCS.informative
+
+  // Q&A block — this is high-value, insider knowledge
+  const qaLines = questions
+    .map((q, i) => {
+      const a = answers[i] || answers[String(i)]
+      if (!a || !String(a).trim()) return null
+      return `  • Q: ${q}\n    A: ${String(a).trim()}`
+    })
+    .filter(Boolean)
+
+  const lines = []
+  lines.push(`## BRAND PROFILE`)
+  if (brand.businessName) lines.push(`- Business Name: ${brand.businessName}`)
+  if (brand.description)  lines.push(`- What they do: ${brand.description}`)
+  if (brand.audience)     lines.push(`- Target Audience: ${brand.audience}`)
+  if (brand.voice)        lines.push(`- Brand Voice / Personality: ${brand.voice}`)
+  if (brand.instagram)    lines.push(`- Instagram Handle: @${brand.instagram}`)
+  if (brand.extra)        lines.push(`- Additional Context: ${brand.extra}`)
+  if (extracted && !brand.description) {
+    lines.push(`- Website Summary (auto-extracted):\n${extracted.split('\n').map(l => '    ' + l).join('\n')}`)
+  }
+  if (qaLines.length > 0) {
+    lines.push('')
+    lines.push(`## STRATEGIC INSIGHTS (from the brand owner)`)
+    lines.push(qaLines.join('\n'))
+  }
+  lines.push('')
+  lines.push(`## STYLE DIRECTIVES`)
+  lines.push(`- Language: write EVERYTHING in ${languageName}. Never use another language.`)
+  lines.push(`- Tone: ${toneDesc}`)
+  lines.push(`- No hashtags, no emojis, no markdown, no quotes wrapping the text.`)
+  if (opts.extraDirectives) lines.push(opts.extraDirectives)
+  return lines.join('\n')
+}
+
+// ────────────────────────────────────────────────────────────────
+// CANVAS LAYOUT DESCRIBER
+// ────────────────────────────────────────────────────────────────
+// Converts raw node JSON into a human-readable visual description
+// so the AI *understands* the layout instead of parsing coordinates.
+function describeCanvasLayout(canvas, nodes) {
+  const W = canvas.width || 1080
+  const H = canvas.height || 1080
+  const orient = W > H ? 'landscape' : (W < H ? 'portrait' : 'square')
+
+  const zoneOf = (x, y, w, h) => {
+    const cx = x + w / 2, cy = y + h / 2
+    const col = cx < W / 3 ? 'left' : (cx > (2 * W) / 3 ? 'right' : 'center')
+    const row = cy < H / 3 ? 'top' : (cy > (2 * H) / 3 ? 'bottom' : 'middle')
+    return `${row}-${col}`
+  }
+
+  const sortedNodes = [...(nodes || [])].sort((a, b) => (a.y || 0) - (b.y || 0))
+  const layers = []
+  for (const n of sortedNodes) {
+    if (!n.dynamic_key) continue // Only describe dynamic slots
+    const zone = zoneOf(n.x || 0, n.y || 0, n.width || 100, n.height || 40)
+    if (n.type === 'image') {
+      layers.push(`  • {${n.dynamic_key}} → IMAGE slot in ${zone} (${Math.round(n.width)}×${Math.round(n.height)}px)`)
+    } else {
+      const size = n.fontSize || 32
+      const align = n.textAlign || 'left'
+      const weight = n.fontWeight || 400
+      const family = n.fontFamily || 'sans-serif'
+      const role =
+        size >= 72 ? 'HERO HEADLINE' :
+        size >= 48 ? 'headline' :
+        size >= 30 ? 'sub-headline' :
+        size >= 20 ? 'body copy' : 'caption/small text'
+      const weightLabel = weight >= 700 ? 'bold' : weight >= 500 ? 'medium' : 'regular'
+      layers.push(`  • {${n.dynamic_key}} → TEXT ${role} in ${zone}, ${size}px ${weightLabel} ${family}, ${align}-aligned (box ${Math.round(n.width)}×${Math.round(n.height)}px)`)
+    }
+  }
+
+  const lines = []
+  lines.push(`## CANVAS LAYOUT — "${canvas.name}"`)
+  lines.push(`- Format: ${W}×${H} ${orient} (${orient === 'square' ? '1:1 for Instagram feed' : orient === 'portrait' ? 'vertical for Reels/Stories vibe' : 'landscape'})`)
+  if (canvas.background) lines.push(`- Background: ${typeof canvas.background === 'string' ? canvas.background : 'custom'}`)
+  if (layers.length === 0) {
+    lines.push(`- No dynamic slots in this layout.`)
+  } else {
+    lines.push(`- Dynamic slots (in reading order):`)
+    lines.push(layers.join('\n'))
+  }
+  return lines.join('\n')
+}
+
+// ────────────────────────────────────────────────────────────────
+// RECENT POSTS CONTEXT (avoids repetition across batches)
+// ────────────────────────────────────────────────────────────────
+function buildRecentPostsContext(existingPosts, maxItems = 6) {
+  const recent = (existingPosts || [])
+    .filter(p => p.status !== 'deleted' && p.caption)
+    .slice(-maxItems)
+  if (recent.length === 0) return ''
+  const lines = [`## POSTS ALREADY GENERATED (do NOT repeat these angles, hooks, or phrasing)`]
+  recent.forEach((p, i) => {
+    const cap = String(p.caption).slice(0, 140).replace(/\s+/g, ' ')
+    lines.push(`  ${i + 1}. [${p.canvasType || 'single'}] "${cap}"`)
+  })
+  lines.push(`Every new post MUST take a fundamentally different angle from the ones above.`)
+  return lines.join('\n')
+}
+
 async function handleRoute(request, { params }) {
   const { path = [] } = params
   const route = `/${path.join('/')}`
@@ -431,90 +627,62 @@ if (uploadMatch && method === 'GET') {
     if (flowIdeasMatch && method === 'POST') {
       const flowId = flowIdeasMatch[1]
       const body = await request.json().catch(() => ({}))
-      const language = body.language || 'english'
-      
+
       const flow = await db.collection('flows').findOne({ id: flowId })
       if (!flow) return corsify(NextResponse.json({ error: 'Flow not found' }, { status: 404 }))
 
-      const brand = flow.brandContext || {}
-      const tone  = flow.tone || 'informative'
-      const groqKey = process.env.GROQ_API_KEY
+      // Merge in any brand context the frontend just sent (for freshness before save)
+      if (body.brand) flow.brandContext = { ...flow.brandContext, ...body.brand }
+      if (body.language) flow.language = body.language
 
-      const brandCtx = [
-        brand.businessName && `Business: ${brand.businessName}`,
-        brand.description  && `About: ${brand.description}`,
-        brand.audience     && `Audience: ${brand.audience}`,
-        brand.voice        && `Voice: ${brand.voice}`,
-        brand.extra        && `Extra context: ${brand.extra}`,
-      ].filter(Boolean).join('. ')
-
-      const LANGUAGE_MAP = {
-        english: 'English',
-        spanish: 'Spanish',
-        french: 'French',
-        german: 'German',
-        italian: 'Italian',
-        portuguese: 'Portuguese',
-        dutch: 'Dutch',
-        polish: 'Polish',
-        swedish: 'Swedish',
-        russian: 'Russian',
-        japanese: 'Japanese',
-        chinese: 'Chinese (Simplified)',
-        korean: 'Korean',
-        arabic: 'Arabic',
-      }
-
-      const TONE_LABELS = {
-        informative: 'educational and informative',
-        helpful:     'warm, helpful and practical',
-        aggressive:  'bold, urgent and FOMO-driven',
-        inspiring:   'inspiring and aspirational',
-        playful:     'playful, fun and conversational',
-      }
+      const groqKey    = process.env.GROQ_API_KEY
+      const languageName = LANGUAGE_NAMES[flow.language] || 'English'
+      const existingIdeaTexts = (flow.contentIdeas || [])
+        .map(i => (typeof i === 'string' ? i : i.text))
+        .filter(Boolean)
 
       const fallbackIdeas = [
-        'Share a tip your audience doesn\'t know yet',
-        'Show the story behind how your brand started',
-        'Feature a customer success story or testimonial',
-        'Give a behind-the-scenes look at your process',
-        'Challenge a common misconception in your industry',
-        'Highlight your most popular product or service',
-        'Share a quick step-by-step how-to',
-        'Ask your audience an engaging question',
+        `Share a tip your audience does not know yet`,
+        `Show the story behind how your brand started`,
+        `Feature a customer success story or testimonial`,
+        `Give a behind-the-scenes look at your process`,
+        `Challenge a common misconception in your industry`,
+        `Highlight your most popular product or service`,
+        `Share a quick step-by-step how-to`,
+        `Ask your audience an engaging question`,
       ]
 
       if (!groqKey) return corsify(NextResponse.json({ ideas: fallbackIdeas }))
 
-      const languageName = LANGUAGE_MAP[language] || 'English'
+      const brandProfile = buildBrandProfile(flow)
+      const alreadyBlock = existingIdeaTexts.length > 0
+        ? `\n## IDEAS ALREADY IN THE LIST (do NOT repeat or paraphrase these):\n${existingIdeaTexts.map((t, i) => `  ${i + 1}. ${t}`).join('\n')}\n`
+        : ''
+
       const prompt = [
-        `You are a social media content strategist.`,
-        `Brand: ${brandCtx || 'A modern brand looking to grow on Instagram.'}`,
-        `Output language: ${languageName}`,
+        `You are a senior Instagram content strategist. Generate 8 concrete post angles for this specific brand.`,
         ``,
-        `Generate 8 unique, specific, and actionable content ideas for Instagram posts.`,
-        `Each idea is a short content angle or post concept — max 15 words, written as a concrete action (e.g. "Share 3 mistakes beginners make in X").`,
-        `Tone: ${TONE_LABELS[tone] || TONE_LABELS.informative}.`,
-        `Vary the formats: tips, stories, showcases, questions, behind-the-scenes, challenges, how-tos, etc.`,
-        `ALL ideas MUST be written in ${languageName} ONLY.`,
+        brandProfile,
+        alreadyBlock,
+        `## OUTPUT REQUIREMENTS`,
+        `- Return EXACTLY 8 ideas as a JSON array of strings.`,
+        `- Each idea is one line, 6-16 words, in ${languageName}, phrased as a concrete post concept the copywriter can execute.`,
+        `- Vary the formats aggressively: tip, story, myth-buster, before/after, list, controversial take, contrarian question, behind-the-scenes, mini case study, quick win.`,
+        `- Every idea must be specific to THIS brand — reference their product, audience, or strategic insights above where possible.`,
+        `- Never use vague filler like "engage with your audience" or "share value".`,
         ``,
-        'Return ONLY a valid JSON array of 8 strings: ["Idea one","Idea two",...]',
-      ].join('\n')
+        `Return ONLY a valid JSON array: ["Idea 1","Idea 2","Idea 3","Idea 4","Idea 5","Idea 6","Idea 7","Idea 8"]`,
+      ].filter(Boolean).join('\n')
 
       try {
-        console.log('🤖 CONTENT IDEAS GENERATION PROMPT:\n', prompt)
-        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
-          body: JSON.stringify({ model: 'llama-3.1-8b-instant', messages: [{ role: 'user', content: prompt }], max_tokens: 450, temperature: 0.9 }),
-        })
-        if (!res.ok) throw new Error(`Groq ${res.status}`)
-        const aiData = await res.json()
-        const raw = aiData.choices?.[0]?.message?.content?.trim() || '[]'
-        const m = raw.match(/\[[\s\S]*\]/)
-        if (!m) throw new Error('no JSON array')
-        const parsed = JSON.parse(m[0])
-        return corsify(NextResponse.json({ ideas: Array.isArray(parsed) ? parsed.slice(0, 8).map(String) : fallbackIdeas }))
+        console.log('🤖 CONTENT IDEAS PROMPT:\n', prompt)
+        const raw = await callGroq({ prompt, model: MODEL_MAIN, temperature: 0.95, maxTokens: 700 })
+        const parsed = extractJson(raw, null)
+        const arr = Array.isArray(parsed)
+          ? parsed
+          : (parsed && Array.isArray(parsed.ideas)) ? parsed.ideas : null
+        if (!arr) throw new Error('no JSON array')
+        return corsify(NextResponse.json({ ideas: arr.slice(0, 8).map(String) }))
       } catch (e) {
         console.error('Ideas error', e.message)
         return corsify(NextResponse.json({ ideas: fallbackIdeas }))
@@ -578,847 +746,233 @@ if (uploadMatch && method === 'GET') {
         }
       }
 
-      // Brand context string - comprehensive business information for the AI
-      const brandCtx = [
-        brand.businessName && `Business Name: ${brand.businessName}`,
-        brand.description  && `What They Do: ${brand.description}`,
-        brand.audience     && `Target Audience: ${brand.audience}`,
-        brand.voice        && `Brand Voice: ${brand.voice}`,
-        brand.instagram    && `Instagram: @${brand.instagram}`,
-        brand.extra        && `Additional Context: ${brand.extra}`,
-      ].filter(Boolean).join('\n')
+      // Consolidated brand profile — single source of truth for AI prompts
+      const brandProfile   = buildBrandProfile(flow)
+      const recentPostsCtx = buildRecentPostsContext(flow.posts)
+      const languageName   = LANGUAGE_NAMES[language] || 'English'
+      const toneDesc       = TONE_DESCS[tone] || TONE_DESCS.informative
+      const contentIdeasBlock = contentIdeas.length > 0
+        ? `\n## POST ANGLES TO USE (rotate through these — one per new post)\n${contentIdeas.map((t, i) => `  ${i + 1}. ${t}`).join('\n')}\n`
+        : ''
 
-      const TONE_DESCS = {
-        informative: 'Clear, factual, educational — share a useful insight.',
-        helpful:     'Warm, empathetic, solution-focused — offer practical help.',
-        aggressive:  'Bold, urgent, FOMO-driven — challenge the reader to act now.',
-        inspiring:   'Motivational, aspirational, emotional — ignite a desire to change.',
-        playful:     'Fun, witty, conversational — light-hearted and engaging.',
+      // Shared helper: analyze a text node and return word budget + hierarchy hint
+      const computeFieldMeta = (allNodes) => (k) => {
+        const node = allNodes.find(n => n.dynamic_key === k && n.type === 'text')
+        if (!node) return { key: k, hint: 'short text', maxWords: 8, sizeCategory: 'short', role: 'body' }
+        const fs = Math.max(12, node.fontSize || 48)
+        const w  = Math.max(50, node.width  || 200)
+        const h  = Math.max(30, node.height || 100)
+        const lineHeight = Math.max(1.0, node.lineHeight || 1.2)
+        const fontWidthRatio = fs <= 20 ? 0.54 : fs <= 32 ? 0.53 : fs <= 48 ? 0.52 : 0.51
+        const avgCharWidth = fs * fontWidthRatio
+        const containerPadding = Math.max(8, fs * 0.15)
+        const effectiveWidth = w - (containerPadding * 2)
+        const charsPerLine = Math.max(3, Math.floor(effectiveWidth / avgCharWidth))
+        const lineSpaceNeeded = fs * lineHeight
+        const verticalPadding = Math.max(4, fs * 0.25)
+        const effectiveHeight = h - (verticalPadding * 2)
+        const availableLines = Math.max(1, Math.floor(effectiveHeight / lineSpaceNeeded))
+        const avgCharsPerWord = 5.5
+        const maxChars = charsPerLine * availableLines
+        let maxWords = Math.max(2, Math.round(maxChars / avgCharsPerWord))
+        let sizeCategory = 'medium'
+        if (h < 40)      { maxWords = Math.min(maxWords, 4);  sizeCategory = 'micro' }
+        else if (h < 80) { maxWords = Math.min(maxWords, 10); sizeCategory = 'short' }
+        else if (h < 200){ maxWords = Math.max(8, Math.min(maxWords, 30)); sizeCategory = 'medium' }
+        else if (h < 400){ maxWords = Math.max(25, maxWords); sizeCategory = 'large' }
+        else             { maxWords = Math.max(50, maxWords); sizeCategory = 'extra-large' }
+        const role =
+          fs >= 72 ? 'HERO headline' :
+          fs >= 48 ? 'headline'      :
+          fs >= 30 ? 'sub-headline'  :
+          fs >= 20 ? 'body copy'     : 'caption/micro-text'
+        return { key: k, hint: `${maxWords} words max (${sizeCategory} — ${role})`, maxWords, sizeCategory, role }
       }
-      const toneDesc = TONE_DESCS[tone] || TONE_DESCS.informative
 
-      const LANGUAGE_MAP = {
-        english: 'English',
-        spanish: 'Spanish',
-        french: 'French',
-        german: 'German',
-        italian: 'Italian',
-        portuguese: 'Portuguese',
-        dutch: 'Dutch',
-        polish: 'Polish',
-        swedish: 'Swedish',
-        russian: 'Russian',
-        japanese: 'Japanese',
-        chinese: 'Chinese (Simplified)',
-        korean: 'Korean',
-        arabic: 'Arabic',
-      }
-      const languageName = LANGUAGE_MAP[language] || 'English'
+      // Instagram craft principles injected into every generation prompt
+      const IG_PRINCIPLES = [
+        `## INSTAGRAM CRAFT PRINCIPLES (obey all of these)`,
+        `1. HOOK FIRST. The very first line/headline must stop the scroll — pattern break, surprising claim, curiosity gap, or naming the exact reader.`,
+        `2. SPECIFIC > VAGUE. Use concrete nouns, numbers, tangible outcomes. Never write filler like "amazing", "next level", "game-changer".`,
+        `3. ONE IDEA per post. Do not stuff. Pick a single sharp angle and commit.`,
+        `4. WRITE LIKE A HUMAN. Contractions where natural. Short sentences. Direct address ("you").`,
+        `5. NO CORPORATE MUSH. Ban words: "unlock", "elevate", "empower", "unleash", "seamless", "revolutionary", "cutting-edge", "solutions", "leverage", "synergy".`,
+        `6. NO EMOJIS, NO HASHTAGS in the on-canvas text (they go in the caption instead if any).`,
+        `7. RESPECT WORD LIMITS STRICTLY. A field with "6 words max" MUST have ≤ 6 words.`,
+      ].join('\n')
 
-      // Ask Groq to fill ALL text keys for one post in a single call
-      const aiGenerateTextKeys = async (canvas, textKeys, allNodes, postIndex, idea = null, isCarousel = false) => {
-        if (textKeys.length === 0) return {}
+      // Unused legacy generator kept as no-op for safety in case anything still references it
+      const aiGenerateTextKeys = async () => ({})
+
+      // ── AI: SINGLE IMAGE POST — all copy in one AI call ─────────────
+      const aiGenerateTextKeysSingle = async (canvas, textKeys, allNodes, postIndex, idea) => {
         const unique = [...new Set(textKeys)]
-        const classNames = Object.keys(canvas.classes || {})
-        const classCtx = classNames.length
-          ? `\nCanvas styling classes: ${classNames.join(', ')}. For maximum impact you MAY wrap one key phrase per field using <%kind:.classname:phrase%> syntax.`
-          : ''
-
-        // Build per-field size hints using DEEP intelligent canvas analysis reasoning
-        const fieldMeta = unique.map(k => {
-          const node = allNodes.find(n => n.dynamic_key === k && n.type === 'text')
-          if (!node) return { key: k, hint: '(short text)', maxWords: 8, sizeCategory: 'short' }
-          
-          // Extract canvas measurements with fallback safety
-          const fs = Math.max(12, node.fontSize || 48)
-          const w  = Math.max(50, node.width  || 200)
-          const h  = Math.max(30, node.height || 100)
-          const lineHeight = Math.max(1.0, node.lineHeight || 1.2)
-          
-          // ═══════════════════════════════════════════════════════════════════════
-          // DEEP CANVAS REASONING: The AI analyzes the actual canvas code to determine
-          // optimal text length using multi-layered reasoning
-          // ═══════════════════════════════════════════════════════════════════════
-          
-          // LAYER 1: PIXEL-LEVEL ANALYSIS
-          // ─────────────────────────────
-          // Analyze font rendering characteristics specific to the Inter font
-          // (which is what the canvases use, as seen in renderCanvas.js)
-          // Inter is a highly optimized variable font with excellent readability
-          const fontWidthRatio = fs <= 20 ? 0.54 : fs <= 32 ? 0.53 : fs <= 48 ? 0.52 : 0.51
-          // At smaller sizes, characters are relatively wider; at larger sizes, they're narrower
-          const avgCharWidth = fs * fontWidthRatio
-          
-          // Account for padding within the text container (designer typically leaves 8-16px padding)
-          const containerPadding = Math.max(8, fs * 0.15)
-          const effectiveWidth = w - (containerPadding * 2)
-          const charsPerLine = Math.max(3, Math.floor(effectiveWidth / avgCharWidth))
-          
-          // LAYER 2: VERTICAL SPACE ANALYSIS
-          // ─────────────────────────────────
-          // Calculate how many lines can physically fit
-          // line-height multiplier tells us spacing: 1.2 = 120% of font size
-          const lineSpaceNeeded = fs * lineHeight
-          
-          // Account for top/bottom padding (typically 0.3-0.5x height in design systems)
-          const verticalPadding = Math.max(4, fs * 0.25)
-          const effectiveHeight = h - (verticalPadding * 2)
-          const availableLines = Math.max(1, Math.floor(effectiveHeight / lineSpaceNeeded))
-          
-          // LAYER 3: TEXT WRAPPING BEHAVIOR ANALYSIS
-          // ──────────────────────────────────────────
-          // Different word lengths wrap differently. Use average word metrics:
-          // - English average word: 4.7 chars
-          // - Social media (shorter, punchier): 5.5 chars
-          // - Professional content: 6.2 chars
-          // Use 5.5 as it's optimized for Instagram/social (the primary use case)
-          const avgCharsPerWord = 5.5
-          const maxChars = charsPerLine * availableLines
-          const maxWords = Math.max(2, Math.round(maxChars / avgCharsPerWord))
-          
-          // LAYER 4: VISUAL HIERARCHY & DESIGN INTENT DETECTION
-          // ──────────────────────────────────────────────────
-          // The SIZE of a field tells us its PURPOSE in the design hierarchy
-          let adjustedMaxWords = maxWords
-          let hierarchyIndicator = 'standard'
-          
-          // MICRO TEXT (very constrained): < 40px tall
-          // These are high-impact focal points — headlines, CTAs, single powerful statements
-          if (h < 40) {
-            adjustedMaxWords = Math.min(maxWords, 4)
-            hierarchyIndicator = 'micro (visual anchor)'
-            // For micro fields, even if calculated words = 6, cap at 4 for punchy impact
-          }
-          // SHORT TEXT (moderately constrained): 40-80px
-          // Usually supporting headlines or first hook lines — need to be memorable
-          else if (h < 80) {
-            adjustedMaxWords = Math.min(maxWords, 10)
-            hierarchyIndicator = 'short (supporting hook)'
-          }
-          // MEDIUM TEXT (balanced): 80-200px
-          // Standard body text, descriptions, context — has room for ideas but not essays
-          else if (h < 200) {
-            hierarchyIndicator = 'medium (body content)'
-            // Use calculated value but cap extreme outliers
-            adjustedMaxWords = Math.max(8, Math.min(maxWords, 30))
-          }
-          // LARGE TEXT (expansive): 200-400px
-          // Longer narrative space for storytelling, testimonials, detailed explanations
-          else if (h < 400) {
-            hierarchyIndicator = 'large (narrative space)'
-            adjustedMaxWords = Math.max(25, maxWords)
-          }
-          // EXTRA LARGE TEXT (expansive prose): > 400px
-          // Full paragraph territory — can develop arguments, tell stories
-          else {
-            hierarchyIndicator = 'extra-large (full narrative)'
-            adjustedMaxWords = Math.max(50, maxWords)
-          }
-          
-          // LAYER 5: FONT SIZE REASONING
-          // ──────────────────────────────
-          // Larger fonts = typically more important + fewer words fit
-          // Smaller fonts = typically supporting + more words can fit
-          let fontSizeReasoning = ''
-          if (fs >= 48) fontSizeReasoning = 'large font (48px+) emphasizes visual dominance'
-          else if (fs >= 32) fontSizeReasoning = 'medium font (32px) balances prominence and space'
-          else if (fs >= 24) fontSizeReasoning = 'small font (24px) allows more content'
-          else fontSizeReasoning = 'tiny font (<24px) requires brevity or scrolling'
-          
-          // LAYER 6: CATEGORIZE BY VISUAL IMPACT
-          // ─────────────────────────────────────
-          let sizeCategory = 'medium'
-          if (adjustedMaxWords <= 4) sizeCategory = 'micro'
-          else if (adjustedMaxWords <= 10) sizeCategory = 'short'
-          else if (adjustedMaxWords <= 25) sizeCategory = 'medium'
-          else if (adjustedMaxWords <= 50) sizeCategory = 'long'
-          else sizeCategory = 'extra-long'
-          
-          // LAYER 7: BUILD COMPREHENSIVE HINT
-          // ────────────────────────────────
-          const hint = `${adjustedMaxWords} word${adjustedMaxWords !== 1 ? 's' : ''} max (${sizeCategory})`
-          
-          return { 
-            key: k, 
-            hint, 
-            maxWords: adjustedMaxWords,
-            sizeCategory,
-            fs,
-            w,
-            h,
-            charsPerLine,
-            availableLines,
-            hierarchyIndicator,
-            fontSizeReasoning,
-            positionContext,
-            originalCalc: maxWords,
-            avgCharWidth,
-            effectiveWidth,
-            effectiveHeight,
-            lineSpaceNeeded
-          }
-        })
-
-        // Include the actual canvas JSON so the AI can see and reason about the real structure
-        const canvasJson = JSON.stringify({
-          name: canvas.name,
-          type: canvas.type,
-          width: canvas.width,
-          height: canvas.height,
-          background: canvas.background,
-          nodes: allNodes.map(n => ({
-            id: n.id,
-            type: n.type,
-            dynamic_key: n.dynamic_key,
-            x: n.x,
-            y: n.y,
-            width: n.width,
-            height: n.height,
-            fontSize: n.fontSize,
-            fontFamily: n.fontFamily,
-            fontWeight: n.fontWeight,
-            lineHeight: n.lineHeight,
-            textAlign: n.textAlign,
-            color: n.color,
-            text: n.text
-          }))
-        }, null, 2)
+        if (unique.length === 0) return {}
+        const meta = unique.map(computeFieldMeta(allNodes))
+        const layoutDesc = describeCanvasLayout(canvas, allNodes)
 
         const prompt = [
-          `You are an expert social media copywriter.`,
-          `Canvas: "${canvas.name}" | Brand: ${brand.businessName || 'Our brand'} | Tone: ${toneDesc}`,
-          `${isCarousel ? 'CAROUSEL POST (3-page structure)' : 'SINGLE IMAGE POST'}`,
-          `Post #${postIndex + 1}${idea ? ` — Focus: "${idea}"` : ' — Make this meaningfully different from previous posts'}`,
+          `You are a world-class Instagram copywriter. Write the on-canvas text for ONE single-image post.`,
           ``,
-          isCarousel ? [
-            `CAROUSEL STRUCTURE GUIDE:`,
-            `This is a 3-page carousel. Each page has a specific strategic purpose:`,
-            ``,
-            `1. TOP PEER (Hook Page - First Impression):`,
-            `   • GOAL: Stop viewers immediately. Make them want to swipe to next page.`,
-            `   • STRATEGY: Hook with curiosity, surprise, or emotional trigger.`,
-            `   • Content: Usually has "hook" or "headline" fields - make it POWERFUL.`,
-            `   • Examples: "Wait for page 2..." | "This changed everything" | "You've been doing it wrong"`,
-            ``,
-            `2. CONTENT PAGES (Middle Pages - The Message):`,
-            `   • GOAL: Deliver the main message, explain the hook, provide value.`,
-            `   • STRATEGY: Continuation and expansion of top peer hook.`,
-            `   • Content: Usually has "description", "benefits", "explanation" fields.`,
-            `   • This is where the story unfolds and proof/details are provided.`,
-            ``,
-            `3. BOTTOM PEER (CTA/Continuation Page - The Ask):`,
-            `   • GOAL: Drive action or create curiosity for follow-up content.`,
-            `   • STRATEGY: Strong call-to-action or hook for next series.`,
-            `   • Content: Usually has "cta" or "hook" fields - must be action-oriented.`,
-            `   • Examples: "Follow for part 2" | "Comment your biggest challenge" | "DM for details"`,
-            ``,
-            `KEY INSIGHT: The three pages tell ONE cohesive story:`,
-            `  Page 1 (Hook) → Page 2 (Substance) → Page 3 (Action)`,
-            `  Make sure each page makes viewers want to swipe next.`,
-            ``
-          ].join('\n') : `SINGLE IMAGE POST:\nGOAL: Tell complete story in one visual. All key info in one field.`,
+          brandProfile,
           ``,
-          `TEXT FIELDS (field name: max words):`,
-          fieldMeta.map(({ key, hint }) => `  • ${key}: ${hint}`).join('\n'),
+          layoutDesc,
           ``,
-          `RULES:`,
-          `1. Respect word limits strictly`,
-          `2. Each post must be unique (different angle, benefit, or tone)`,
-          `3. Match depth to field size: large fields = more narrative, small fields = power words`,
-          `4. All fields tell one cohesive story`,
-          `5. Plain text only (no hashtags, emojis, special chars)`,
-          isCarousel ? `6. Remember: Page 1 hooks → Page 2 explains → Page 3 calls to action` : '',
+          IG_PRINCIPLES,
+          contentIdeasBlock,
+          recentPostsCtx,
           ``,
-          `CANVAS STRUCTURE:`,
-          `\`\`\`json`,
-          canvasJson,
-          `\`\`\``,
+          `## THIS POST (post #${postIndex + 1} in the batch)`,
+          idea ? `- Angle to execute: "${idea}"` : `- Angle: choose a fresh angle that has NOT been used above.`,
+          `- Format: SINGLE image (not a carousel). Everything visible at once. No "swipe", no "next slide", no "part 1".`,
+          `- All fields must combine into ONE cohesive story: hook → substance → resolution (or CTA).`,
           ``,
-          `Generate ONLY valid JSON: {"fieldname":"text","another":"text"}`,
+          `## FIELDS TO FILL (name → word budget & role)`,
+          meta.map(m => `  • ${m.key} → ${m.hint}`).join('\n'),
+          ``,
+          `## OUTPUT`,
+          `Return ONLY a valid JSON object mapping each field name to its finished text.`,
+          `Example shape (values are placeholders, use your own copy in ${languageName}):`,
+          `{${meta.map(m => `"${m.key}":"..."`).join(',')}}`,
         ].filter(Boolean).join('\n')
 
-        if (!groqKey) {
-          // Fallback without API key - generate smart fallbacks by field type
+        try {
+          const raw = await callGroq({ prompt, model: MODEL_MAIN, temperature: 0.9, maxTokens: 600, jsonMode: true })
+          const parsed = extractJson(raw, {}) || {}
           const result = {}
-          for (const field of fieldMeta) {
-            result[field.key] = 'Discover what makes us special'
+          for (const m of meta) {
+            const v = parsed[m.key]
+            result[m.key] = v && String(v).trim() ? String(v).trim() : 'Something worth stopping for.'
           }
           return result
-        }
-
-        // Log the prompt being sent to AI
-        console.log('🤖 POST GENERATION PROMPT:\n', prompt)
-
-        // Retry logic with exponential backoff for reliability
-        let lastError = null
-        for (let attempt = 0; attempt < 3; attempt++) {
-          try {
-            const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
-              body: JSON.stringify({ 
-                model: 'mixtral-8x7b-32768', 
-                messages: [{ role: 'user', content: prompt }], 
-                max_tokens: 500, 
-                temperature: 0.85 + (attempt * 0.05) // Slightly increase temperature on retries for variation
-              }),
-            })
-            if (!res.ok) {
-              lastError = new Error(`Groq ${res.status}`)
-              if (res.status === 429) {
-                // Rate limited - wait and retry with exponential backoff
-                await new Promise(r => setTimeout(r, 1000 * (attempt + 1)))
-                continue
-              }
-              throw lastError
-            }
-            const aiData = await res.json()
-            const raw = aiData.choices?.[0]?.message?.content?.trim() || '{}'
-            const m = raw.match(/\{[\s\S]*\}/)
-            if (!m) throw new Error('no JSON in response')
-            const parsed = JSON.parse(m[0])
-            const result = {}
-            for (const k of unique) {
-              const val = parsed[k]
-              if (val && String(val).trim()) {
-                result[k] = String(val)
-              } else {
-                // Fallback: generic placeholder
-                result[k] = 'Discover what makes us special'
-              }
-            }
-            return result
-          } catch (e) {
-            lastError = e
-            if (attempt < 2) {
-              // Wait before retrying (exponential backoff)
-              await new Promise(r => setTimeout(r, 500 * (attempt + 1)))
-            }
-          }
-        }
-
-        console.error('Groq error after 3 attempts:', lastError?.message)
-        // Final fallback - generate unique fallbacks per field based on their roles
-        const result = {}
-        for (const field of fieldMeta) {
-          result[field.key] = 'Discover what makes us special'
-        }
-        return result
-      }
-
-
-      // ── AI GENERATE FOR CAROUSEL PAGES ──
-      // Generate content specifically for each carousel page (supports N pages)
-      const aiGenerateTextKeysCarouselPage = async (canvas, textKeys, pageNodes, pageRole, pageDescription, pageType, totalPages, pageIdx, postIndex, idea, hookContent) => {
-        if (textKeys.length === 0) return {}
-        const unique = [...new Set(textKeys)]
-        const classNames = Object.keys(canvas.classes || {})
-        const classCtx = classNames.length
-          ? `\nCanvas styling classes: ${classNames.join(', ')}. For maximum impact you MAY wrap one key phrase per field using <%kind:.classname:phrase%> syntax.`
-          : ''
-
-        // Build field metadata for this specific page
-        const fieldMeta = unique.map(k => {
-          const node = pageNodes.find(n => n.dynamic_key === k && n.type === 'text')
-          if (!node) return { key: k, hint: '(short text)', maxWords: 8, sizeCategory: 'short' }
-          
-          const fs = Math.max(12, node.fontSize || 48)
-          const w  = Math.max(50, node.width  || 200)
-          const h  = Math.max(30, node.height || 100)
-          const lineHeight = Math.max(1.0, node.lineHeight || 1.2)
-          
-          const fontWidthRatio = fs <= 20 ? 0.54 : fs <= 32 ? 0.53 : fs <= 48 ? 0.52 : 0.51
-          const avgCharWidth = fs * fontWidthRatio
-          const containerPadding = Math.max(8, fs * 0.15)
-          const effectiveWidth = w - (containerPadding * 2)
-          const charsPerLine = Math.max(3, Math.floor(effectiveWidth / avgCharWidth))
-          
-          const lineSpaceNeeded = fs * lineHeight
-          const verticalPadding = Math.max(4, fs * 0.25)
-          const effectiveHeight = h - (verticalPadding * 2)
-          const availableLines = Math.max(1, Math.floor(effectiveHeight / lineSpaceNeeded))
-          
-          const avgCharsPerWord = 5.5
-          const maxChars = charsPerLine * availableLines
-          let maxWords = Math.max(2, Math.round(maxChars / avgCharsPerWord))
-          
-          // Size category determination
-          let sizeCategory = 'medium'
-          if (h < 40) {
-            maxWords = Math.min(maxWords, 4)
-            sizeCategory = 'micro'
-          } else if (h < 80) {
-            maxWords = Math.min(maxWords, 10)
-            sizeCategory = 'short'
-          } else if (h < 200) {
-            sizeCategory = 'medium'
-            maxWords = Math.max(8, Math.min(maxWords, 30))
-          } else if (h < 400) {
-            sizeCategory = 'large'
-            maxWords = Math.max(25, maxWords)
-          } else {
-            sizeCategory = 'extra-large'
-            maxWords = Math.max(50, maxWords)
-          }
-          
-          // Detect field role from name
-          const hint = `${maxWords} word${maxWords !== 1 ? 's' : ''} max (${sizeCategory})`
-          return { 
-            key: k, 
-            hint, 
-            maxWords,
-            sizeCategory
-          }
-        })
-
-        // Build page-specific prompt with dynamic page context
-        let roleContext = ''
-        let hookReference = ''
-        
-        if (pageType === 'top_peer') {
-          roleContext = [
-            `YOUR ROLE: Hook the viewer. Make them WANT to swipe to the next page.`,
-            `STRATEGY: Use curiosity, surprise, or emotional trigger. Stop them mid-scroll.`,
-            `TONE: Bold, attention-grabbing, creates desire to see what's next.`,
-            `CONTENT: Fields here should tease the main message without revealing everything.`,
-            ``
-          ].join('\n')
-        } else if (pageType === 'bottom_peer') {
-          roleContext = [
-            `YOUR ROLE: Drive action or create curiosity for follow-up.`,
-            `STRATEGY: Strong call-to-action or hook for next series/content.`,
-            `TONE: Clear instruction, urgency, compelling reason to act now.`,
-            `CONTENT: Fields here should motivate viewers to take the next step.`,
-            ``
-          ].join('\n')
-          
-          // If we have hook content, reference it in the CTA
-          if (hookContent && Object.keys(hookContent).length > 0) {
-            hookReference = `\nREFERENCE FROM PAGE 1:\nHook message: ${Object.values(hookContent).join(' - ')}\nYour CTA should tie back to this hook and drive action on it.`
-          }
-        } else if (pageType === 'content') {
-          roleContext = [
-            `YOUR ROLE: Support and expand on the hook from page 1.`,
-            `STRATEGY: Deliver proof, details, examples, or evidence that support the hook's promise.`,
-            `TONE: Informative, detailed, builds credibility and momentum toward the CTA.`,
-            `CONTENT: Fields here provide substance, examples, or proof for the hook.`,
-            ``
-          ].join('\n')
-          
-          // If we have hook content, reference it
-          if (hookContent && Object.keys(hookContent).length > 0) {
-            hookReference = `\nHOOK FROM PAGE 1:\n${Object.values(hookContent).join(' ')}\n\nYour job: Provide evidence, examples, or details that SUPPORT and EXPAND on this hook. Everything you write should directly relate to and strengthen the hook message.`
-          }
-        }
-
-        let pagePrompt
-        
-        if (pageType === 'top_peer') {
-          pagePrompt = [
-            `You are an expert social media copywriter. Creating PAGE 1 of a ${totalPages}-page carousel.`,
-            `Language: Write EVERYTHING in ${languageName} ONLY. Do not use any other language.`,
-            ``,
-            `BUSINESS CONTEXT:`,
-            `${brandCtx}`,
-            ``,
-            `Tone: ${toneDesc}`,
-            `Post #${postIndex + 1}${idea ? ` — Focus: "${idea}"` : ''}`,
-            ``,
-            `PAGE 1 ROLE: THE HOOK - Make viewers STOP and WANT to swipe.`,
-            `${roleContext}`,
-            ``,
-            `CRITICAL: This is the HOOK page. You MUST:`,
-            `  1. Ask a question OR make a bold statement that creates curiosity`,
-            `  2. Make viewers want to see page 2 to learn more`,
-            `  3. Do NOT provide the full answer here - save that for page 2`,
-            `  4. Do NOT list "steps" or "tips" in detail - hint at them instead`,
-            ``,
-            `TEXT FIELDS (field name: max words):`,
-            fieldMeta.map(({ key, hint }) => `  • ${key}: ${hint}`).join('\n'),
-            ``,
-            `RULES:`,
-            `1. Respect word limits strictly`,
-            `2. Intrigue, don't educate`,
-            `3. Plain text only (no hashtags, emojis, special chars)`,
-            `4. Make page 1 a question or teaser, NOT the full answer`,
-            `5. WRITE EVERYTHING IN ${languageName.toUpperCase()}`,
-            ``,
-            `Generate ONLY valid JSON: {"fieldname":"text","another":"text"}`,
-          ].filter(Boolean).join('\n')
-        } else if (pageType === 'content') {
-          pagePrompt = [
-            `You are an expert social media copywriter. Creating CONTENT PAGE of a ${totalPages}-page carousel.`,
-            `Language: Write EVERYTHING in ${languageName} ONLY. Do not use any other language.`,
-            ``,
-            `BUSINESS CONTEXT:`,
-            `${brandCtx}`,
-            ``,
-            `Tone: ${toneDesc}`,
-            `Post #${postIndex + 1}${idea ? ` — Focus: "${idea}"` : ''}`,
-            ``,
-            `PAGE ${pageIdx + 1} ROLE: SUPPORT AND EXPAND THE HOOK.`,
-            `${roleContext}`,
-            hookReference,
-            ``,
-            `CRITICAL INSTRUCTIONS FOR THIS CONTENT PAGE:`,
-            `  • You MUST directly expand on and support the hook from page 1`,
-            `  • Do NOT repeat what was said on page 1 - add NEW supporting information`,
-            `  • Provide proof, examples, detailed explanation, or evidence`,
-            `  • Make this page feel like the natural continuation after page 1`,
-            `  • Do NOT introduce new hooks or separate topics`,
-            ``,
-            `TEXT FIELDS (field name: max words):`,
-            fieldMeta.map(({ key, hint }) => `  • ${key}: ${hint}`).join('\n'),
-            ``,
-            `RULES:`,
-            `1. Respect word limits strictly`,
-            `2. Educate and provide VALUE that supports page 1's hook`,
-            `3. Plain text only (no hashtags, emojis, special chars)`,
-            `4. This page MUST feel connected to the hook - don't go off-topic`,
-            `5. WRITE EVERYTHING IN ${languageName.toUpperCase()}`,
-            ``,
-            `Generate ONLY valid JSON: {"fieldname":"text","another":"text"}`,
-          ].filter(Boolean).join('\n')
-        } else if (pageType === 'bottom_peer') {
-          pagePrompt = [
-            `You are an expert social media copywriter. Creating PAGE ${totalPages} (FINAL CTA) of a ${totalPages}-page carousel.`,
-            `Language: Write EVERYTHING in ${languageName} ONLY. Do not use any other language.`,
-            ``,
-            `BUSINESS CONTEXT:`,
-            `${brandCtx}`,
-            ``,
-            `Tone: ${toneDesc}`,
-            `Post #${postIndex + 1}${idea ? ` — Focus: "${idea}"` : ''}`,
-            ``,
-            `PAGE ${totalPages} ROLE: FINAL CALL-TO-ACTION tied to the hook.`,
-            `${roleContext}`,
-            hookReference,
-            ``,
-            `CRITICAL INSTRUCTIONS FOR THIS CTA PAGE:`,
-            `  • This is the FINAL page - viewers have read all content`,
-            `  • Direct them to take action related to the hook`,
-            `  • Make it clear what they should do NEXT`,
-            `  • Create urgency or compelling reason to act NOW`,
-            `  • Reference the hook/topic to tie everything together`,
-            ``,
-            `TEXT FIELDS (field name: max words):`,
-            fieldMeta.map(({ key, hint }) => `  • ${key}: ${hint}`).join('\n'),
-            ``,
-            `RULES:`,
-            `1. Respect word limits strictly`,
-            `2. Be clear and actionable`,
-            `3. Plain text only (no hashtags, emojis, special chars)`,
-            `4. End with a compelling reason to act`,
-            `5. WRITE EVERYTHING IN ${languageName.toUpperCase()}`,
-            ``,
-            `Generate ONLY valid JSON: {"fieldname":"text","another":"text"}`,
-          ].filter(Boolean).join('\n')
-        }
-
-        if (!groqKey) {
-          // Fallback
+        } catch (e) {
+          console.error('Single-image generation failed:', e.message)
           const result = {}
-          for (const field of fieldMeta) {
-            if (field.fieldRole === 'headline') {
-              if (pageType === 'top_peer') result[field.key] = 'Unlock the secret'
-              else if (pageType === 'bottom_peer') result[field.key] = 'Ready to start?'
-              else result[field.key] = 'Here\'s what matters'
-            }
-            else if (field.fieldRole === 'cta') {
-              if (pageType === 'bottom_peer') result[field.key] = 'Take action now'
-              else result[field.key] = 'Learn more'
-            }
-            else if (field.fieldRole === 'hook') {
-              if (pageType === 'top_peer') result[field.key] = 'Wait for page 2'
-              else result[field.key] = 'Follow for details'
-            }
-            else result[field.key] = 'Discover now'
-          }
+          for (const m of meta) result[m.key] = 'Something worth stopping for.'
           return result
         }
-
-        // Retry logic
-        let lastError = null
-        for (let attempt = 0; attempt < 3; attempt++) {
-          try {
-            const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
-              body: JSON.stringify({ 
-                model: 'llama-3.1-8b-instant', 
-                messages: [{ role: 'user', content: pagePrompt }], 
-                max_tokens: 400, 
-                temperature: 0.85 + (attempt * 0.05)
-              }),
-            })
-            if (!res.ok) {
-              lastError = new Error(`Groq ${res.status}`)
-              if (res.status === 429) {
-                await new Promise(r => setTimeout(r, 1000 * (attempt + 1)))
-                continue
-              }
-              throw lastError
-            }
-            const aiData = await res.json()
-            const raw = aiData.choices?.[0]?.message?.content?.trim() || '{}'
-            const m = raw.match(/\{[\s\S]*\}/)
-            if (!m) throw new Error('no JSON in response')
-            const parsed = JSON.parse(m[0])
-            const result = {}
-            for (const k of unique) {
-              const val = parsed[k]
-              if (val && String(val).trim()) {
-                result[k] = String(val)
-              } else {
-                // Fallback: generic placeholder
-                result[k] = 'Discover what makes us special'
-              }
-            }
-            return result
-          } catch (e) {
-            lastError = e
-            if (attempt < 2) {
-              await new Promise(r => setTimeout(r, 500 * (attempt + 1)))
-            }
-          }
-        }
-        console.error('Carousel page generation error:', lastError?.message)
-        const result = {}
-        for (const field of fieldMeta) {
-          result[field.key] = 'Discover what makes us special'
-        }
-        return result
       }
 
-      // ── AI GENERATE FOR SINGLE IMAGE ──
-      // Generate content optimized for a single image (complete story in one visual)
-      const aiGenerateTextKeysSingle = async (canvas, textKeys, allNodes, postIndex, idea) => {
-        if (textKeys.length === 0) return {}
+      // ── AI: CAROUSEL PAGE — one AI call per page ────────────────────
+      // pageType: 'top_peer' | 'content' | 'bottom_peer'
+      const aiGenerateTextKeysCarouselPage = async (canvas, textKeys, pageNodes, _pageRole, _pageDescription, pageType, totalPages, pageIdx, postIndex, idea, hookContent) => {
         const unique = [...new Set(textKeys)]
-        const classNames = Object.keys(canvas.classes || {})
-        const classCtx = classNames.length
-          ? `\nCanvas styling classes: ${classNames.join(', ')}. For maximum impact you MAY wrap one key phrase per field using <%kind:.classname:phrase%> syntax.`
-          : ''
+        if (unique.length === 0) return {}
+        const meta = unique.map(computeFieldMeta(pageNodes))
+        const layoutDesc = describeCanvasLayout({ ...canvas, name: `${canvas.name} — page ${pageIdx + 1}/${totalPages}` }, pageNodes)
 
-        // Build field metadata
-        const fieldMeta = unique.map(k => {
-          const node = allNodes.find(n => n.dynamic_key === k && n.type === 'text')
-          if (!node) return { key: k, hint: '(short text)', maxWords: 8, sizeCategory: 'short' }
-          
-          const fs = Math.max(12, node.fontSize || 48)
-          const w  = Math.max(50, node.width  || 200)
-          const h  = Math.max(30, node.height || 100)
-          const lineHeight = Math.max(1.0, node.lineHeight || 1.2)
-          
-          const fontWidthRatio = fs <= 20 ? 0.54 : fs <= 32 ? 0.53 : fs <= 48 ? 0.52 : 0.51
-          const avgCharWidth = fs * fontWidthRatio
-          const containerPadding = Math.max(8, fs * 0.15)
-          const effectiveWidth = w - (containerPadding * 2)
-          const charsPerLine = Math.max(3, Math.floor(effectiveWidth / avgCharWidth))
-          
-          const lineSpaceNeeded = fs * lineHeight
-          const verticalPadding = Math.max(4, fs * 0.25)
-          const effectiveHeight = h - (verticalPadding * 2)
-          const availableLines = Math.max(1, Math.floor(effectiveHeight / lineSpaceNeeded))
-          
-          const avgCharsPerWord = 5.5
-          const maxChars = charsPerLine * availableLines
-          let maxWords = Math.max(2, Math.round(maxChars / avgCharsPerWord))
-          
-          let sizeCategory = 'medium'
-          if (h < 40) {
-            maxWords = Math.min(maxWords, 4)
-            sizeCategory = 'micro'
-          } else if (h < 80) {
-            maxWords = Math.min(maxWords, 10)
-            sizeCategory = 'short'
-          } else if (h < 200) {
-            sizeCategory = 'medium'
-            maxWords = Math.max(8, Math.min(maxWords, 30))
-          } else if (h < 400) {
-            sizeCategory = 'large'
-            maxWords = Math.max(25, maxWords)
-          } else {
-            sizeCategory = 'extra-large'
-            maxWords = Math.max(50, maxWords)
+        // Role-specific directives
+        let roleBlock, hookRef = ''
+        if (pageType === 'top_peer') {
+          roleBlock = [
+            `## PAGE ROLE — HOOK (page 1 of ${totalPages})`,
+            `- Job: stop the scroll and make people SWIPE. Nothing else.`,
+            `- Reveal a curiosity gap, contrarian claim, or naming a pain the reader recognizes.`,
+            `- Do NOT list the tips/steps. Tease them. The full value is on the next pages.`,
+          ].join('\n')
+        } else if (pageType === 'bottom_peer') {
+          roleBlock = [
+            `## PAGE ROLE — CALL TO ACTION (page ${totalPages} of ${totalPages})`,
+            `- Job: convert attention into ONE clear next step.`,
+            `- Options: comment a word, save the post, DM a keyword, tap the link, follow, share.`,
+            `- Be specific. "Learn more" is banned.`,
+          ].join('\n')
+          if (hookContent && Object.keys(hookContent).length > 0) {
+            hookRef = `\n## HOOK FROM PAGE 1 (tie the CTA back to it)\n${Object.entries(hookContent).map(([k,v]) => `  ${k}: ${v}`).join('\n')}`
           }
-          
-          const hint = `${maxWords} word${maxWords !== 1 ? 's' : ''} max (${sizeCategory})`
-          return { 
-            key: k, 
-            hint, 
-            maxWords,
-            sizeCategory
+        } else {
+          roleBlock = [
+            `## PAGE ROLE — CONTENT (page ${pageIdx + 1} of ${totalPages})`,
+            `- Job: deliver the PROMISE made by page 1. Give the concrete value, proof, or story.`,
+            `- Bring NEW information. Do NOT paraphrase the hook.`,
+            `- Every sentence has to justify itself. If a sentence adds nothing, cut it.`,
+          ].join('\n')
+          if (hookContent && Object.keys(hookContent).length > 0) {
+            hookRef = `\n## HOOK YOU MUST EXPAND (from page 1)\n${Object.entries(hookContent).map(([k,v]) => `  ${k}: ${v}`).join('\n')}\nYour task: deliver on this promise with fresh, specific content.`
           }
-        })
+        }
 
-        // Build single-image-optimized prompt
-        const singlePrompt = [
-          `You are an expert social media copywriter creating a complete single-image post.`,
-          `Language: Write EVERYTHING in ${languageName} ONLY. Do not use any other language.`,
+        const prompt = [
+          `You are a world-class Instagram carousel copywriter. Write the on-canvas text for ONE page of a carousel.`,
           ``,
-          `BUSINESS CONTEXT:`,
-          `${brandCtx}`,
+          brandProfile,
           ``,
-          `Tone: ${toneDesc}`,
-          `Post #${postIndex + 1}${idea ? ` — Focus: "${idea}"` : ' — Make this unique and compelling'}`,
+          layoutDesc,
           ``,
-          `SINGLE IMAGE POST (NOT A CAROUSEL):`,
-          `You have ONE chance to tell the complete story. All content must fit together in one visual to:`,
-          `  1. Stop the viewer immediately`,
-          `  2. Communicate the key message clearly`,
-          `  3. Drive action or curiosity`,
+          IG_PRINCIPLES,
+          contentIdeasBlock,
+          recentPostsCtx,
           ``,
-          `CRITICAL - THIS IS NOT A CAROUSEL:`,
-          `  • Do NOT write content meant for multiple pages`,
-          `  • Do NOT mention "3 tips", "5 steps", "here's how", "follow for more"`,
-          `  • Do NOT create series-style content (like "Part 1", "next page", etc)`,
-          `  • Everything must be COMPLETE and STANDALONE on this ONE image`,
-          `  • This is a single complete thought, not a series setup`,
+          roleBlock,
+          hookRef,
           ``,
-          `Strategy: Headline/hook → complete explanation → clear CTA, all SELF-CONTAINED on one visual.`,
+          `## THIS POST (carousel post #${postIndex + 1} in the batch)`,
+          idea ? `- Angle for the whole carousel: "${idea}"` : `- Choose a fresh angle not used above.`,
           ``,
-          `TEXT FIELDS (field name: max words):`,
-          fieldMeta.map(({ key, hint }) => `  • ${key}: ${hint}`).join('\n'),
+          `## FIELDS TO FILL (name → word budget & role)`,
+          meta.map(m => `  • ${m.key} → ${m.hint}`).join('\n'),
           ``,
-          `RULES:`,
-          `1. Respect word limits strictly`,
-          `2. All fields must tell ONE complete, self-contained story`,
-          `3. Headline should grab attention immediately`,
-          `4. Supporting text provides context, proof, or complete explanation`,
-          `5. CTA drives clear action (if present)`,
-          `6. Plain text only (no hashtags, emojis, special chars)`,
-          `7. NEVER suggest "read more on next slide" or "swipe for part 2"`,
-          `8. This is one complete post - viewers see EVERYTHING on this image alone`,
-          `9. WRITE EVERYTHING IN ${languageName.toUpperCase()}`,
-          ``,
-          `Generate ONLY valid JSON: {"fieldname":"text","another":"text"}`,
+          `## OUTPUT`,
+          `Return ONLY a valid JSON object mapping each field name to its finished text (in ${languageName}).`,
+          `Example: {${meta.map(m => `"${m.key}":"..."`).join(',')}}`,
         ].filter(Boolean).join('\n')
 
-        if (!groqKey) {
-          // Fallback
+        try {
+          const raw = await callGroq({ prompt, model: MODEL_MAIN, temperature: 0.9, maxTokens: 550, jsonMode: true })
+          const parsed = extractJson(raw, {}) || {}
           const result = {}
-          for (const field of fieldMeta) {
-            if (field.fieldRole === 'headline') result[field.key] = 'Discover what\'s next'
-            else if (field.fieldRole === 'cta') result[field.key] = 'Learn more today'
-            else if (field.fieldRole === 'hook') result[field.key] = 'This changes everything'
-            else result[field.key] = 'Explore the possibilities'
+          for (const m of meta) {
+            const v = parsed[m.key]
+            result[m.key] = v && String(v).trim() ? String(v).trim() : (pageType === 'top_peer' ? 'The one thing everyone gets wrong' : pageType === 'bottom_peer' ? 'Save this for later' : 'Here is what actually works')
           }
           return result
+        } catch (e) {
+          console.error('Carousel page generation failed:', e.message)
+          const result = {}
+          for (const m of meta) result[m.key] = pageType === 'top_peer' ? 'The one thing everyone gets wrong' : pageType === 'bottom_peer' ? 'Save this for later' : 'Here is what actually works'
+          return result
         }
-
-        // Retry logic
-        let lastError = null
-        for (let attempt = 0; attempt < 3; attempt++) {
-          try {
-            const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
-              body: JSON.stringify({ 
-                model: 'llama-3.1-8b-instant', 
-                messages: [{ role: 'user', content: singlePrompt }], 
-                max_tokens: 450, 
-                temperature: 0.85 + (attempt * 0.05)
-              }),
-            })
-            if (!res.ok) {
-              lastError = new Error(`Groq ${res.status}`)
-              if (res.status === 429) {
-                await new Promise(r => setTimeout(r, 1000 * (attempt + 1)))
-                continue
-              }
-              throw lastError
-            }
-            const aiData = await res.json()
-            const raw = aiData.choices?.[0]?.message?.content?.trim() || '{}'
-            const m = raw.match(/\{[\s\S]*\}/)
-            if (!m) throw new Error('no JSON in response')
-            const parsed = JSON.parse(m[0])
-            const result = {}
-            for (const k of unique) {
-              const val = parsed[k]
-              if (val && String(val).trim()) {
-                result[k] = String(val)
-              } else {
-                const field = fieldMeta.find(f => f.key === k)
-                if (field?.fieldRole === 'headline') result[k] = 'Discover what\'s next'
-                else if (field?.fieldRole === 'cta') result[k] = 'Learn more today'
-                else if (field?.fieldRole === 'hook') result[k] = 'This changes everything'
-                else result[k] = 'Explore the possibilities'
-              }
-            }
-            return result
-          } catch (e) {
-            lastError = e
-            if (attempt < 2) {
-              await new Promise(r => setTimeout(r, 500 * (attempt + 1)))
-            }
-          }
-        }
-        console.error('Single image generation error:', lastError?.message)
-        const result = {}
-        for (const field of fieldMeta) {
-          result[field.key] = 'Discover what makes us special'
-        }
-        return result
       }
 
-      // ── GENERATE INSTAGRAM CAPTION ──
-      // Creates a caption based on the generated content
-      const generateCaption = async (textValues, brand, tone, groqKey) => {
-        if (!groqKey) {
-          // Fallback caption
-          return brand?.businessName ? `Discover what ${brand.businessName} has to offer.` : 'Check this out.'
-        }
-
-        // Combine generated content into a single context for caption generation
-        const contentSummary = Object.entries(textValues)
+      // ── AI: INSTAGRAM CAPTION ───────────────────────────────────────
+      const generateCaption = async (textValues, _brand, _tone, _groqKey) => {
+        const contentSummary = Object.entries(textValues || {})
           .filter(([, v]) => typeof v === 'string' && v.length > 0)
           .map(([k, v]) => `${k}: ${v}`)
           .join('\n')
 
-        const TONE_DESCS = {
-          informative: 'Clear, factual, educational',
-          helpful: 'Warm, supportive, solution-focused',
-          aggressive: 'Bold, urgent, FOMO-driven',
-          inspiring: 'Motivational, aspirational, emotional',
-          playful: 'Fun, witty, conversational',
-        }
-
         const prompt = [
-          `You are a social media caption writer.`,
-          `Brand: ${brand?.businessName || 'A brand'}`,
-          `Tone: ${TONE_DESCS[tone] || TONE_DESCS.informative}`,
+          `You are writing the Instagram CAPTION that will accompany a post whose on-image copy is already written.`,
           ``,
-          `Based on this generated content:`,
+          brandProfile,
+          ``,
+          `## ON-IMAGE COPY (already written — the caption must complement, NOT repeat, it)`,
           contentSummary,
           ``,
-          `Write a compelling Instagram caption (1-2 sentences, max 150 chars).`,
-          `Make it engaging and on-brand.`,
-          `Return ONLY the caption text, no quotes or hashtags.`,
+          `## RULES`,
+          `- Language: ${languageName} only.`,
+          `- 1 to 3 sentences (max ~220 characters total).`,
+          `- Open with a hook different from the image headline.`,
+          `- End with a soft CTA (comment / save / share) OR a punchy line — depending on tone.`,
+          `- No hashtags, no emojis, no quotes around the caption.`,
+          `- Return the caption text ONLY, no preamble.`,
         ].join('\n')
 
         try {
-          console.log('🤖 CAPTION GENERATION PROMPT:\n', prompt)
-          const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
-            body: JSON.stringify({ 
-              model: 'llama-3.1-8b-instant', 
-              messages: [{ role: 'user', content: prompt }], 
-              max_tokens: 100, 
-              temperature: 0.85 
-            }),
-          })
-          if (!res.ok) throw new Error(`Groq ${res.status}`)
-          const data = await res.json()
-          const caption = data.choices?.[0]?.message?.content?.trim() || 'Discover more.'
-          return caption
+          const caption = await callGroq({ prompt, model: MODEL_MAIN, temperature: 0.85, maxTokens: 160 })
+          // Strip accidental wrapping quotes
+          return caption.replace(/^["']|["']$/g, '').trim() || 'Worth a second look.'
         } catch (e) {
           console.error('Caption generation error:', e.message)
-          return brand?.businessName ? `Discover what ${brand.businessName} has to offer.` : 'Check this out.'
+          return flow?.brandContext?.businessName ? `New from ${flow.brandContext.businessName}.` : 'Worth a second look.'
         }
       }
+
+
+
+
+      // ── AI GENERATE FOR CAROUSEL PAGES ──
+      // Generate content specifically for each carousel page (supports N pages)
 
       // Render a canvas with given data
       const renderOnePost = async (canvas, renderData) => {
@@ -1866,33 +1420,25 @@ if (uploadMatch && method === 'GET') {
       const { key, topic, brandContext, tone, classContext } = body
       const groqKey = process.env.GROQ_API_KEY
       if (!groqKey) {
-        return corsify(NextResponse.json({ text: `${topic || 'Your product'} — discover more today.` }))
-      }
-      const TONE_DESCS = {
-        informative: 'Clear, factual, educational',
-        helpful: 'Warm, supportive, solution-focused',
-        aggressive: 'Bold, urgent, FOMO-driven',
-        inspiring: 'Motivational, aspirational, emotional',
-        playful: 'Fun, witty, conversational',
+        return corsify(NextResponse.json({ text: `${topic || 'Your product'} — worth another look.` }))
       }
       const prompt = [
-        brandContext && `Context: ${brandContext}.`,
-        `Write a short Instagram caption (max 15 words) about "${topic || key}".`,
-        `Tone: ${TONE_DESCS[tone] || TONE_DESCS.informative}.`,
-        classContext,
-        'Return ONLY the caption text, no quotes, no hashtags.',
-      ].filter(Boolean).join(' ')
+        `You are a senior Instagram copywriter.`,
+        brandContext && `## BRAND CONTEXT\n${brandContext}`,
+        `## TASK`,
+        `Rewrite ONE short piece of on-canvas text (the field "${key}"${topic ? `, angle: "${topic}"` : ''}).`,
+        `Tone: ${TONE_DESCS[tone] || TONE_DESCS.informative}`,
+        classContext && `## STYLE HINT\n${classContext}`,
+        `## RULES`,
+        `- Max 15 words.`,
+        `- No hashtags, no emojis, no wrapping quotes, no preamble.`,
+        `- Return the finished text ONLY.`,
+      ].filter(Boolean).join('\n')
       try {
-        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
-          body: JSON.stringify({ model: 'mixtral-8x7b-32768', messages: [{ role: 'user', content: prompt }], max_tokens: 120, temperature: 0.85 })
-        })
-        const data = await res.json()
-        const text = data.choices?.[0]?.message?.content?.trim() || `${topic || key} — discover more.`
-        return corsify(NextResponse.json({ text }))
-      } catch (e) {
-        return corsify(NextResponse.json({ text: `${topic || key} — discover more today.` }))
+        const text = await callGroq({ prompt, model: MODEL_MAIN, temperature: 0.9, maxTokens: 120 })
+        return corsify(NextResponse.json({ text: (text || '').replace(/^["']|["']$/g, '').trim() || `${topic || key} — worth another look.` }))
+      } catch (_e) {
+        return corsify(NextResponse.json({ text: `${topic || key} — worth another look.` }))
       }
     }
 
@@ -1994,73 +1540,48 @@ if (uploadMatch && method === 'GET') {
 
       try {
         const prompt = [
-          `You are a social media strategist. Generate EXACTLY 4 simple questions to help create better Instagram content.`,
+          `You are a senior brand strategist. Your job: extract the INSIDER KNOWLEDGE we need to write killer Instagram posts for this brand — things that are NOT already on the website.`,
           ``,
-          `These questions should be:`,
-          `- VERY SIMPLE to answer (quick 1-3 words or 1 sentence max)`,
-          `- Actionable for social media content creation`,
-          `- Not on the website (require insider knowledge)`,
-          `- Focused on what makes content stick on social media`,
-          ``,
-          `Brand Context:`,
+          `## WHAT WE ALREADY KNOW (from the website)`,
           brandContext,
           ``,
-          `Examples of PERFECT questions:`,
-          `- "What's your #1 product/service?"`,
-          `- "In 3 words, what makes you different?"`,
-          `- "What do customers thank you for most?"`,
-          `- "What quick tip would help your audience?"`,
-          `- "What's a common mistake your audience makes?"`,
-          `- "What problem do you solve best?"`,
-          `- "What's your biggest competitor doing wrong?"`,
-          `- "What's one thing you wish customers knew?"`,
+          `## YOUR TASK`,
+          `Generate EXACTLY 5 short, punchy questions the brand owner can answer in one sentence each.`,
+          `Each question should unlock content angles that would be impossible to write without insider input.`,
           ``,
-          `Generate 4 of these simple, specific questions. Return ONLY a JSON array.`,
-          `Format: ["Question 1?", "Question 2?", "Question 3?", "Question 4?"]`,
+          `## RULES`,
+          `- 5 questions total.`,
+          `- Each one is a maximum of ~14 words, ends with a "?".`,
+          `- Cover 5 different areas: (1) the ONE product/service they want to sell most right now,`,
+          `  (2) the customer's biggest pain or frustration, (3) a widespread myth or mistake in their niche,`,
+          `  (4) what makes them irreplaceable vs competitors, (5) one quick actionable tip they can teach.`,
+          `- No corporate jargon in the questions. No "please describe...".`,
+          `- Return ONLY a JSON array of 5 strings. No preamble.`,
+          ``,
+          `Example shape (do NOT copy content, invent yours based on the context above):`,
+          `["Which offer do you want to sell more of right now?","What frustrates your customers most before they find you?","What myth in your industry do you love breaking?","Why do customers pick you over your closest competitor?","What quick tip could you teach in one sentence?"]`,
         ].join('\n')
 
-        console.log('🤖 BRAND QUESTIONS GENERATION PROMPT:\n', prompt)
-        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
-          body: JSON.stringify({ 
-            model: 'llama-3.1-8b-instant', 
-            messages: [{ role: 'user', content: prompt }], 
-            max_tokens: 400, 
-            temperature: 0.7 
-          }),
-        })
-
-        if (!res.ok) throw new Error(`Groq ${res.status}`)
-        const data = await res.json()
-        const responseText = data.choices?.[0]?.message?.content?.trim() || '[]'
-        
-        // Parse JSON from response
-        const jsonMatch = responseText.match(/\[[\s\S]*\]/)
+        console.log('🤖 BRAND QUESTIONS PROMPT:\n', prompt)
+        const raw = await callGroq({ prompt, model: MODEL_MAIN, temperature: 0.7, maxTokens: 400 })
         let questions = []
+        const parsed = extractJson(raw, null)
+        if (Array.isArray(parsed)) questions = parsed
+        else if (parsed && Array.isArray(parsed.questions)) questions = parsed.questions
+        questions = questions.filter(q => typeof q === 'string' && q.trim()).slice(0, 5)
 
-        if (jsonMatch) {
-          try {
-            questions = JSON.parse(jsonMatch[0])
-            if (!Array.isArray(questions)) questions = []
-            // Ensure exactly 4 items and all are strings
-            questions = questions.filter(q => typeof q === 'string' && q.trim()).slice(0, 4)
-          } catch (e) {
-            console.error('JSON parse error:', e.message)
-          }
+        if (questions.length < 5) {
+          const fallback = [
+            'Which offer do you want to sell more of right now?',
+            'What frustrates your ideal customer before they find you?',
+            'What myth in your industry do you love breaking?',
+            'Why do customers pick you over your closest competitor?',
+            'What quick tip could you teach in one sentence?',
+          ]
+          for (const q of fallback) if (questions.length < 5 && !questions.includes(q)) questions.push(q)
         }
 
-        if (questions.length < 4) {
-          // Fallback questions - very simple, directly useful for content
-          questions = [
-            'What\'s your #1 product or service?',
-            'In 3 words, what makes you different?',
-            'What do customers always ask or thank you for?',
-            'What\'s one quick tip or hack you\'d share with your audience?',
-          ].slice(0, 4)
-        }
-
-        return corsify(NextResponse.json({ success: true, questions: questions.slice(0, 4) }))
+        return corsify(NextResponse.json({ success: true, questions: questions.slice(0, 5) }))
       } catch (e) {
         console.error('Brand questions generation error:', e.message)
         return corsify(NextResponse.json({ 
@@ -2112,11 +1633,44 @@ if (uploadMatch && method === 'GET') {
 
         const html = await response.text()
 
-        // Extract text content
+        // Extract meta / og / twitter / json-ld before stripping tags
+        const grabMeta = (name) => {
+          const re = new RegExp(`<meta[^>]+(?:name|property)=["']${name}["'][^>]*content=["']([^"']+)["']`, 'i')
+          const m = html.match(re)
+          return m ? m[1].trim() : ''
+        }
+        const grabAltMeta = (name) => {
+          const re = new RegExp(`<meta[^>]+content=["']([^"']+)["'][^>]*(?:name|property)=["']${name}["']`, 'i')
+          const m = html.match(re)
+          return m ? m[1].trim() : ''
+        }
+        const metaTitle = (html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1] || '').trim()
+        const metaDesc  = grabMeta('description') || grabAltMeta('description') || grabMeta('og:description') || grabMeta('twitter:description')
+        const ogSite    = grabMeta('og:site_name')
+        const ogTitle   = grabMeta('og:title')
+        const h1Match   = (html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i)?.[1] || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim()
+        // Extract JSON-LD organization data if present
+        let jsonLdBlock = ''
+        const jsonLdRegex = /<script[^>]+type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi
+        let ldMatch
+        while ((ldMatch = jsonLdRegex.exec(html)) !== null) {
+          try {
+            const parsed = JSON.parse(ldMatch[1].trim())
+            const items = Array.isArray(parsed) ? parsed : (parsed['@graph'] || [parsed])
+            for (const it of items) {
+              if (it && (it['@type'] === 'Organization' || it['@type'] === 'LocalBusiness' || it['@type'] === 'WebSite' || it['@type'] === 'Person')) {
+                jsonLdBlock += `${it['@type']}: name="${it.name || ''}", description="${it.description || ''}"; `
+              }
+            }
+          } catch (_e) { /* ignore malformed json-ld */ }
+        }
+
+        // Extract text content (fallback signal)
         const textContent = html
           .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
           .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
           .replace(/<[^>]+>/g, ' ')
+          .replace(/&nbsp;/g, ' ')
           .replace(/\s+/g, ' ')
           .trim()
 
@@ -2132,43 +1686,46 @@ if (uploadMatch && method === 'GET') {
         }
 
         // Limit content for API efficiency
-        const contentForAI = textContent.substring(0, 3000)
+        const contentForAI = textContent.substring(0, 4000)
 
-        // Call Groq to extract brand information - with clean content
-        const cleanContent = contentForAI.substring(0, 2500).replace(/\n/g, ' ').replace(/\s+/g, ' ')
-        const extractPrompt = `Extract business information from this website content. Be practical - if you can reasonably infer information from context clues, include it. For example, "we help small businesses with software" tells you what they do and their audience.
+        // Feed the AI a well-structured input (meta tags first — they're the highest-signal source)
+        const structuredInput = [
+          metaTitle && `PAGE TITLE: ${metaTitle}`,
+          ogSite    && `SITE NAME: ${ogSite}`,
+          ogTitle   && `OG TITLE: ${ogTitle}`,
+          metaDesc  && `META DESCRIPTION: ${metaDesc}`,
+          h1Match   && `MAIN HEADING (H1): ${h1Match}`,
+          jsonLdBlock && `STRUCTURED DATA: ${jsonLdBlock}`,
+          `\nBODY TEXT (excerpt):\n${contentForAI.substring(0, 2800).replace(/\n/g, ' ').replace(/\s+/g, ' ')}`,
+        ].filter(Boolean).join('\n')
 
-Website: ${cleanContent}
+        const extractPrompt = [
+          `You are analysing a business website. Extract the brand information a copywriter needs.`,
+          ``,
+          `## RAW SIGNALS FROM THE PAGE`,
+          structuredInput,
+          ``,
+          `## OUTPUT`,
+          `Return ONLY valid JSON with EXACTLY these fields (use empty string "" only if the signal is truly absent):`,
+          `{`,
+          `  "businessName": "The business/brand name",`,
+          `  "description": "2-3 rich sentences: what they do, for whom, and what they are known for. Be specific, name products/services.",`,
+          `  "targetAudience": "One sentence — who they serve, ideally with demographic or need-based specificity.",`,
+          `  "brandVoice": "One phrase describing the personality (e.g. 'confident, no-nonsense, direct') based on how they write.",`,
+          `  "extra": "Any other useful nuance: pricing model, geography, unique angle, brand story."`,
+          `}`,
+          `No preamble, no code fences, JSON ONLY.`,
+        ].join('\n')
 
-Return JSON with these fields (use empty string "" if you truly cannot determine):
-- businessName: The company name
-- description: What the business does/offers - provide 2-3 sentences with as much detail as possible. Include their main services, products, or solutions. Be comprehensive.
-- targetAudience: Who they serve (keep concise)
-- brandVoice: The tone/personality you detect from their content (professional, playful, formal, casual, etc)
-- extra: Any other important business details
 
-Return ONLY valid JSON, no explanation.`
-
-        console.log('🤖 BRAND EXTRACTION PROMPT:\n', extractPrompt)
-        const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${groqKey}` },
-          body: JSON.stringify({
-            model: 'llama-3.1-8b-instant',
-            messages: [{ role: 'user', content: extractPrompt }],
-            max_tokens: 400,
-            temperature: 0.3
-          })
-        })
-
-        if (!res.ok) {
-          const errData = await res.json().catch(() => ({}))
-          console.error('Groq brand extraction error:', { status: res.status, error: errData })
-          throw new Error(`Groq API error: ${res.status} - ${errData.error?.message || 'Unknown'}`)
+        console.log('🤖 BRAND EXTRACTION PROMPT (len):', extractPrompt.length)
+        let responseText = ''
+        try {
+          responseText = await callGroq({ prompt: extractPrompt, model: MODEL_MAIN, temperature: 0.3, maxTokens: 500, jsonMode: true })
+        } catch (e) {
+          console.error('Groq brand extraction error:', e.message)
+          throw new Error(`Groq API error: ${e.message}`)
         }
-
-        const aiData = await res.json()
-        const responseText = aiData.choices?.[0]?.message?.content?.trim() || '{}'
         
         // Extract JSON from response
         const jsonMatch = responseText.match(/\{[\s\S]*\}/)

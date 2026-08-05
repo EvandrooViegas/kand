@@ -20,11 +20,11 @@ import { KandLogo } from '@/components/logo'
 
 const BEBAS = { fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.01em' }
 const TONES = [
-  { id: 'informative', icon: '📚', label: 'Informative', desc: 'Clear, factual, educational' },
-  { id: 'helpful',     icon: '🤝', label: 'Helpful',     desc: 'Warm, supportive, practical' },
-  { id: 'aggressive',  icon: '🔥', label: 'Aggressive',  desc: 'Bold, urgent, FOMO-driven' },
-  { id: 'inspiring',   icon: '✨', label: 'Inspiring',   desc: 'Motivational, aspirational' },
-  { id: 'playful',     icon: '😄', label: 'Playful',     desc: 'Fun, witty, conversational' },
+  { id: 'informative', icon: BookOpen, label: 'Informative', desc: 'Clear, factual, calmly authoritative' },
+  { id: 'helpful',     icon: Users,    label: 'Helpful',     desc: 'Warm, empathetic, practical advice' },
+  { id: 'aggressive',  icon: Zap,      label: 'Aggressive',  desc: 'Bold, urgent, breaks the scroll pattern' },
+  { id: 'inspiring',   icon: Sparkles, label: 'Inspiring',   desc: 'Motivational, aspirational, emotional' },
+  { id: 'playful',     icon: Mic2,     label: 'Playful',     desc: 'Fun, witty, human conversational' },
 ]
 const LANGUAGES = [
   { id: 'english', label: 'English', flag: '🇬🇧' },
@@ -509,13 +509,20 @@ function StepConfigure({ canvases, selectedCanvases, onToggleCanvas, galleryId, 
       <div className="space-y-3">
         <p className="text-[11px] font-bold uppercase tracking-widest text-muted-foreground">Copywriting Tone</p>
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-          {TONES.map(t => (
-            <button key={t.id} type="button" onClick={() => onSetTone(t.id)}
-              className={`text-left p-3 rounded-xl border-2 transition-all ${tone === t.id ? 'border-foreground bg-[#D4FF00]/10' : 'border-foreground/10 hover:border-foreground/30'}`}>
-              <div className="flex items-center gap-1.5 mb-1"><span>{t.icon}</span><span className="text-xs font-bold">{t.label}</span></div>
-              <p className="text-[10px] text-muted-foreground leading-tight">{t.desc}</p>
-            </button>
-          ))}
+          {TONES.map(t => {
+            const Icon = t.icon
+            const active = tone === t.id
+            return (
+              <button key={t.id} type="button" onClick={() => onSetTone(t.id)}
+                className={`text-left p-3 rounded-xl border-2 transition-all ${active ? 'border-foreground bg-[#D4FF00]/10' : 'border-foreground/10 hover:border-foreground/30'}`}>
+                <div className="flex items-center gap-2 mb-1">
+                  <Icon className={`w-3.5 h-3.5 ${active ? 'text-foreground' : 'text-muted-foreground'}`} />
+                  <span className="text-xs font-bold">{t.label}</span>
+                </div>
+                <p className="text-[10px] text-muted-foreground leading-tight">{t.desc}</p>
+              </button>
+            )
+          })}
         </div>
       </div>
 
