@@ -22,7 +22,7 @@ export function buildFilterCssClient(filters) {
   return `brightness(${f.brightness}%) contrast(${f.contrast}%) saturate(${f.saturate}%) grayscale(${f.grayscale}%) sepia(${f.sepia}%) hue-rotate(${f.hueRotate}deg) blur(${f.blur}px) opacity(${f.opacity}%)`
 }
 
-export function CanvasPreview({ canvas, containerWidth = 320 }) {
+export function CanvasPreview({ canvas, containerWidth = 320, onClick }) {
   if (!canvas) return null;
   const w = canvas.width || 1080
   const scale = containerWidth / w
@@ -38,7 +38,11 @@ export function CanvasPreview({ canvas, containerWidth = 320 }) {
   const bg = (isCarousel ? firstPage?.background : canvas.background) || '#ffffff'
 
   return (
-    <div className="absolute inset-0 overflow-hidden" style={{ background: bg, filter: colorFilter }}>
+    <div 
+      className={`absolute inset-0 overflow-hidden ${onClick ? 'cursor-pointer hover:opacity-90 transition-opacity' : ''}`}
+      style={{ background: bg, filter: colorFilter }}
+      onClick={onClick}
+    >
       <div style={{ transform: `scale(${scale})`, transformOrigin: 'top left', width: w, height: canvas.height || 1080, position: 'relative' }}>
         {nodes.map((n) => {
           const base = {
