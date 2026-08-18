@@ -3,11 +3,11 @@ import { connectToMongo } from '@/lib/services/db/mongo'
 import { corsify } from '@/lib/services/middleware'
 import { handleGetCanvases, handleCreateCanvas, handleDuplicateCanvas, handleGetCanvas, handleUpdateCanvas, handleDeleteCanvas } from '@/lib/handlers/canvasHandlers'
 import { handleGetGalleries, handleCreateGallery, handleGetGallery, handleUpdateGallery, handleDeleteGallery } from '@/lib/handlers/galleryHandlers'
-import { handleGetFlows, handleCreateFlow, handleGetFlow, handleUpdateFlow, handleDeleteFlow } from '@/lib/handlers/flowHandlers'
 import { handleUploadImage, handleGetUpload } from '@/lib/handlers/uploadHandlers'
 import { handleRender, handleGetRendered, handleGetRenders, handleApproveRender, handleDeleteRender } from '@/lib/handlers/renderHandlers'
-import { handleGeneratePosts, handleUpdatePost } from '@/lib/handlers/flowGenerationHandlers'
 import { handleExtractBrandInfo } from '@/lib/handlers/extractHandlers'
+import { handleGetFlows, handleCreateFlow, handleGetFlow, handleUpdateFlow, handleDeleteFlow } from '@/lib/handlers/flowHandlers'
+import { handleExtractBusinessInfo } from '@/lib/handlers/businessInfoHandlers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -32,6 +32,11 @@ async function handleRoute(request, { params }) {
     // Extract brand info (no DB needed)
     if (route === '/extract-brand-info' && method === 'POST') {
       return await handleExtractBrandInfo(await request.json())
+    }
+
+    // Extract business info (no DB needed)
+    if (route === '/extract-business-info' && method === 'POST') {
+      return await handleExtractBusinessInfo(await request.json())
     }
 
     // Canvas routes
@@ -80,16 +85,6 @@ async function handleRoute(request, { params }) {
       if (method === 'PUT') return await handleUpdateFlow(db, flowMatch[1], await request.json())
       if (method === 'DELETE') return await handleDeleteFlow(db, flowMatch[1])
     }
-
-    // Flow generation routes
-    const flowIdeasMatch = route.match(/^\/flows\/([^/]+)\/generate-ideas$/)
-    if (flowIdeasMatch && method === 'POST') return await handleGenerateIdeas(db, flowIdeasMatch[1], await request.json())
-
-    const flowGenerateMatch = route.match(/^\/flows\/([^/]+)\/generate$/)
-    if (flowGenerateMatch && method === 'POST') return await handleGeneratePosts(db, flowGenerateMatch[1], await request.json(), request)
-
-    const postUpdateMatch = route.match(/^\/flows\/([^/]+)\/posts\/([^/]+)$/)
-    if (postUpdateMatch && method === 'PUT') return await handleUpdatePost(db, postUpdateMatch[1], postUpdateMatch[2], await request.json(), request)
 
     return corsify(NextResponse.json({ error: `Route ${route} not found` }, { status: 404 }))
   } catch (error) {
