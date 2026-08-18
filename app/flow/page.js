@@ -1,3 +1,4 @@
+import { Suspense } from 'react'
 import FlowPageClient from './page.client'
 
 // Server-side component that fetches the flows
@@ -48,5 +49,9 @@ export default async function FlowPage() {
   const canvases = await getCanvases()
   const galleries = await getGalleries()
 
-  return <FlowPageClient initialFlows={flows} initialCanvases={canvases} initialGalleries={galleries} />
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <FlowPageClient initialFlows={flows} initialCanvases={canvases} initialGalleries={galleries} />
+    </Suspense>
+  )
 }

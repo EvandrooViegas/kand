@@ -1,3 +1,7 @@
+'use client'
+
+import { useRef, useEffect, useState } from 'react'
+
 export function buildGradientCssClient(node) {
   const stops = (node.stops || [{ color: '#6366f1', position: 0, alpha: 100 }, { color: '#ec4899', position: 100, alpha: 100 }])
     .slice()
@@ -22,10 +26,36 @@ export function buildFilterCssClient(filters) {
   return `brightness(${f.brightness}%) contrast(${f.contrast}%) saturate(${f.saturate}%) grayscale(${f.grayscale}%) sepia(${f.sepia}%) hue-rotate(${f.hueRotate}deg) blur(${f.blur}px) opacity(${f.opacity}%)`
 }
 
-export function CanvasPreview({ canvas, containerWidth = 320, onClick }) {
+export function CanvasPreview({ canvas, containerWidth, onClick }) {
+  const containerRef = useRef(null)
+  const [scale, setScale] = useState(1)
+
+  useEffect(() => {
+    const updateScale = () => {
+      if (containerRef.current) {
+        const width = containerRef.current.offsetWidth
+        const canvasWidth = canvas?.width || 1080
+        if (width > 0) {
+          setScale(width / canvasWidth)
+        }
+      }
+    }
+
+    // Initial call
+    updateScale()
+    
+    // Retry after a small delay to handle cases where DOM isn't laid out yet
+    const timer = setTimeout(updateScale, 100)
+    
+    window.addEventListener('resize', updateScale)
+    return () => {
+      window.removeEventListener('resize', updateScale)
+      clearTimeout(timer)
+    }
+  }, [canvas?.width])
+
   if (!canvas) return null;
   const w = canvas.width || 1080
-  const scale = containerWidth / w
   const colorFilter =
     canvas.colorMode === 'grayscale' ? 'grayscale(100%)' :
     canvas.colorMode === 'sepia' ? 'sepia(80%) saturate(120%)' :
@@ -39,6 +69,7 @@ export function CanvasPreview({ canvas, containerWidth = 320, onClick }) {
 
   return (
     <div 
+      ref={containerRef}
       className={`absolute inset-0 overflow-hidden ${onClick ? 'cursor-pointer hover:opacity-90 transition-opacity' : ''}`}
       style={{ background: bg, filter: colorFilter }}
       onClick={onClick}

@@ -151,7 +151,8 @@ function plainTextFromStyled(text = '') {
     if (t?.children?.length) return walk(t.children)
     return ''
   }).join('')
-  return walk(parseStyledText(text || '', {})).replace(/\s+/g, ' ').trim()
+  // Collapse multiple consecutive spaces to single space, but preserve leading/trailing spaces
+  return walk(parseStyledText(text || '', {})).replace(/[ \t]+/g, ' ')
 }
 
 function LayerPreview({ node }) {
@@ -383,11 +384,18 @@ function Editor() {
 
   const htmlToTags = useCallback((html) => {
     const temp = document.createElement('div');
+    // innerHTML can lose leading/trailing whitespace, so we need to be careful
+    // We'll parse the actual DOM node tree instead
     temp.innerHTML = html;
+    
+    // Capture the full text to check for leading/trailing spaces
+    const rawText = temp.textContent || '';
+    
     const walk = (n) => {
       let str = '';
       for (const child of n.childNodes) {
         if (child.nodeType === Node.TEXT_NODE) {
+          // Preserve all whitespace including leading spaces
           str += child.textContent;
         } else if (child.nodeType === Node.ELEMENT_NODE) {
           if (child.tagName === 'SPAN' && child.className && !child.style.cssText) {
@@ -508,8 +516,13 @@ function Editor() {
       } catch (e) { toast.error('Could not apply style'); return; }
     }
     
-    // Save the updated HTML without closing toolbar
-    updateNode(editingId, { text: htmlToTags(editor.innerHTML) });
+    // Save the updated content preserving spaces
+    // Use innerHTML to preserve all whitespace including trailing spaces
+    const html = editor.innerHTML || '';
+    const text = htmlToTags(html);
+    if (text) {
+      updateNode(editingId, { text });
+    }
     // Don't clear selectionRect here — toolbar persists until click-outside
   }
 
@@ -530,7 +543,12 @@ function Editor() {
       const content = range.extractContents();
       span.appendChild(content);
       range.insertNode(span);
-      updateNode(editingId, { text: htmlToTags(editor.innerHTML) });
+      // Use innerHTML to preserve trailing spaces
+      const html = editor.innerHTML || '';
+      const text = htmlToTags(html);
+      if (text) {
+        updateNode(editingId, { text });
+      }
       // Don't clear selectionRect — toolbar persists until click-outside
     } catch (e) {
       toast.error('Complex selection format not supported');
@@ -542,7 +560,16 @@ function Editor() {
       if (!hasInitializedRef.current && editorRef.current) {
         const enode = canvasState?.nodes?.find(n => n.id === editingId)
         if (enode) {
-          editorRef.current.innerHTML = tagsToHtml(enode.text || '')
+          // Use textContent for plain text to preserve leading/trailing spaces
+          // Only use HTML if the text has styling tags
+          const textContent = enode.text || ''
+          if (textContent.includes('<%')) {
+            // Has styling — use HTML rendering
+            editorRef.current.innerHTML = tagsToHtml(textContent)
+          } else {
+            // Plain text — use textContent to preserve all spaces including leading
+            editorRef.current.textContent = textContent
+          }
           editorRef.current.focus()
 
           // Select ALL text by default so the user can immediately apply a class
@@ -577,7 +604,12 @@ function Editor() {
       
       // Save content and exit edit mode
       if (editor) {
-        updateNode(editingId, { text: htmlToTags(editor.innerHTML) });
+        // Use innerHTML to capture all spaces including trailing ones
+        const html = editor.innerHTML || '';
+        const text = htmlToTags(html);
+        if (text !== undefined) {
+          updateNode(editingId, { text });
+        }
       }
       setEditingId(null);
       setSelectionRect(null);
@@ -673,6 +705,9 @@ function Editor() {
 
   useEffect(() => {
     const handler = (e) => {
+      // Skip all global keyboard shortcuts when editing text
+      if (editingId) return
+      
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
       
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'c') {
@@ -2259,11 +2294,19 @@ function Editor() {
                       onMouseUp={handleSelectionChange}
                       onKeyUp={handleSelectionChange}
                       onBlur={(e) => {
-                        updateNode(enode.id, { text: htmlToTags(e.target.innerHTML) });
+                        // Use innerHTML to capture all spaces including trailing ones
+                        const html = e.target.innerHTML || '';
+                        // Convert HTML to text, preserving all whitespace
+                        updateNode(enode.id, { text: htmlToTags(html) });
                       }}
                       onKeyDown={(e) => {
-                        e.stopPropagation()
-                        if (e.key === 'Escape') { setEditingId(null); setSelectionRect(null); }
+                        if (e.key === 'Escape') {
+                          e.stopPropagation()
+                          e.preventDefault()
+                          setEditingId(null)
+                          setSelectionRect(null)
+                        }
+                        // For all other keys (including space), allow default browser behavior
                       }}
                       onPaste={(e) => {
                         e.preventDefault()
