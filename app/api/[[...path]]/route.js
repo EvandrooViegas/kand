@@ -5,9 +5,8 @@ import { handleGetCanvases, handleCreateCanvas, handleDuplicateCanvas, handleGet
 import { handleGetGalleries, handleCreateGallery, handleGetGallery, handleUpdateGallery, handleDeleteGallery } from '@/lib/handlers/galleryHandlers'
 import { handleUploadImage, handleGetUpload } from '@/lib/handlers/uploadHandlers'
 import { handleRender, handleGetRendered, handleGetRenders, handleApproveRender, handleDeleteRender } from '@/lib/handlers/renderHandlers'
-import { handleExtractBrandInfo } from '@/lib/handlers/extractHandlers'
 import { handleGetFlows, handleCreateFlow, handleGetFlow, handleUpdateFlow, handleDeleteFlow } from '@/lib/handlers/flowHandlers'
-import { handleExtractBusinessInfo } from '@/lib/handlers/businessInfoHandlers'
+import { handleExtractBusinessInfo } from '@/lib/handlers/businessInfoHandler'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -29,12 +28,7 @@ async function handleRoute(request, { params }) {
       return corsify(NextResponse.json({ message: 'DynaCanvas API' }))
     }
 
-    // Extract brand info (no DB needed)
-    if (route === '/extract-brand-info' && method === 'POST') {
-      return await handleExtractBrandInfo(await request.json())
-    }
-
-    // Extract business info (no DB needed)
+    // Extract business info endpoint
     if (route === '/extract-business-info' && method === 'POST') {
       return await handleExtractBusinessInfo(await request.json())
     }

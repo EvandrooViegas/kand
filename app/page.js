@@ -139,8 +139,8 @@ function Dashboard() {
           <div className="flex items-center gap-4">
             <nav className="hidden md:flex gap-7 text-sm font-medium">
               <a href="#api-docs" className="text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition">Docs</a>
-              <button onClick={() => router.push('/renders')} className="text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition">Renders</button>
               <button onClick={() => router.push('/flow')} className="text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition">Flow</button>
+              <button onClick={() => router.push('/renders')} className="text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition">Renders</button>
               <button onClick={() => router.push('/case-studies')} className="text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition">Case Studies</button>
             </nav>
             <div className="flex items-center gap-2">
