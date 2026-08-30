@@ -4,11 +4,17 @@ import { useState, useEffect } from 'react'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { ScrollArea } from '@/components/ui/scroll-area'
-import { Badge } from '@/components/ui/badge'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { toast } from 'sonner'
-import { Plus, Workflow, Loader2, Sparkles, Trash2, Check } from 'lucide-react'
+import { Plus, Workflow, Loader2, Sparkles, Wand2 } from 'lucide-react'
 import BrandInfo from '@/components/BrandInfo'
+import Creation from '@/components/Creation'
 
 export default function FlowPage() {
   const [flows, setFlows] = useState([])
@@ -36,41 +42,49 @@ export default function FlowPage() {
     }
   }
 
-  const createFlow = async () => {
+  const createFlow = async (name) => {
     setCreatingFlow(true)
     try {
       const res = await fetch('/api/flows', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: `Flow ${flows.length + 1}` }),
+        body: JSON.stringify({ name: name || `Flow ${flows.length + 1}` }),
       })
       const flow = await res.json()
-      setFlows([...flows, flow])
+      setFlows(prev => [...prev, flow])
       setSelectedFlow(flow)
       toast.success('Flow created successfully')
+      return flow
     } catch (e) {
       toast.error('Failed to create flow')
+      return null
     } finally {
       setCreatingFlow(false)
     }
   }
 
-  const deleteFlow = async (flowId, e) => {
-    e.stopPropagation()
-    if (!confirm('Are you sure you want to delete this flow?')) return
+  // Always use flow.id (UUID) for API calls — flow._id is the MongoDB ObjectId
+  // and is not indexed as the lookup key in the handlers.
+  const getFlowId = (flow) => flow?.id
 
-    try {
-      await fetch(`/api/flows/${flowId}`, { method: 'DELETE' })
-      const updatedFlows = flows.filter(f => (f._id || f.id) !== flowId)
-      setFlows(updatedFlows)
-      if (selectedFlow && (selectedFlow._id || selectedFlow.id) === flowId) {
-        setSelectedFlow(updatedFlows[0] || null)
-      }
-      toast.success('Flow deleted')
-    } catch (e) {
-      toast.error('Failed to delete flow')
-    }
+  // Called by BrandInfo after it creates or updates a flow on save
+  const handleFlowCreated = (flow) => {
+    setFlows(prev => {
+      const exists = prev.some(f => getFlowId(f) === getFlowId(flow))
+      // If it already exists update it in place (e.g. name changed after save)
+      return exists
+        ? prev.map(f => getFlowId(f) === getFlowId(flow) ? flow : f)
+        : [...prev, flow]
+    })
+    setSelectedFlow(flow)
   }
+
+  // Called by BrandInfo when it wants to switch the active flow
+  const handleFlowSelect = (flow) => {
+    setSelectedFlow(flow)
+  }
+
+  const selectedFlowId = selectedFlow ? getFlowId(selectedFlow) : ''
 
   if (loading) {
     return (
@@ -84,19 +98,76 @@ export default function FlowPage() {
   }
 
   return (
-    <div className="flex h-screen">
-      {/* Sidebar - Flow Selection */}
-      <div className="w-80 border-r bg-slate-50/50 dark:bg-slate-900/50 flex flex-col">
-        <div className="p-6 border-b">
-          <div className="flex items-center gap-2 mb-4">
-            <Workflow className="w-6 h-6 text-primary" />
-            <h1 className="text-2xl font-bold">Flows</h1>
+    <div className="flex flex-col h-screen">
+      {/* Top Navbar - Flow Selection */}
+      <div className="w-full border-b bg-white dark:bg-slate-950 flex-shrink-0">
+        <div className="px-6 py-3 flex items-center gap-4">
+          {/* Title */}
+          <div className="flex items-center gap-2">
+            <Workflow className="w-5 h-5 text-primary" />
+            <h1 className="text-lg font-bold">Flows</h1>
           </div>
-          <Button 
-            onClick={createFlow} 
+
+          <div className="w-px h-5 bg-slate-200 dark:bg-slate-700" />
+
+          {/* Flow Selector Dropdown */}
+          {flows.length > 0 && (
+            <Select
+              value={selectedFlowId}
+              onValueChange={(id) => {
+                const flow = flows.find(f => getFlowId(f) === id)
+                if (flow) setSelectedFlow(flow)
+              }}
+            >
+              <SelectTrigger className="w-64">
+                <SelectValue placeholder="Select a flow…">
+                  {selectedFlow ? (
+                    <div className="flex items-center gap-2 min-w-0">
+                      {selectedFlow.brandContext?.logo ? (
+                        <img
+                          src={selectedFlow.brandContext.logo}
+                          alt=""
+                          className="w-5 h-5 rounded object-contain flex-shrink-0"
+                        />
+                      ) : null}
+                      <span className="truncate">
+                        {selectedFlow.brandContext?.name || selectedFlow.name || 'Untitled Flow'}
+                      </span>
+                    </div>
+                  ) : 'Select a flow…'}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {flows.map((flow) => {
+                  const flowId = getFlowId(flow)
+                  const logo = flow.brandContext?.logo
+                  const displayName = flow.brandContext?.name || flow.name || 'Untitled Flow'
+                  return (
+                    <SelectItem key={flowId} value={flowId}>
+                      <div className="flex items-center gap-2">
+                        {logo ? (
+                          <img
+                            src={logo}
+                            alt=""
+                            className="w-5 h-5 rounded object-contain flex-shrink-0"
+                          />
+                        ) : (
+                          <div className="w-5 h-5 rounded bg-slate-200 dark:bg-slate-700 flex-shrink-0" />
+                        )}
+                        <span>{displayName}</span>
+                      </div>
+                    </SelectItem>
+                  )
+                })}
+              </SelectContent>
+            </Select>
+          )}
+
+          {/* New Flow Button */}
+          <Button
+            onClick={() => createFlow()}
             disabled={creatingFlow}
-            className="w-full"
-            size="lg"
+            size="sm"
           >
             {creatingFlow ? (
               <>
@@ -111,70 +182,6 @@ export default function FlowPage() {
             )}
           </Button>
         </div>
-
-        <ScrollArea className="flex-1 p-4">
-          {flows.length === 0 ? (
-            <div className="text-center py-12 px-4">
-              <Sparkles className="w-12 h-12 mx-auto text-slate-400 mb-3" />
-              <p className="text-sm text-slate-500 dark:text-slate-400">
-                No flows yet. Create one to get started!
-              </p>
-            </div>
-          ) : (
-            <div className="space-y-2">
-              {flows.map((flow) => {
-                const flowId = flow._id || flow.id
-                const isSelected = selectedFlow && (selectedFlow._id || selectedFlow.id) === flowId
-                
-                return (
-                  <Card
-                    key={flowId}
-                    className={`cursor-pointer transition-all hover:shadow-md ${
-                      isSelected 
-                        ? 'border-primary bg-primary/5 shadow-sm' 
-                        : 'hover:border-primary/50'
-                    }`}
-                    onClick={() => setSelectedFlow(flow)}
-                  >
-                    <CardContent className="p-4">
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2">
-                            {isSelected && (
-                              <Check className="w-4 h-4 text-primary flex-shrink-0" />
-                            )}
-                            <h3 className="font-semibold truncate">
-                              {flow.name || 'Untitled Flow'}
-                            </h3>
-                          </div>
-                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                            {flow.createdAt 
-                              ? new Date(flow.createdAt).toLocaleDateString()
-                              : 'Recently created'
-                            }
-                          </p>
-                          {flow.status && (
-                            <Badge variant="secondary" className="mt-2 text-xs">
-                              {flow.status}
-                            </Badge>
-                          )}
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 w-8 p-0 hover:bg-destructive hover:text-destructive-foreground"
-                          onClick={(e) => deleteFlow(flowId, e)}
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    </CardContent>
-                  </Card>
-                )
-              })}
-            </div>
-          )}
-        </ScrollArea>
       </div>
 
       {/* Main Content Area */}
@@ -196,15 +203,31 @@ export default function FlowPage() {
 
             {/* Tabs */}
             <Tabs defaultValue="brand-info" className="w-full">
-              <TabsList className="grid w-full max-w-md grid-cols-1 mb-8">
+              <TabsList className="grid w-full max-w-md grid-cols-2 mb-8">
                 <TabsTrigger value="brand-info" className="text-base">
                   <Sparkles className="w-4 h-4 mr-2" />
                   Brand Information
                 </TabsTrigger>
+                <TabsTrigger value="creation" className="text-base">
+                  <Wand2 className="w-4 h-4 mr-2" />
+                  Creation
+                </TabsTrigger>
               </TabsList>
 
               <TabsContent value="brand-info" className="mt-0">
-                <BrandInfo flowId={selectedFlow._id || selectedFlow.id} />
+                <BrandInfo
+                  flowId={selectedFlowId}
+                  flows={flows}
+                  onFlowCreated={handleFlowCreated}
+                  onFlowSelect={handleFlowSelect}
+                />
+              </TabsContent>
+
+              <TabsContent value="creation" className="mt-0">
+                <Creation
+                  flowId={selectedFlowId}
+                  brandContext={selectedFlow?.brandContext || null}
+                />
               </TabsContent>
             </Tabs>
           </div>
@@ -221,7 +244,7 @@ export default function FlowPage() {
                 </CardDescription>
               </CardHeader>
               <CardContent className="text-center">
-                <Button onClick={createFlow} size="lg" disabled={creatingFlow}>
+                <Button onClick={() => createFlow()} size="lg" disabled={creatingFlow}>
                   {creatingFlow ? (
                     <>
                       <Loader2 className="w-4 h-4 mr-2 animate-spin" />

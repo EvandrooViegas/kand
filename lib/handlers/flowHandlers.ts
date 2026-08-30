@@ -47,7 +47,7 @@ export async function handleGetFlow(db: any, flowId: string) {
 
 export async function handleUpdateFlow(db: any, flowId: string, body: any) {
   try {
-    const updated = await db.collection('flows').findOneAndUpdate(
+    const result = await db.collection('flows').findOneAndUpdate(
       { id: flowId },
       {
         $set: {
@@ -57,10 +57,12 @@ export async function handleUpdateFlow(db: any, flowId: string, body: any) {
       },
       { returnDocument: 'after' }
     )
-    if (!updated.value) {
+    // MongoDB driver v5+ returns the document directly; v4 wraps it in { value }
+    const updated = result?.value ?? result
+    if (!updated) {
       return corsify(NextResponse.json({ error: 'Flow not found' }, { status: 404 }))
     }
-    return corsify(NextResponse.json(updated.value))
+    return corsify(NextResponse.json(updated))
   } catch (error: any) {
     return corsify(NextResponse.json({ error: error.message }, { status: 500 }))
   }

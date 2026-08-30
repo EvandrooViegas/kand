@@ -10,9 +10,10 @@ import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
 import { Loader2, Sparkles, Globe, Palette, Type, Image as ImageIcon, Save, Plus, X, Check, Copy } from 'lucide-react'
 
-export default function BrandInfo({ flowId }) {
+export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSelect }) {
   const [url, setUrl] = useState('')
   const [loading, setLoading] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [extractedData, setExtractedData] = useState(null)
   const [loadedFonts, setLoadedFonts] = useState(new Set())
   const [fontLoadingErrors, setFontLoadingErrors] = useState(new Set())
@@ -196,9 +197,58 @@ export default function BrandInfo({ flowId }) {
     })
   }
 
-  const handleSave = () => {
-    // TODO: Save to database
-    toast.success('Brand information saved')
+  const handleSave = async () => {
+    if (!extractedData) return
+    setSaving(true)
+    try {
+      let targetFlowId = flowId
+
+      // If there's no active flow yet, create one named after the brand
+      if (!targetFlowId) {
+        const newFlowName = extractedData.name
+          ? `${extractedData.name} Flow`
+          : `Flow ${Date.now()}`
+        const res = await fetch('/api/flows', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: newFlowName }),
+        })
+        if (!res.ok) throw new Error('Failed to create flow')
+        const newFlow = await res.json()
+        targetFlowId = newFlow.id
+        onFlowCreated?.(newFlow)
+      }
+
+      // Persist the brand data into the flow's brandContext field
+      const res = await fetch(`/api/flows/${targetFlowId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          brandContext: {
+            name: extractedData.name,
+            about: extractedData.about,
+            logo: extractedData.logo,
+            language: extractedData.language,
+            colors: extractedData.colors,
+            fonts: extractedData.fonts,
+          },
+          // Also update the flow name to the brand name if it looks like a default name
+          ...(extractedData.name ? { name: extractedData.name } : {}),
+        }),
+      })
+      if (!res.ok) throw new Error('Failed to save brand information')
+
+      const updatedFlow = await res.json()
+      // Notify the parent so the sidebar name refreshes
+      onFlowCreated?.(updatedFlow)
+
+      toast.success('Brand information saved')
+    } catch (error) {
+      console.error('Save error:', error)
+      toast.error(error.message || 'Failed to save brand information')
+    } finally {
+      setSaving(false)
+    }
   }
 
   const copyColorToClipboard = (color) => {
@@ -616,11 +666,21 @@ export default function BrandInfo({ flowId }) {
           <div className="sticky bottom-6 z-10">
             <Button
               onClick={handleSave}
+              disabled={saving}
               size="lg"
               className="w-full shadow-lg h-14 text-base"
             >
-              <Save className="w-5 h-5 mr-2" />
-              Save Brand Information
+              {saving ? (
+                <>
+                  <Loader2 className="w-5 h-5 mr-2 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                <>
+                  <Save className="w-5 h-5 mr-2" />
+                  Save Brand Information
+                </>
+              )}
             </Button>
           </div>
         </>

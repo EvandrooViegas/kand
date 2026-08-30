@@ -7,6 +7,8 @@ import { handleUploadImage, handleGetUpload } from '@/lib/handlers/uploadHandler
 import { handleRender, handleGetRendered, handleGetRenders, handleApproveRender, handleDeleteRender } from '@/lib/handlers/renderHandlers'
 import { handleGetFlows, handleCreateFlow, handleGetFlow, handleUpdateFlow, handleDeleteFlow } from '@/lib/handlers/flowHandlers'
 import { handleExtractBusinessInfo } from '@/lib/handlers/businessInfoHandler'
+import { handleGenerateContentIdeas } from '@/lib/handlers/contentIdeasHandler'
+import { handleGenerateCopywriting } from '@/lib/handlers/copywritingHandler'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -31,6 +33,16 @@ async function handleRoute(request, { params }) {
     // Extract business info endpoint
     if (route === '/extract-business-info' && method === 'POST') {
       return await handleExtractBusinessInfo(await request.json())
+    }
+
+    // Content ideas generation endpoint
+    if (route === '/generate-content-ideas' && method === 'POST') {
+      return await handleGenerateContentIdeas(await request.json())
+    }
+
+    // Copywriting generation endpoint
+    if (route === '/generate-copywriting' && method === 'POST') {
+      return await handleGenerateCopywriting(await request.json())
     }
 
     // Canvas routes
