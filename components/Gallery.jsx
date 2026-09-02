@@ -63,13 +63,9 @@ function AssetDetail({ asset, onClose, onDelete }) {
   }
 
   const rows = [
-    { icon: ImageIcon, label: 'Type',        value: asset.asset_type },
-    { icon: MapPin,    label: 'Environment', value: asset.environment },
-    { icon: Zap,       label: 'Activity',    value: asset.activity },
-    { icon: Palette,   label: 'Style',       value: asset.style },
-    { icon: Users,     label: 'Has people',  value: asset.has_people != null ? (asset.has_people ? 'Yes' : 'No') : null },
     { icon: Eye,       label: 'Orientation', value: asset.orientation },
     { icon: ImageIcon, label: 'Dimensions',  value: formatBytes(asset.width, asset.height) },
+    { icon: Palette,   label: 'Format',      value: asset.mime_type },
   ].filter(r => r.value)
 
   return (
@@ -92,18 +88,10 @@ function AssetDetail({ asset, onClose, onDelete }) {
         {/* Image */}
         <div className="px-6 pt-5">
           <div className="rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center max-h-72">
-            <img src={asset.url} alt={asset.description || asset.filename}
+            <img src={asset.url} alt={asset.filename}
               className="max-w-full max-h-72 object-contain" />
           </div>
         </div>
-
-        {/* Description */}
-        {asset.description && (
-          <div className="px-6 pt-5">
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5">Description</p>
-            <p className="text-sm text-slate-700 dark:text-slate-300 leading-relaxed">{asset.description}</p>
-          </div>
-        )}
 
         {/* Metadata rows */}
         {rows.length > 0 && (
@@ -130,20 +118,6 @@ function AssetDetail({ asset, onClose, onDelete }) {
               {asset.tags.map(tag => (
                 <span key={tag} className="text-xs bg-primary/10 text-primary px-2 py-1 rounded-md font-medium">
                   {tag}
-                </span>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {/* Objects */}
-        {asset.objects?.length > 0 && (
-          <div className="px-6 pt-4">
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Objects detected</p>
-            <div className="flex flex-wrap gap-2">
-              {asset.objects.map(obj => (
-                <span key={obj} className="text-xs bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-2 py-1 rounded-md">
-                  {obj}
                 </span>
               ))}
             </div>

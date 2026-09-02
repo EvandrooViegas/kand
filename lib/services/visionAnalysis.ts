@@ -1,357 +1,114 @@
-import {
-  AutoProcessor,
-  AutoModelForVision2Seq,
-  RawImage,
-  env,
-} from "@huggingface/transformers";
-
-import sharp from "sharp";
+/**
+ * Local image tagging using zero-shot image classification.
+ * Model: Xenova/clip-vit-base-patch32 (~350MB)
+ *
+ * CLIP scores the image against a predefined list of candidate labels
+ * and returns confidence scores for each. This gives accurate, meaningful
+ * tags for real-world photos rather than narrow ImageNet categories.
+ *
+ * Model is cached in process after first load.
+ */
 
 export interface AssetAnalysis {
-  asset_type: string;
-  description: string;
-  tags: string[];
-  objects: string[];
-  environment: string | null;
-  activity: string | null;
-  style: string;
-  has_people: boolean;
-  people_description: string | null;
-  dominant_subject: string;
-  suitable_for: string[];
+  tags: string[]
 }
 
-const MODEL_ID = "HuggingFaceTB/SmolVLM-256M-Instruct";
+// ─── candidate labels ─────────────────────────────────────────────────────────
+// These are the concepts we score every image against.
+// Add or remove entries to tune what gets detected.
 
-env.cacheDir = "./.cache/huggingface";
+const CANDIDATE_LABELS = [
+  // People & social
+  'person', 'people', 'man', 'woman', 'child', 'team', 'group', 'crowd',
+  'portrait', 'face', 'smile',
+  // Work & business
+  'office', 'meeting', 'desk', 'laptop', 'computer', 'work', 'business',
+  'presentation', 'conference', 'coworking',
+  // Sports & activity
+  'sport', 'football', 'soccer', 'basketball', 'running', 'gym', 'fitness',
+  'athlete', 'training', 'exercise', 'swimming', 'cycling', 'tennis',
+  // Nature & outdoors
+  'nature', 'outdoor', 'sky', 'forest', 'beach', 'mountain', 'park',
+  'garden', 'street', 'city', 'urban', 'landscape',
+  // Food & drink
+  'food', 'meal', 'restaurant', 'coffee', 'drink', 'cooking', 'kitchen',
+  // Products & objects
+  'product', 'phone', 'car', 'book', 'bag', 'clothing', 'fashion',
+  // Lifestyle & creative
+  'travel', 'home', 'interior', 'art', 'music', 'photography', 'design',
+  'celebration', 'party', 'event',
+  // Visual style
+  'professional photography', 'minimal', 'colorful', 'dark', 'bright',
+]
 
-let processorPromise: Promise<any> | null = null;
-let modelPromise: Promise<any> | null = null;
+// Minimum CLIP score to include a label as a tag
+const MIN_SCORE = 0.15
 
-function getProcessor() {
-  if (!processorPromise) {
-    processorPromise = AutoProcessor.from_pretrained(MODEL_ID);
-  }
+// ─── singleton ────────────────────────────────────────────────────────────────
 
-  return processorPromise;
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let _classifier: any = null
+let _loadPromise: Promise<void> | null = null
+
+async function loadModel(): Promise<void> {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { pipeline, env } = require('@huggingface/transformers')
+  env.cacheDir = './.cache/huggingface'
+
+  console.log('[vision] Loading CLIP zero-shot classifier…')
+  const t0 = Date.now()
+  _classifier = await pipeline(
+    'zero-shot-image-classification',
+    'Xenova/clip-vit-base-patch32',
+    { device: 'cpu' },
+  )
+  console.log(`[vision] Classifier ready in ${((Date.now() - t0) / 1000).toFixed(1)}s`)
 }
 
-function getModel() {
-  if (!modelPromise) {
-    modelPromise = AutoModelForVision2Seq.from_pretrained(MODEL_ID, {
-      dtype: {
-        embed_tokens: "fp32",
-        vision_encoder: "q4",
-        decoder_model_merged: "q4",
-      },
-      device: "cpu",
-    });
-  }
-
-  return modelPromise;
-}
-
-async function getVisionModel() {
-  const start = Date.now();
-
-  const [processor, model] = await Promise.all([
-    getProcessor(),
-    getModel(),
-  ]);
-
-  console.log(
-    `[vision] Model ready in ${((Date.now() - start) / 1000).toFixed(1)}s`
-  );
-
-  return {
-    processor,
-    model,
-  };
-}
-
-async function prepareImage(imageBuffer: Buffer): Promise<RawImage> {
-  const resized = await sharp(imageBuffer)
-    .rotate()
-    .resize({
-      width: 768,
-      height: 768,
-      fit: "inside",
-      withoutEnlargement: true,
-    })
-    .jpeg({
-      quality: 82,
-      chromaSubsampling: "4:2:0",
-    })
-    .toBuffer();
-
-  const blob = new Blob([new Uint8Array(resized)], {
-    type: "image/jpeg",
-  });
-
-  return RawImage.fromBlob(blob);
-}
-
-/**
- * Extract the first valid JSON object from the model output.
- */
-function extractJson(text: string): Partial<AssetAnalysis> {
-  let cleaned = text.trim();
-
-  console.log("[vision] Model output:", cleaned);
-
-  // Remove common chat prefixes.
-  cleaned = cleaned
-    .replace(/^assistant\s*:/i, "")
-    .replace(/^answer\s*:/i, "")
-    .trim();
-
-  // Remove markdown fences.
-  cleaned = cleaned
-    .replace(/```json/gi, "")
-    .replace(/```/g, "")
-    .trim();
-
-  // Find the first JSON object.
-  const start = cleaned.indexOf("{");
-
-  if (start === -1) {
-    console.error("[vision] Model did not return JSON.");
-    throw new Error("Vision model returned invalid JSON");
-  }
-
-  // Try every possible closing brace from the end.
-  // This handles cases where the model adds extra text.
-  for (let end = cleaned.length; end > start; end--) {
-    if (cleaned[end - 1] !== "}") continue;
-
-    const candidate = cleaned.slice(start, end);
-
-    try {
-      const parsed = JSON.parse(candidate);
-
-      if (parsed && typeof parsed === "object") {
-        return parsed;
-      }
-    } catch {
-      // Keep looking for a valid JSON object.
+async function getClassifier() {
+  if (!_classifier) {
+    if (!_loadPromise) {
+      _loadPromise = loadModel().finally(() => { _loadPromise = null })
     }
+    await _loadPromise
   }
-
-  console.error("[vision] Could not extract valid JSON:");
-  console.error(cleaned);
-
-  throw new Error("Vision model returned invalid JSON");
+  return _classifier
 }
 
-function normalizeAnalysis(
-  data: Partial<AssetAnalysis>
-): AssetAnalysis {
-  return {
-    asset_type:
-      typeof data.asset_type === "string"
-        ? data.asset_type
-        : "photo",
-
-    description:
-      typeof data.description === "string"
-        ? data.description
-        : "",
-
-    tags:
-      Array.isArray(data.tags)
-        ? data.tags
-            .filter((x): x is string => typeof x === "string")
-            .slice(0, 10)
-        : [],
-
-    objects:
-      Array.isArray(data.objects)
-        ? data.objects
-            .filter((x): x is string => typeof x === "string")
-            .slice(0, 10)
-        : [],
-
-    environment:
-      typeof data.environment === "string"
-        ? data.environment
-        : null,
-
-    activity:
-      typeof data.activity === "string"
-        ? data.activity
-        : null,
-
-    style:
-      typeof data.style === "string"
-        ? data.style
-        : "photography",
-
-    has_people:
-      typeof data.has_people === "boolean"
-        ? data.has_people
-        : false,
-
-    people_description:
-      typeof data.people_description === "string"
-        ? data.people_description
-        : null,
-
-    dominant_subject:
-      typeof data.dominant_subject === "string"
-        ? data.dominant_subject
-        : "",
-
-    suitable_for:
-      Array.isArray(data.suitable_for)
-        ? data.suitable_for
-            .filter((x): x is string => typeof x === "string")
-            .slice(0, 8)
-        : [],
-  };
-}
+// ─── main export ──────────────────────────────────────────────────────────────
 
 export async function analyseImageBuffer(
   imageBuffer: Buffer,
-  mimeType = "image/jpeg"
+  mimeType: string,
 ): Promise<AssetAnalysis> {
-  const totalStart = Date.now();
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const { RawImage } = require('@huggingface/transformers')
 
-  try {
-    console.log("[vision] Preparing image...");
+  const classifier = await getClassifier()
 
-    const image = await prepareImage(imageBuffer);
+  const blob  = new Blob([imageBuffer], { type: mimeType })
+  const image = await RawImage.fromBlob(blob)
 
-    const { processor, model } = await getVisionModel();
+  const results: { label: string; score: number }[] = await classifier(
+    image,
+    CANDIDATE_LABELS,
+  )
 
-    /**
-     * IMPORTANT:
-     *
-     * The image is represented by { type: "image" } in the
-     * conversation and supplied separately to the processor.
-     */
-    const messages = [
-      {
-        role: "user",
-        content: [
-          {
-            type: "image",
-          },
-          {
-            type: "text",
-            text: `
-Look at the image and analyze what is visibly present.
+  // Keep labels that score above the threshold, sorted by confidence
+  const tags = results
+    .filter(r => r.score >= MIN_SCORE)
+    .sort((a, b) => b.score - a.score)
+    .map(r => r.label)
 
-Return ONLY valid JSON. No markdown. No explanation.
-
-Use exactly this structure:
-
-{
-  "asset_type": "",
-  "description": "",
-  "tags": [],
-  "objects": [],
-  "environment": null,
-  "activity": null,
-  "style": "",
-  "has_people": false,
-  "people_description": null,
-  "dominant_subject": "",
-  "suitable_for": []
-}
-
-Rules:
-- Be factual and specific.
-- Describe only visible things.
-- Do not guess.
-- If workers, helmets, reflective vests, concrete, rebar or unfinished structures are visible, identify it as a construction site.
-- Use 5-8 relevant tags.
-- Keep description to one sentence.
-- has_people must be true only if people are visible.
-- Return the actual image analysis, not the example above.
-`,
-          },
-        ],
-      },
-    ];
-
-    console.log("[vision] Processing image...");
-
-    /**
-     * Convert the conversation into the model's actual
-     * multimodal prompt.
-     */
-    const prompt = processor.apply_chat_template(messages, {
-      add_generation_prompt: true,
-    });
-
-    /**
-     * IMPORTANT:
-     *
-     * The image is passed separately here.
-     * This is what connects the actual image to <image>
-     * in the prompt.
-     */
-    const inputs = await processor(prompt, [image], {
-      do_image_splitting: false,
-    });
-
-    console.log("[vision] Generating analysis...");
-
-    const generatedIds = await model.generate({
-      ...inputs,
-      max_new_tokens: 120,
-      do_sample: false,
-    });
-
-    /**
-     * IMPORTANT FIX:
-     *
-     * generate() returns:
-     *
-     * [original prompt tokens + generated tokens]
-     *
-     * If we decode everything, we get:
-     *
-     * User:
-     * Analyze...
-     * Assistant:
-     * {...}
-     *
-     * We only want the generated portion.
-     */
-    const inputLength = inputs.input_ids.dims.at(-1);
-
-    const generatedOnly = generatedIds.slice(
-      null,
-      [inputLength, null]
-    );
-
-    const decoded = processor.batch_decode(generatedOnly, {
-      skip_special_tokens: true,
-    });
-
-    const generatedText = decoded[0]?.trim() ?? "";
-
-    if (!generatedText) {
-      throw new Error("Vision model returned an empty response");
-    }
-
-    console.log("[vision] Raw response:", generatedText);
-
-    const analysis = normalizeAnalysis(
-      extractJson(generatedText)
-    );
-
-    console.log(
-      `[vision] Analysis completed in ${(
-        (Date.now() - totalStart) /
-        1000
-      ).toFixed(2)}s`
-    );
-
-    return analysis;
-  } catch (error) {
-    console.error("[vision] Analysis error:", error);
-    throw error;
+  // Always return at least 5 tags — lower threshold if needed
+  if (tags.length < 5) {
+    const extra = results
+      .filter(r => r.score < MIN_SCORE)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 5 - tags.length)
+      .map(r => r.label)
+    tags.push(...extra)
   }
+
+  return { tags }
 }
