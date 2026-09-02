@@ -4,18 +4,51 @@ const nextConfig = {
     unoptimized: true,
   },
   experimental: {
-    // Remove if not using Server Components
-    serverComponentsExternalPackages: ['mongodb', '@resvg/resvg-js', 'satori', 'sharp', 'uuid', 'dotenv', 'axios', 'cheerio', 'groq-sdk'],
+    serverComponentsExternalPackages: [
+      'mongodb',
+      '@resvg/resvg-js',
+      'satori',
+      'sharp',
+      'uuid',
+      'dotenv',
+      'axios',
+      'cheerio',
+      'groq-sdk',
+      '@huggingface/transformers',
+    ],
   },
-  webpack(config, { dev }) {
+  webpack(config, { dev, isServer }) {
     if (dev) {
-      // Reduce CPU/memory from file watching
       config.watchOptions = {
-        poll: 2000, // check every 2 seconds
-        aggregateTimeout: 300, // wait before rebuilding
+        poll: 2000,
+        aggregateTimeout: 300,
         ignored: ['**/node_modules'],
       };
     }
+
+    // Keep @huggingface/transformers and its sub-paths entirely out of the
+    // webpack bundle — it is a large native Node package that must be loaded
+    // by Node's require() at runtime, not bundled by webpack.
+    // We wrap any existing externals array/function so we don't break Next's
+    // own server-side externals logic.
+    if (isServer) {
+      const prev = config.externals;
+      config.externals = [
+        // Our rule: anything under @huggingface/transformers is external.
+        ({ request }, callback) => {
+          if (request && (
+            request === '@huggingface/transformers' ||
+            request.startsWith('@huggingface/transformers/')
+          )) {
+            return callback(null, `commonjs ${request}`);
+          }
+          callback();
+        },
+        // Preserve whatever Next.js already put in externals.
+        ...(Array.isArray(prev) ? prev : prev ? [prev] : []),
+      ];
+    }
+
     return config;
   },
   onDemandEntries: {

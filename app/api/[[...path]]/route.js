@@ -9,6 +9,7 @@ import { handleGetFlows, handleCreateFlow, handleGetFlow, handleUpdateFlow, hand
 import { handleExtractBusinessInfo } from '@/lib/handlers/businessInfoHandler'
 import { handleGenerateContentIdeas } from '@/lib/handlers/contentIdeasHandler'
 import { handleGenerateCopywriting } from '@/lib/handlers/copywritingHandler'
+import { handleUploadAsset, handleListAssets, handleGetAsset, handleDeleteAsset } from '@/lib/handlers/assetHandlers'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -43,6 +44,18 @@ async function handleRoute(request, { params }) {
     // Copywriting generation endpoint
     if (route === '/generate-copywriting' && method === 'POST') {
       return await handleGenerateCopywriting(await request.json())
+    }
+
+    // Asset routes
+    if (route === '/assets' && method === 'POST') return await handleUploadAsset(db, await request.json(), request)
+    if (route === '/assets' && method === 'GET') {
+      const brand_id = new URL(request.url).searchParams.get('brand_id') || ''
+      return await handleListAssets(db, brand_id)
+    }
+    const assetMatch = route.match(/^\/assets\/([^/]+)$/)
+    if (assetMatch) {
+      if (method === 'GET') return await handleGetAsset(db, assetMatch[1])
+      if (method === 'DELETE') return await handleDeleteAsset(db, assetMatch[1])
     }
 
     // Canvas routes

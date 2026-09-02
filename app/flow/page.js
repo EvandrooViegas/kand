@@ -12,9 +12,10 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { toast } from 'sonner'
-import { Plus, Workflow, Loader2, Sparkles, Wand2 } from 'lucide-react'
+import { Plus, Workflow, Loader2, Sparkles, Wand2, Images } from 'lucide-react'
 import BrandInfo from '@/components/BrandInfo'
 import Creation from '@/components/Creation'
+import Gallery from '@/components/Gallery'
 
 export default function FlowPage() {
   const [flows, setFlows] = useState([])
@@ -203,7 +204,7 @@ export default function FlowPage() {
 
             {/* Tabs */}
             <Tabs defaultValue="brand-info" className="w-full">
-              <TabsList className="grid w-full max-w-md grid-cols-2 mb-8">
+              <TabsList className="grid w-full max-w-xl grid-cols-3 mb-8">
                 <TabsTrigger value="brand-info" className="text-base">
                   <Sparkles className="w-4 h-4 mr-2" />
                   Brand Information
@@ -211,6 +212,10 @@ export default function FlowPage() {
                 <TabsTrigger value="creation" className="text-base">
                   <Wand2 className="w-4 h-4 mr-2" />
                   Creation
+                </TabsTrigger>
+                <TabsTrigger value="gallery" className="text-base">
+                  <Images className="w-4 h-4 mr-2" />
+                  Gallery
                 </TabsTrigger>
               </TabsList>
 
@@ -225,6 +230,13 @@ export default function FlowPage() {
 
               <TabsContent value="creation" className="mt-0">
                 <Creation
+                  flowId={selectedFlowId}
+                  brandContext={selectedFlow?.brandContext || null}
+                />
+              </TabsContent>
+
+              <TabsContent value="gallery" className="mt-0">
+                <Gallery
                   flowId={selectedFlowId}
                   brandContext={selectedFlow?.brandContext || null}
                 />
