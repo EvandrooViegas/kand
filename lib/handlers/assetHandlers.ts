@@ -108,6 +108,19 @@ export async function handleUploadAsset(db: any, body: any, request: Request) {
   ;(async () => {
     try {
       const analysis = await analyseImageBuffer(buf, mime_type)
+
+      console.log('\n========== ASSET PROCESSED ==========')
+      console.log(JSON.stringify({
+        id:          assetId,
+        filename:    filename || 'image',
+        mime_type,
+        width,
+        height,
+        orientation,
+        tags:        analysis.tags,
+      }, null, 2))
+      console.log('======================================\n')
+
       await db.collection('assets').updateOne(
         { id: assetId },
         { $set: { tags: analysis.tags, status: 'ready', updated_at: new Date() } },

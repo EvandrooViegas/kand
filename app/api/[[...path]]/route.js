@@ -10,6 +10,8 @@ import { handleExtractBusinessInfo } from '@/lib/handlers/businessInfoHandler'
 import { handleGenerateContentIdeas } from '@/lib/handlers/contentIdeasHandler'
 import { handleGenerateCopywriting } from '@/lib/handlers/copywritingHandler'
 import { handleUploadAsset, handleListAssets, handleGetAsset, handleDeleteAsset } from '@/lib/handlers/assetHandlers'
+import { handlePlanAssets } from '@/lib/handlers/assetPlannerHandler'
+import { handleResolveAssets } from '@/lib/handlers/assetResolverHandler'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -44,6 +46,16 @@ async function handleRoute(request, { params }) {
     // Copywriting generation endpoint
     if (route === '/generate-copywriting' && method === 'POST') {
       return await handleGenerateCopywriting(await request.json())
+    }
+
+    // Asset planner endpoint
+    if (route === '/plan-assets' && method === 'POST') {
+      return await handlePlanAssets(db, await request.json())
+    }
+
+    // Asset resolver endpoint
+    if (route === '/resolve-assets' && method === 'POST') {
+      return await handleResolveAssets(db, await request.json())
     }
 
     // Asset routes

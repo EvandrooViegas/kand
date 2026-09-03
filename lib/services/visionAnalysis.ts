@@ -110,5 +110,14 @@ export async function analyseImageBuffer(
     tags.push(...extra)
   }
 
+  console.log('\n========== IMAGE ANALYSIS ==========')
+  console.log(JSON.stringify({
+    tags,
+    all_scores: results
+      .sort((a, b) => b.score - a.score)
+      .map(r => ({ label: r.label, score: parseFloat(r.score.toFixed(4)) }))
+  }, null, 2))
+  console.log('=====================================\n')
+
   return { tags }
 }

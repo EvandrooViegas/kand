@@ -9,7 +9,8 @@ import {
   Loader2, Sparkles, Lightbulb, Check, RefreshCw,
   LayoutTemplate, Image as ImageIcon, ChevronDown, ChevronUp,
   Users, Target, Eye, BookOpen, PenLine, ArrowLeft,
-  Hash, FileText, MessageSquare, AlertCircle, Layers, Trash2
+  Hash, FileText, MessageSquare, AlertCircle, Layers, Trash2,
+  Boxes, Upload, Wand2, Ban, Tag, Search
 } from 'lucide-react'
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -264,6 +265,304 @@ function CopyCard({ idea, copy, loading, error }) {
   )
 }
 
+// ─── AssetPlanCard ────────────────────────────────────────────────────────────
+
+const SOURCE_META = {
+  uploaded_asset: { label: 'Uploaded asset', icon: Upload,  cls: 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300' },
+  unsplash:       { label: 'Unsplash',        icon: Search,  cls: 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300' },
+  ai_generated:   { label: 'AI generated',   icon: Wand2,   cls: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300' },
+  none:           { label: 'No image',        icon: Ban,     cls: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-400' },
+}
+
+function SlotCard({ slot }) {
+  const [open, setOpen] = useState(false)
+  const src = SOURCE_META[slot.preferred_source] ?? SOURCE_META.none
+  const SrcIcon = src.icon
+
+  return (
+    <div className="rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="w-full flex items-center justify-between px-4 py-3 text-left hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors"
+      >
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="w-6 h-6 rounded-full bg-primary/10 text-primary text-xs font-bold flex items-center justify-center flex-shrink-0">
+            {slot.slot_id.replace(/[^0-9]/g, '') || '·'}
+          </span>
+          <span className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">{slot.slot_label}</span>
+          <Badge className={`text-xs gap-1 shrink-0 ${src.cls}`}>
+            <SrcIcon className="w-3 h-3" />{src.label}
+          </Badge>
+          {!slot.needs_visual && (
+            <Badge variant="outline" className="text-xs shrink-0">Typography only</Badge>
+          )}
+        </div>
+        {open ? <ChevronUp className="w-4 h-4 text-slate-400 flex-shrink-0" /> : <ChevronDown className="w-4 h-4 text-slate-400 flex-shrink-0" />}
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 pt-1 space-y-4 border-t border-slate-100 dark:border-slate-800">
+          {/* Purpose */}
+          {slot.visual_purpose && (
+            <div>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1 flex items-center gap-1.5">
+                <Eye className="w-3.5 h-3.5" />Visual purpose
+              </p>
+              <p className="text-sm text-slate-700 dark:text-slate-300">{slot.visual_purpose}</p>
+            </div>
+          )}
+
+          {/* Source reason */}
+          {slot.source_reason && (
+            <div>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1">Source rationale</p>
+              <p className="text-sm text-slate-500 dark:text-slate-400 italic">{slot.source_reason}</p>
+            </div>
+          )}
+
+          {/* Search keywords */}
+          {slot.search_keywords?.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1.5 flex items-center gap-1.5">
+                <Tag className="w-3.5 h-3.5" />Search keywords
+              </p>
+              <div className="flex flex-wrap gap-1.5">
+                {slot.search_keywords.map(k => (
+                  <span key={k} className="text-xs bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 px-2 py-0.5 rounded font-mono">
+                    {k}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Matched uploaded assets */}
+          {slot.candidates?.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">
+                <Boxes className="w-3.5 h-3.5" />Matched assets ({slot.candidates.length})
+              </p>
+              <div className="flex gap-3 flex-wrap">
+                {slot.candidates.map((c, i) => (
+                  <div key={c.asset_id}
+                    className={`relative rounded-lg overflow-hidden border-2 w-20 h-20 flex-shrink-0 transition-all
+                      ${i === 0 ? 'border-primary ring-2 ring-primary/20' : 'border-slate-200 dark:border-slate-700'}`}>
+                    <img src={c.thumbnail_url || c.url} alt={c.filename}
+                      className="w-full h-full object-cover" />
+                    <div className="absolute bottom-0 right-0 bg-black/70 text-white text-[10px] px-1 py-0.5 font-mono">
+                      {Math.round(c.score * 100)}%
+                    </div>
+                    {i === 0 && (
+                      <div className="absolute top-1 left-1 w-4 h-4 rounded-full bg-primary flex items-center justify-center">
+                        <Check className="w-2.5 h-2.5 text-primary-foreground" />
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <p className="text-xs text-slate-400 mt-1.5">Checkmark = selected for Canvas Designer · Score = tag match %</p>
+            </div>
+          )}
+
+          {/* No match */}
+          {slot.preferred_source === 'uploaded_asset' && slot.candidates?.length === 0 && (
+            <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800">
+              <AlertCircle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+              <p className="text-xs text-amber-700 dark:text-amber-300">
+                No matching uploaded assets found. Upload relevant images in the Gallery tab.
+              </p>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function AssetPlanCard({ idea, plan, loading, error }) {
+  const isCarousel = idea.format === 'carousel'
+  const slotsWithVisual = plan?.slots?.filter(s => s.needs_visual) ?? []
+
+  return (
+    <div className="rounded-xl border-2 border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 overflow-hidden">
+      <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-start gap-3">
+        <div className="p-2 rounded-lg bg-primary/10 flex-shrink-0 mt-0.5">
+          <Boxes className="w-4 h-4 text-primary" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap gap-2 mb-1">
+            <Badge className={`text-xs font-medium ${getPillarColor(idea.pillar)}`}>{idea.pillar}</Badge>
+            <Badge variant="outline" className="text-xs gap-1">
+              {isCarousel ? <><LayoutTemplate className="w-3 h-3" />Carousel</> : <><ImageIcon className="w-3 h-3" />Single</>}
+            </Badge>
+            {plan && (
+              <Badge variant="secondary" className="text-xs">
+                {slotsWithVisual.length}/{plan.slots.length} slots need visuals
+              </Badge>
+            )}
+          </div>
+          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{idea.topic}</p>
+        </div>
+      </div>
+
+      <div className="p-5">
+        {loading && (
+          <div className="flex items-center gap-3 py-6 justify-center text-slate-500">
+            <Loader2 className="w-5 h-5 animate-spin text-primary" />
+            <span className="text-sm">Planning assets…</span>
+          </div>
+        )}
+
+        {!loading && error && (
+          <div className="flex items-start gap-3 p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+            <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+            <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+          </div>
+        )}
+
+        {!loading && !error && plan && (
+          <div className="space-y-2">
+            {plan.slots.map(slot => (
+              <SlotCard key={slot.slot_id} slot={slot} />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── ResolvedPlanCard ─────────────────────────────────────────────────────────
+
+const RESOLVED_SOURCE_META = {
+  uploaded_asset: { label: 'Uploaded',    cls: 'bg-green-100  text-green-700  dark:bg-green-900/40  dark:text-green-300'  },
+  unsplash:       { label: 'Unsplash',    cls: 'bg-blue-100   text-blue-700   dark:bg-blue-900/40   dark:text-blue-300'   },
+  ai_generated:   { label: 'AI generated', cls: 'bg-purple-100 text-purple-700 dark:bg-purple-900/40 dark:text-purple-300' },
+  none:           { label: 'No image',    cls: 'bg-slate-100  text-slate-600  dark:bg-slate-800     dark:text-slate-400'  },
+}
+
+function ResolvedSlotRow({ slot }) {
+  const meta = RESOLVED_SOURCE_META[slot.source] ?? RESOLVED_SOURCE_META.none
+  const asset = slot.resolvedAsset
+
+  return (
+    <div className="flex items-start gap-4 p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
+      {/* Thumbnail */}
+      <div className="w-20 h-20 rounded-lg overflow-hidden flex-shrink-0 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center">
+        {asset?.thumbnail_url || asset?.url ? (
+          <img
+            src={asset.thumbnail_url || asset.url}
+            alt={asset.alt || slot.slot_label}
+            className="w-full h-full object-cover"
+          />
+        ) : (
+          <Ban className="w-7 h-7 text-slate-300" />
+        )}
+      </div>
+
+      {/* Info */}
+      <div className="flex-1 min-w-0 space-y-1.5">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">{slot.slot_label}</span>
+          <Badge className={`text-xs ${meta.cls}`}>{meta.label}</Badge>
+          {!slot.needs_visual && <Badge variant="outline" className="text-xs">Typography only</Badge>}
+          {asset && (
+            <Badge variant="secondary" className="text-xs font-mono">
+              {asset.width && asset.height ? `${asset.width}×${asset.height}` : 'unknown size'}
+            </Badge>
+          )}
+        </div>
+
+        {slot.visual_purpose && (
+          <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-2">{slot.visual_purpose}</p>
+        )}
+
+        {slot.warning && (
+          <div className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+            <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+            {slot.warning}
+          </div>
+        )}
+
+        {asset?.url && (
+          <a
+            href={asset.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-primary hover:underline truncate block"
+          >
+            {asset.url.length > 72 ? asset.url.slice(0, 72) + '…' : asset.url}
+          </a>
+        )}
+
+        {!asset && slot.needs_visual && !slot.warning && (
+          <p className="text-xs text-slate-400 italic">No asset resolved</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
+function ResolvedPlanCard({ idea, resolved, loading, error }) {
+  const isCarousel = idea.format === 'carousel'
+  const resolvedSlots = resolved?.slots ?? []
+  const withAsset     = resolvedSlots.filter(s => s.resolvedAsset).length
+  const warnings      = resolvedSlots.filter(s => s.warning).length
+
+  return (
+    <div className="rounded-xl border-2 border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 overflow-hidden">
+      <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-start gap-3">
+        <div className="p-2 rounded-lg bg-primary/10 flex-shrink-0 mt-0.5">
+          <ImageIcon className="w-4 h-4 text-primary" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap gap-2 mb-1">
+            <Badge className={`text-xs font-medium ${getPillarColor(idea.pillar)}`}>{idea.pillar}</Badge>
+            <Badge variant="outline" className="text-xs gap-1">
+              {isCarousel ? <><LayoutTemplate className="w-3 h-3" />Carousel</> : <><ImageIcon className="w-3 h-3" />Single</>}
+            </Badge>
+            {resolved && (
+              <Badge variant="secondary" className="text-xs">
+                {withAsset}/{resolvedSlots.length} assets resolved
+              </Badge>
+            )}
+            {warnings > 0 && (
+              <Badge variant="outline" className="text-xs text-amber-600 dark:text-amber-400 border-amber-300 dark:border-amber-700">
+                {warnings} warning{warnings > 1 ? 's' : ''}
+              </Badge>
+            )}
+          </div>
+          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{idea.topic}</p>
+        </div>
+      </div>
+
+      <div className="p-5">
+        {loading && (
+          <div className="flex items-center gap-3 py-6 justify-center text-slate-500">
+            <Loader2 className="w-5 h-5 animate-spin text-primary" />
+            <span className="text-sm">Resolving assets…</span>
+          </div>
+        )}
+
+        {!loading && error && (
+          <div className="flex items-start gap-3 p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+            <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+            <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+          </div>
+        )}
+
+        {!loading && !error && resolved && (
+          <div className="space-y-3">
+            {resolvedSlots.map(slot => (
+              <ResolvedSlotRow key={slot.slot_id} slot={slot} />
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ─── StepPill ────────────────────────────────────────────────────────────────
 
 function StepPill({ active, done, icon: Icon, label, onClick }) {
@@ -284,18 +583,23 @@ function StepPill({ active, done, icon: Icon, label, onClick }) {
 export default function Creation({ flowId, brandContext }) {
   const [ideas, setIdeas]             = useState([])
   const [selectedIds, setSelectedIds] = useState(new Set())
-  const [copyResults, setCopyResults] = useState({})   // ideaId → { loading, error, copy }
+  const [copyResults, setCopyResults]     = useState({})   // ideaId → { loading, error, copy }
+  const [planResults, setPlanResults]     = useState({})   // ideaId → { loading, error, plan }
+  const [resolveResults, setResolveResults] = useState({}) // ideaId → { loading, error, resolved }
   const [step, setStep]               = useState('ideas')
   const [loadingIdeas, setLoadingIdeas] = useState(false)
-  const [copyingInProgress, setCopyingInProgress] = useState(false)
+  const [copyingInProgress, setCopyingInProgress]   = useState(false)
+  const [planningInProgress, setPlanningInProgress] = useState(false)
+  const [resolvingInProgress, setResolvingInProgress] = useState(false)
   const [initialising, setInitialising] = useState(true)
 
   const hasBrand = !!(brandContext?.name || brandContext?.about)
   const selectedIdeas = ideas.filter(i => selectedIds.has(i.id))
+  const brandId = flowId ? `brand_${flowId}` : null
 
   // ── Persist to flow ────────────────────────────────────────────────────────
 
-  const persistToFlow = useCallback(async (newIdeas, newCopyResults) => {
+  const persistToFlow = useCallback(async (newIdeas, newCopyResults, newPlanResults, newResolveResults) => {
     if (!flowId) return
     try {
       await fetch(`/api/flows/${flowId}`, {
@@ -305,6 +609,8 @@ export default function Creation({ flowId, brandContext }) {
           creationState: {
             ideas: newIdeas,
             copyResults: newCopyResults,
+            planResults: newPlanResults,
+            resolveResults: newResolveResults,
           }
         }),
       })
@@ -324,9 +630,15 @@ export default function Creation({ flowId, brandContext }) {
         if (saved?.ideas?.length) {
           setIdeas(saved.ideas)
           setCopyResults(saved.copyResults || {})
-          // Restore step: if any copy exists, land on copy step
-          const hasCopy = Object.keys(saved.copyResults || {}).length > 0
-          if (hasCopy) setStep('copy')
+          setPlanResults(saved.planResults || {})
+          setResolveResults(saved.resolveResults || {})
+          // Restore step: land on furthest completed step
+          const hasResolved = Object.keys(saved.resolveResults || {}).length > 0
+          const hasPlan     = Object.keys(saved.planResults   || {}).length > 0
+          const hasCopy     = Object.keys(saved.copyResults   || {}).length > 0
+          if (hasResolved)   setStep('resolve')
+          else if (hasPlan)  setStep('plan')
+          else if (hasCopy)  setStep('copy')
         }
       })
       .catch(() => {})
@@ -351,7 +663,7 @@ export default function Creation({ flowId, brandContext }) {
       if (!res.ok) throw new Error(data.error || 'Failed to generate ideas')
       if (!Array.isArray(data.ideas) || data.ideas.length === 0) throw new Error('No ideas returned')
       setIdeas(data.ideas)
-      await persistToFlow(data.ideas, {})
+      await persistToFlow(data.ideas, {}, {}, {})
       toast.success(`${data.ideas.length} content ideas generated`)
     } catch (err) {
       toast.error(err.message || 'Something went wrong')
@@ -375,8 +687,10 @@ export default function Creation({ flowId, brandContext }) {
     setIdeas([])
     setSelectedIds(new Set())
     setCopyResults({})
+    setPlanResults({})
+    setResolveResults({})
     setStep('ideas')
-    await persistToFlow([], {})
+    await persistToFlow([], {}, {}, {})
     toast.success('Ideas cleared')
   }
 
@@ -427,9 +741,98 @@ export default function Creation({ flowId, brandContext }) {
       if (idea !== selectedIdeas[selectedIdeas.length - 1]) await sleep(2000)
     }
 
-    await persistToFlow(ideas, updatedResults)
+    await persistToFlow(ideas, updatedResults, planResults, resolveResults)
     setCopyingInProgress(false)
     toast.success('Copywriting complete')
+  }
+
+  // ── Step 3: plan assets for each post with copy ───────────────────────────
+
+  const generatePlans = async () => {
+    // Plan for all ideas that have completed copy — not just currently selected ones
+    const ideasWithCopy = ideas.filter(i => copyResults[i.id]?.copy)
+    if (ideasWithCopy.length === 0) { toast.error('Generate copy first'); return }
+
+    setPlanningInProgress(true)
+    const initial = {}
+    ideasWithCopy.forEach(i => { initial[i.id] = { loading: true, error: null, plan: null } })
+    setPlanResults(prev => ({ ...prev, ...initial }))
+    setStep('plan')
+
+    const updatedPlans = { ...planResults, ...initial }
+
+    for (const idea of ideasWithCopy) {
+      let result = { loading: false, error: null, plan: null }
+      try {
+        const res = await fetch('/api/plan-assets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            brandContext,
+            copy:     copyResults[idea.id].copy,
+            idea,
+            brand_id: brandId,
+          }),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || 'Failed')
+        result = { loading: false, error: null, plan: data }
+      } catch (err) {
+        result = { loading: false, error: err.message, plan: null }
+      }
+
+      updatedPlans[idea.id] = result
+      setPlanResults({ ...updatedPlans })
+
+      if (idea !== ideasWithCopy[ideasWithCopy.length - 1]) await sleep(2000)
+    }
+
+    await persistToFlow(ideas, copyResults, updatedPlans, resolveResults)
+    setPlanningInProgress(false)
+    toast.success('Asset planning complete')
+  }
+
+  // ── Step 4: resolve assets ────────────────────────────────────────────────
+
+  const resolveAssets = async () => {
+    const ideasWithPlan = ideas.filter(i => planResults[i.id]?.plan)
+    if (ideasWithPlan.length === 0) { toast.error('Plan assets first'); return }
+
+    setResolvingInProgress(true)
+    const initial = {}
+    ideasWithPlan.forEach(i => { initial[i.id] = { loading: true, error: null, resolved: null } })
+    setResolveResults(prev => ({ ...prev, ...initial }))
+    setStep('resolve')
+
+    const updatedResolved = { ...resolveResults, ...initial }
+
+    for (const idea of ideasWithPlan) {
+      let result = { loading: false, error: null, resolved: null }
+      try {
+        const res = await fetch('/api/resolve-assets', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            plan:     planResults[idea.id].plan,
+            brand_id: brandId,
+          }),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || 'Failed')
+        result = { loading: false, error: null, resolved: data }
+      } catch (err) {
+        result = { loading: false, error: err.message, resolved: null }
+      }
+
+      updatedResolved[idea.id] = result
+      setResolveResults({ ...updatedResolved })
+
+      if (idea !== ideasWithPlan[ideasWithPlan.length - 1]) await sleep(500)
+    }
+
+    await persistToFlow(ideas, copyResults, planResults, updatedResolved)
+    setResolvingInProgress(false)
+    toast.success('Assets resolved')
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -442,7 +845,9 @@ export default function Creation({ flowId, brandContext }) {
     )
   }
 
-  const hasCopyResults = Object.keys(copyResults).length > 0
+  const hasCopyResults    = Object.keys(copyResults).length > 0
+  const hasPlanResults    = Object.keys(planResults).length > 0
+  const hasResolveResults = Object.keys(resolveResults).length > 0
 
   return (
     <div className="space-y-8">
@@ -463,6 +868,22 @@ export default function Creation({ flowId, brandContext }) {
           icon={PenLine}
           label="2 — Copywriting"
           onClick={() => hasCopyResults && setStep('copy')}
+        />
+        <div className="h-px w-6 bg-slate-300 dark:bg-slate-600" />
+        <StepPill
+          active={step === 'plan'}
+          done={hasPlanResults}
+          icon={Boxes}
+          label="3 — Asset Planner"
+          onClick={() => hasPlanResults && setStep('plan')}
+        />
+        <div className="h-px w-6 bg-slate-300 dark:bg-slate-600" />
+        <StepPill
+          active={step === 'resolve'}
+          done={hasResolveResults}
+          icon={ImageIcon}
+          label="4 — Asset Resolver"
+          onClick={() => hasResolveResults && setStep('resolve')}
         />
       </div>
 
@@ -590,6 +1011,125 @@ export default function Creation({ flowId, brandContext }) {
                     key={idea.id}
                     idea={idea}
                     copy={state.copy}
+                    loading={state.loading}
+                    error={state.error}
+                  />
+                )
+              })}
+          </div>
+
+          {/* Sticky CTA to proceed to asset planning */}
+          {hasCopyResults && !copyingInProgress && (
+            <div className="sticky bottom-6 z-10">
+              <div className="rounded-xl border-2 border-primary bg-white dark:bg-slate-950 shadow-lg p-4 flex items-center justify-between gap-4">
+                <div>
+                  <p className="font-semibold text-sm">Copy ready</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Plan visual assets for each post</p>
+                </div>
+                <Button size="sm" className="shrink-0" onClick={generatePlans} disabled={planningInProgress}>
+                  {planningInProgress
+                    ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Planning…</>
+                    : <><Boxes className="w-4 h-4 mr-2" />Plan assets</>
+                  }
+                </Button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* STEP 3 — ASSET PLANNER                                                */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {step === 'plan' && (
+        <>
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="font-semibold text-slate-900 dark:text-slate-100">
+                Asset Planner — {Object.keys(planResults).length} post{Object.keys(planResults).length !== 1 ? 's' : ''}
+              </h3>
+              <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+                {planningInProgress ? 'Analysing visual requirements…' : 'Visual asset requirements per post'}
+              </p>
+            </div>
+            <Button variant="outline" size="sm" onClick={() => setStep('copy')}>
+              <ArrowLeft className="w-4 h-4 mr-2" />Back to copy
+            </Button>
+          </div>
+
+          <div className="grid grid-cols-1 gap-6">
+            {ideas
+              .filter(idea => planResults[idea.id])
+              .map(idea => {
+                const state = planResults[idea.id]
+                return (
+                  <AssetPlanCard
+                    key={idea.id}
+                    idea={idea}
+                    plan={state.plan}
+                    loading={state.loading}
+                    error={state.error}
+                  />
+                )
+              })}
+          </div>
+
+          {/* Sticky CTA to proceed to asset resolution */}
+          {hasPlanResults && !planningInProgress && (
+            <div className="sticky bottom-6 z-10">
+              <div className="rounded-xl border-2 border-primary bg-white dark:bg-slate-950 shadow-lg p-4 flex items-center justify-between gap-4">
+                <div>
+                  <p className="font-semibold text-sm">Asset plan ready</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Fetch real images for every visual slot</p>
+                </div>
+                <Button size="sm" className="shrink-0" onClick={resolveAssets} disabled={resolvingInProgress}>
+                  {resolvingInProgress
+                    ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Resolving…</>
+                    : <><ImageIcon className="w-4 h-4 mr-2" />Resolve assets</>
+                  }
+                </Button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* STEP 4 — ASSET RESOLVER                                               */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {step === 'resolve' && (
+        <>
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="font-semibold text-slate-900 dark:text-slate-100">
+                Asset Resolver — {Object.keys(resolveResults).length} post{Object.keys(resolveResults).length !== 1 ? 's' : ''}
+              </h3>
+              <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+                {resolvingInProgress ? 'Fetching images from library, Unsplash, and AI…' : 'Resolved assets ready for Canvas Designer'}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => setStep('plan')}>
+                <ArrowLeft className="w-4 h-4 mr-2" />Back to plan
+              </Button>
+              {hasResolveResults && !resolvingInProgress && (
+                <Button variant="outline" size="sm" onClick={resolveAssets}>
+                  <RefreshCw className="w-4 h-4 mr-2" />Re-resolve
+                </Button>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-6">
+            {ideas
+              .filter(idea => resolveResults[idea.id])
+              .map(idea => {
+                const state = resolveResults[idea.id]
+                return (
+                  <ResolvedPlanCard
+                    key={idea.id}
+                    idea={idea}
+                    resolved={state.resolved}
                     loading={state.loading}
                     error={state.error}
                   />

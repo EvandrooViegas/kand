@@ -20,6 +20,27 @@ export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSel
   const [extractionProgress, setExtractionProgress] = useState([])
   const [currentStep, setCurrentStep] = useState('')
 
+  // Load persisted brand context whenever the selected flow changes
+  useEffect(() => {
+    if (!flowId) return
+    fetch(`/api/flows/${flowId}`)
+      .then(r => r.json())
+      .then(flow => {
+        const bc = flow?.brandContext
+        if (bc && (bc.name || bc.about || bc.colors?.length || bc.fonts?.length)) {
+          setExtractedData({
+            name:     bc.name     || '',
+            about:    bc.about    || '',
+            logo:     bc.logo     || '',
+            language: bc.language || '',
+            colors:   bc.colors   || [],
+            fonts:    bc.fonts    || [],
+          })
+        }
+      })
+      .catch(() => {})
+  }, [flowId])
+
   // Function to normalize font names (remove -Bold, -Regular, etc.)
   const normalizeFontName = (fontName) => {
     if (!fontName) return ''
