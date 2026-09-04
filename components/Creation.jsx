@@ -10,7 +10,7 @@ import {
   LayoutTemplate, Image as ImageIcon, ChevronDown, ChevronUp,
   Users, Target, Eye, BookOpen, PenLine, ArrowLeft,
   Hash, FileText, MessageSquare, AlertCircle, Layers, Trash2,
-  Boxes, Upload, Wand2, Ban, Tag, Search
+  Boxes, Upload, Wand2, Ban, Tag, Search, ExternalLink
 } from 'lucide-react'
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
@@ -441,9 +441,10 @@ const RESOLVED_SOURCE_META = {
   none:           { label: 'No image',    cls: 'bg-slate-100  text-slate-600  dark:bg-slate-800     dark:text-slate-400'  },
 }
 
-function ResolvedSlotRow({ slot }) {
+function ResolvedSlotRow({ slot, onRetry }) {
   const meta = RESOLVED_SOURCE_META[slot.source] ?? RESOLVED_SOURCE_META.none
   const asset = slot.resolvedAsset
+  const canRetry = slot.needs_visual && (!asset || slot.warning)
 
   return (
     <div className="flex items-start gap-4 p-4 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
@@ -499,11 +500,23 @@ function ResolvedSlotRow({ slot }) {
           <p className="text-xs text-slate-400 italic">No asset resolved</p>
         )}
       </div>
+
+      {/* Per-slot retry when something went wrong */}
+      {canRetry && (
+        <button
+          onClick={onRetry}
+          className="flex-shrink-0 flex items-center gap-1 text-xs text-slate-500 hover:text-primary transition-colors px-2 py-1 rounded-md hover:bg-primary/5 border border-slate-200 dark:border-slate-700"
+          title="Retry resolving this post's assets"
+        >
+          <RefreshCw className="w-3 h-3" />
+          Retry
+        </button>
+      )}
     </div>
   )
 }
 
-function ResolvedPlanCard({ idea, resolved, loading, error }) {
+function ResolvedPlanCard({ idea, resolved, loading, error, onRetry }) {
   const isCarousel = idea.format === 'carousel'
   const resolvedSlots = resolved?.slots ?? []
   const withAsset     = resolvedSlots.filter(s => s.resolvedAsset).length
@@ -534,6 +547,17 @@ function ResolvedPlanCard({ idea, resolved, loading, error }) {
           </div>
           <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{idea.topic}</p>
         </div>
+        {/* Per-card retry — always available when not loading */}
+        {!loading && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="flex-shrink-0 h-8 text-xs"
+            onClick={onRetry}
+          >
+            <RefreshCw className="w-3.5 h-3.5 mr-1.5" />Retry
+          </Button>
+        )}
       </div>
 
       <div className="p-5">
@@ -554,8 +578,142 @@ function ResolvedPlanCard({ idea, resolved, loading, error }) {
         {!loading && !error && resolved && (
           <div className="space-y-3">
             {resolvedSlots.map(slot => (
-              <ResolvedSlotRow key={slot.slot_id} slot={slot} />
+              <ResolvedSlotRow key={slot.slot_id} slot={slot} onRetry={onRetry} />
             ))}
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ─── CanvasDesignCard ─────────────────────────────────────────────────────────
+
+function CanvasDesignCard({ idea, canvas, loading, error, onRetry }) {
+  const isCarousel = idea.format === 'carousel'
+  const pageCount  = canvas?.pages?.length ?? 0
+  const canvasId   = canvas?.id
+
+  return (
+    <div className="rounded-xl border-2 border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 overflow-hidden">
+      {/* Header */}
+      <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-start gap-3">
+        <div className="p-2 rounded-lg bg-primary/10 flex-shrink-0 mt-0.5">
+          <Sparkles className="w-4 h-4 text-primary" />
+        </div>
+        <div className="flex-1 min-w-0">
+          <div className="flex flex-wrap gap-2 mb-1">
+            <Badge className={`text-xs font-medium ${
+              { 'Educational': 'bg-blue-100 text-blue-700',
+                'Expertise': 'bg-purple-100 text-purple-700',
+                'Services': 'bg-green-100 text-green-700',
+              }[idea.pillar] ?? 'bg-slate-100 text-slate-700'
+            }`}>{idea.pillar}</Badge>
+            <Badge variant="outline" className="text-xs gap-1">
+              {isCarousel ? <><LayoutTemplate className="w-3 h-3" />Carousel</> : <><ImageIcon className="w-3 h-3" />Single</>}
+            </Badge>
+            {canvas && (
+              <Badge variant="secondary" className="text-xs">
+                {isCarousel ? `${pageCount} slides` : '1 canvas'}
+              </Badge>
+            )}
+          </div>
+          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100 truncate">{idea.topic}</p>
+        </div>
+        {!loading && (
+          <div className="flex gap-2 flex-shrink-0">
+            {canvasId && (
+              <a
+                href={isCarousel ? `/carousel/${canvasId}` : `/editor/${canvasId}`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <Button size="sm" variant="default" className="h-8 text-xs gap-1.5">
+                  <ExternalLink className="w-3.5 h-3.5" />Open in editor
+                </Button>
+              </a>
+            )}
+            <Button size="sm" variant="outline" className="h-8 text-xs" onClick={onRetry}>
+              <RefreshCw className="w-3.5 h-3.5 mr-1" />Retry
+            </Button>
+          </div>
+        )}
+      </div>
+
+      {/* Body */}
+      <div className="p-5">
+        {loading && (
+          <div className="flex items-center gap-3 py-6 justify-center text-slate-500">
+            <Loader2 className="w-5 h-5 animate-spin text-primary" />
+            <span className="text-sm">Designing canvas…</span>
+          </div>
+        )}
+
+        {!loading && error && (
+          <div className="flex items-start gap-3 p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800">
+            <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+            <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+          </div>
+        )}
+
+        {!loading && !error && canvas && (
+          <div className="space-y-4">
+            {/* Canvas meta */}
+            <div className="grid grid-cols-3 gap-3 text-center">
+              <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3">
+                <p className="text-xs text-slate-500 mb-1">Format</p>
+                <p className="text-sm font-semibold capitalize">{canvas.type}</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3">
+                <p className="text-xs text-slate-500 mb-1">Dimensions</p>
+                <p className="text-sm font-semibold">{canvas.width}×{canvas.height}</p>
+              </div>
+              <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-3">
+                <p className="text-xs text-slate-500 mb-1">Slides</p>
+                <p className="text-sm font-semibold">{isCarousel ? pageCount : 1}</p>
+              </div>
+            </div>
+
+            {/* Slide layout summary */}
+            {isCarousel && canvas.pages?.length > 0 && (
+              <div>
+                <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2">Slide layouts</p>
+                <div className="space-y-1.5">
+                  {canvas.pages.map((page, i) => {
+                    const nodeTypes = [...new Set((page.nodes || []).map(n => n.type))]
+                    const hasImage  = nodeTypes.includes('image')
+                    const typeLabel = { top_peer: 'Cover', content: `Slide ${i}`, bottom_peer: 'CTA' }[page.type] ?? page.name
+                    return (
+                      <div key={page.id} className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
+                        <span className="w-5 h-5 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center flex-shrink-0 text-[10px]">
+                          {i + 1}
+                        </span>
+                        <span className="font-medium">{typeLabel}</span>
+                        <span className="text-slate-400">·</span>
+                        <span>{(page.nodes || []).length} nodes</span>
+                        {hasImage && <Badge variant="outline" className="text-[10px] py-0 px-1.5">image</Badge>}
+                      </div>
+                    )
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Single canvas node summary */}
+            {!isCarousel && (
+              <div className="flex items-center gap-3 text-xs text-slate-500">
+                <span>{(canvas.nodes || []).length} nodes</span>
+                {(canvas.nodes || []).some(n => n.type === 'image') && (
+                  <Badge variant="outline" className="text-[10px] py-0 px-1.5">image</Badge>
+                )}
+              </div>
+            )}
+
+            {/* Canvas ID for API use */}
+            <div className="flex items-center gap-2 p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+              <p className="text-xs text-slate-500 flex-shrink-0">Canvas ID</p>
+              <p className="text-xs font-mono text-slate-700 dark:text-slate-300 truncate flex-1">{canvasId}</p>
+            </div>
           </div>
         )}
       </div>
@@ -583,14 +741,16 @@ function StepPill({ active, done, icon: Icon, label, onClick }) {
 export default function Creation({ flowId, brandContext }) {
   const [ideas, setIdeas]             = useState([])
   const [selectedIds, setSelectedIds] = useState(new Set())
-  const [copyResults, setCopyResults]     = useState({})   // ideaId → { loading, error, copy }
-  const [planResults, setPlanResults]     = useState({})   // ideaId → { loading, error, plan }
-  const [resolveResults, setResolveResults] = useState({}) // ideaId → { loading, error, resolved }
+  const [copyResults, setCopyResults]       = useState({})   // ideaId → { loading, error, copy }
+  const [planResults, setPlanResults]       = useState({})   // ideaId → { loading, error, plan }
+  const [resolveResults, setResolveResults] = useState({})   // ideaId → { loading, error, resolved }
+  const [designResults, setDesignResults]   = useState({})   // ideaId → { loading, error, canvas }
   const [step, setStep]               = useState('ideas')
   const [loadingIdeas, setLoadingIdeas] = useState(false)
-  const [copyingInProgress, setCopyingInProgress]   = useState(false)
-  const [planningInProgress, setPlanningInProgress] = useState(false)
+  const [copyingInProgress, setCopyingInProgress]     = useState(false)
+  const [planningInProgress, setPlanningInProgress]   = useState(false)
   const [resolvingInProgress, setResolvingInProgress] = useState(false)
+  const [designingInProgress, setDesigningInProgress] = useState(false)
   const [initialising, setInitialising] = useState(true)
 
   const hasBrand = !!(brandContext?.name || brandContext?.about)
@@ -599,7 +759,7 @@ export default function Creation({ flowId, brandContext }) {
 
   // ── Persist to flow ────────────────────────────────────────────────────────
 
-  const persistToFlow = useCallback(async (newIdeas, newCopyResults, newPlanResults, newResolveResults) => {
+  const persistToFlow = useCallback(async (newIdeas, newCopyResults, newPlanResults, newResolveResults, newDesignResults) => {
     if (!flowId) return
     try {
       await fetch(`/api/flows/${flowId}`, {
@@ -611,6 +771,7 @@ export default function Creation({ flowId, brandContext }) {
             copyResults: newCopyResults,
             planResults: newPlanResults,
             resolveResults: newResolveResults,
+            designResults: newDesignResults,
           }
         }),
       })
@@ -632,11 +793,14 @@ export default function Creation({ flowId, brandContext }) {
           setCopyResults(saved.copyResults || {})
           setPlanResults(saved.planResults || {})
           setResolveResults(saved.resolveResults || {})
+          setDesignResults(saved.designResults || {})
           // Restore step: land on furthest completed step
+          const hasDesign   = Object.keys(saved.designResults  || {}).length > 0
           const hasResolved = Object.keys(saved.resolveResults || {}).length > 0
-          const hasPlan     = Object.keys(saved.planResults   || {}).length > 0
-          const hasCopy     = Object.keys(saved.copyResults   || {}).length > 0
-          if (hasResolved)   setStep('resolve')
+          const hasPlan     = Object.keys(saved.planResults    || {}).length > 0
+          const hasCopy     = Object.keys(saved.copyResults    || {}).length > 0
+          if (hasDesign)     setStep('design')
+          else if (hasResolved)   setStep('resolve')
           else if (hasPlan)  setStep('plan')
           else if (hasCopy)  setStep('copy')
         }
@@ -689,8 +853,9 @@ export default function Creation({ flowId, brandContext }) {
     setCopyResults({})
     setPlanResults({})
     setResolveResults({})
+    setDesignResults({})
     setStep('ideas')
-    await persistToFlow([], {}, {}, {})
+    await persistToFlow([], {}, {}, {}, {})
     toast.success('Ideas cleared')
   }
 
@@ -741,7 +906,7 @@ export default function Creation({ flowId, brandContext }) {
       if (idea !== selectedIdeas[selectedIdeas.length - 1]) await sleep(2000)
     }
 
-    await persistToFlow(ideas, updatedResults, planResults, resolveResults)
+    await persistToFlow(ideas, updatedResults, planResults, resolveResults, designResults)
     setCopyingInProgress(false)
     toast.success('Copywriting complete')
   }
@@ -787,7 +952,7 @@ export default function Creation({ flowId, brandContext }) {
       if (idea !== ideasWithCopy[ideasWithCopy.length - 1]) await sleep(2000)
     }
 
-    await persistToFlow(ideas, copyResults, updatedPlans, resolveResults)
+    await persistToFlow(ideas, copyResults, updatedPlans, resolveResults, designResults)
     setPlanningInProgress(false)
     toast.success('Asset planning complete')
   }
@@ -830,9 +995,40 @@ export default function Creation({ flowId, brandContext }) {
       if (idea !== ideasWithPlan[ideasWithPlan.length - 1]) await sleep(500)
     }
 
-    await persistToFlow(ideas, copyResults, planResults, updatedResolved)
+    await persistToFlow(ideas, copyResults, planResults, updatedResolved, designResults)
     setResolvingInProgress(false)
     toast.success('Assets resolved')
+  }
+
+  const retryResolveOne = async (idea) => {
+    if (!planResults[idea.id]?.plan) { toast.error('No asset plan for this post'); return }
+
+    setResolveResults(prev => ({ ...prev, [idea.id]: { loading: true, error: null, resolved: null } }))
+
+    let result = { loading: false, error: null, resolved: null }
+    try {
+      const res = await fetch('/api/resolve-assets', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          plan:     planResults[idea.id].plan,
+          brand_id: brandId,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed')
+      result = { loading: false, error: null, resolved: data }
+      toast.success('Assets resolved')
+    } catch (err) {
+      result = { loading: false, error: err.message, resolved: null }
+      toast.error(err.message || 'Retry failed')
+    }
+
+    setResolveResults(prev => {
+      const updated = { ...prev, [idea.id]: result }
+      persistToFlow(ideas, copyResults, planResults, updated, designResults)
+      return updated
+    })
   }
 
   // ─────────────────────────────────────────────────────────────────────────────
@@ -845,9 +1041,88 @@ export default function Creation({ flowId, brandContext }) {
     )
   }
 
+  // ── Step 5: design canvas ─────────────────────────────────────────────────
+
+  const designCanvases = async () => {
+    const ideasWithResolved = ideas.filter(i => resolveResults[i.id]?.resolved)
+    if (ideasWithResolved.length === 0) { toast.error('Resolve assets first'); return }
+
+    setDesigningInProgress(true)
+    const initial = {}
+    ideasWithResolved.forEach(i => { initial[i.id] = { loading: true, error: null, canvas: null } })
+    setDesignResults(prev => ({ ...prev, ...initial }))
+    setStep('design')
+
+    const updatedDesigns = { ...designResults, ...initial }
+
+    for (const idea of ideasWithResolved) {
+      let result = { loading: false, error: null, canvas: null }
+      try {
+        const res = await fetch('/api/design-canvas', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            brandContext,
+            copy:         copyResults[idea.id].copy,
+            resolvedPlan: resolveResults[idea.id].resolved,
+            canvasName:   `${brandContext?.name ?? ''} — ${idea.topic}`.trim(),
+          }),
+        })
+        const data = await res.json()
+        if (!res.ok) throw new Error(data.error || 'Failed')
+        result = { loading: false, error: null, canvas: data }
+      } catch (err) {
+        result = { loading: false, error: err.message, canvas: null }
+      }
+
+      updatedDesigns[idea.id] = result
+      setDesignResults({ ...updatedDesigns })
+
+      if (idea !== ideasWithResolved[ideasWithResolved.length - 1]) await sleep(1000)
+    }
+
+    await persistToFlow(ideas, copyResults, planResults, resolveResults, updatedDesigns)
+    setDesigningInProgress(false)
+    toast.success('Canvas design complete')
+  }
+
+  const retryDesignOne = async (idea) => {
+    if (!resolveResults[idea.id]?.resolved) { toast.error('No resolved assets for this post'); return }
+
+    setDesignResults(prev => ({ ...prev, [idea.id]: { loading: true, error: null, canvas: null } }))
+
+    let result = { loading: false, error: null, canvas: null }
+    try {
+      const res = await fetch('/api/design-canvas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          brandContext,
+          copy:         copyResults[idea.id].copy,
+          resolvedPlan: resolveResults[idea.id].resolved,
+          canvasName:   `${brandContext?.name ?? ''} — ${idea.topic}`.trim(),
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || 'Failed')
+      result = { loading: false, error: null, canvas: data }
+      toast.success('Canvas designed')
+    } catch (err) {
+      result = { loading: false, error: err.message, canvas: null }
+      toast.error(err.message || 'Retry failed')
+    }
+
+    setDesignResults(prev => {
+      const updated = { ...prev, [idea.id]: result }
+      persistToFlow(ideas, copyResults, planResults, resolveResults, updated)
+      return updated
+    })
+  }
+
   const hasCopyResults    = Object.keys(copyResults).length > 0
   const hasPlanResults    = Object.keys(planResults).length > 0
   const hasResolveResults = Object.keys(resolveResults).length > 0
+  const hasDesignResults  = Object.keys(designResults).length > 0
 
   return (
     <div className="space-y-8">
@@ -884,6 +1159,14 @@ export default function Creation({ flowId, brandContext }) {
           icon={ImageIcon}
           label="4 — Asset Resolver"
           onClick={() => hasResolveResults && setStep('resolve')}
+        />
+        <div className="h-px w-6 bg-slate-300 dark:bg-slate-600" />
+        <StepPill
+          active={step === 'design'}
+          done={hasDesignResults}
+          icon={Sparkles}
+          label="5 — Canvas Designer"
+          onClick={() => hasDesignResults && setStep('design')}
         />
       </div>
 
@@ -1116,8 +1399,7 @@ export default function Creation({ flowId, brandContext }) {
                 <Button variant="outline" size="sm" onClick={resolveAssets}>
                   <RefreshCw className="w-4 h-4 mr-2" />Re-resolve
                 </Button>
-              )}
-            </div>
+              )}            </div>
           </div>
 
           <div className="grid grid-cols-1 gap-6">
@@ -1132,6 +1414,71 @@ export default function Creation({ flowId, brandContext }) {
                     resolved={state.resolved}
                     loading={state.loading}
                     error={state.error}
+                    onRetry={() => retryResolveOne(idea)}
+                  />
+                )
+              })}
+          </div>
+
+          {/* Sticky CTA to proceed to canvas design */}
+          {hasResolveResults && !resolvingInProgress && (
+            <div className="sticky bottom-6 z-10">
+              <div className="rounded-xl border-2 border-primary bg-white dark:bg-slate-950 shadow-lg p-4 flex items-center justify-between gap-4">
+                <div>
+                  <p className="font-semibold text-sm">Assets resolved</p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">Generate Instagram canvas layouts</p>
+                </div>
+                <Button size="sm" className="shrink-0" onClick={designCanvases} disabled={designingInProgress}>
+                  {designingInProgress
+                    ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Designing…</>
+                    : <><Sparkles className="w-4 h-4 mr-2" />Design canvas</>
+                  }
+                </Button>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {/* STEP 5 — CANVAS DESIGNER                                              */}
+      {/* ══════════════════════════════════════════════════════════════════════ */}
+      {step === 'design' && (
+        <>
+          <div className="flex items-center justify-between">
+            <div>
+              <h3 className="font-semibold text-slate-900 dark:text-slate-100">
+                Canvas Designer — {Object.keys(designResults).length} canvas{Object.keys(designResults).length !== 1 ? 'es' : ''}
+              </h3>
+              <p className="text-sm text-slate-500 dark:text-slate-400 mt-0.5">
+                {designingInProgress ? 'Generating layouts…' : 'Canvases ready — open in editor to refine'}
+              </p>
+            </div>
+            <div className="flex gap-2">
+              <Button variant="outline" size="sm" onClick={() => setStep('resolve')}>
+                <ArrowLeft className="w-4 h-4 mr-2" />Back
+              </Button>
+              {hasDesignResults && !designingInProgress && (
+                <Button variant="outline" size="sm" onClick={designCanvases}>
+                  <RefreshCw className="w-4 h-4 mr-2" />Re-design all
+                </Button>
+              )}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-6">
+            {ideas
+              .filter(idea => designResults[idea.id])
+              .map(idea => {
+                const state = designResults[idea.id]
+                return (
+                  <CanvasDesignCard
+                    key={idea.id}
+                    idea={idea}
+                    canvas={state.canvas}
+                    loading={state.loading}
+                    error={state.error}
+                    onRetry={() => retryDesignOne(idea)}
                   />
                 )
               })}

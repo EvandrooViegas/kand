@@ -12,6 +12,7 @@ import { handleGenerateCopywriting } from '@/lib/handlers/copywritingHandler'
 import { handleUploadAsset, handleListAssets, handleGetAsset, handleDeleteAsset } from '@/lib/handlers/assetHandlers'
 import { handlePlanAssets } from '@/lib/handlers/assetPlannerHandler'
 import { handleResolveAssets } from '@/lib/handlers/assetResolverHandler'
+import { handleDesignCanvas } from '@/lib/handlers/canvasDesignerHandler'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -56,6 +57,11 @@ async function handleRoute(request, { params }) {
     // Asset resolver endpoint
     if (route === '/resolve-assets' && method === 'POST') {
       return await handleResolveAssets(db, await request.json())
+    }
+
+    // Canvas designer endpoint
+    if (route === '/design-canvas' && method === 'POST') {
+      return await handleDesignCanvas(db, await request.json())
     }
 
     // Asset routes

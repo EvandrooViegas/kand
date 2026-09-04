@@ -101,17 +101,15 @@ async function searchUnsplash(
   }
 }
 
-// ─── AI image generation (fal.ai fast-sdxl) ──────────────────────────────────
+// ─── AI image generation ──────────────────────────────────────────────────────
+// Primary:  fal.ai fast-sdxl  (requires FAL_KEY with credit)
+// Fallback: Pollinations.AI   (free, no key required)
 
-async function generateImage(
-  visualPurpose: string,
-  keywords: string[],
+async function generateImageFal(
+  prompt: string,
   apiKey: string,
 ): Promise<ResolvedAsset | null> {
-  const prompt = [visualPurpose, ...keywords.slice(0, 4)].join(', ')
-
   try {
-    // fal.ai queue-based inference: submit → poll → result
     const submitRes = await fetch('https://queue.fal.run/fal-ai/fast-sdxl', {
       method: 'POST',
       headers: {
@@ -120,9 +118,9 @@ async function generateImage(
       },
       body: JSON.stringify({
         prompt,
-        image_size:        'square_hd',
+        image_size:          'square_hd',
         num_inference_steps: 28,
-        num_images:        1,
+        num_images:          1,
       }),
     })
 
@@ -135,25 +133,20 @@ async function generateImage(
     const { request_id, status_url, response_url } = await submitRes.json()
     if (!request_id && !status_url) return null
 
-    // Poll until done (max 90s, 3s interval)
-    const poll = response_url ?? `https://queue.fal.run/fal-ai/fast-sdxl/requests/${request_id}`
-    const statusUrl = status_url ?? `https://queue.fal.run/fal-ai/fast-sdxl/requests/${request_id}/status`
+    const poll      = response_url ?? `https://queue.fal.run/fal-ai/fast-sdxl/requests/${request_id}`
+    const statusUrl = status_url   ?? `https://queue.fal.run/fal-ai/fast-sdxl/requests/${request_id}/status`
     const deadline  = Date.now() + 90_000
 
     while (Date.now() < deadline) {
       await new Promise(r => setTimeout(r, 3000))
-      const statusRes = await fetch(statusUrl, {
-        headers: { Authorization: `Key ${apiKey}` },
-      })
+      const statusRes = await fetch(statusUrl, { headers: { Authorization: `Key ${apiKey}` } })
       if (!statusRes.ok) break
       const st = await statusRes.json()
       if (st.status === 'COMPLETED' || st.status === 'completed') break
       if (st.status === 'FAILED'    || st.status === 'failed')    return null
     }
 
-    const resultRes = await fetch(poll, {
-      headers: { Authorization: `Key ${apiKey}` },
-    })
+    const resultRes = await fetch(poll, { headers: { Authorization: `Key ${apiKey}` } })
     if (!resultRes.ok) return null
     const result = await resultRes.json()
 
@@ -174,6 +167,67 @@ async function generateImage(
     console.error('[resolver] fal.ai generation error:', err?.message)
     return null
   }
+}
+
+async function generateImagePollinations(prompt: string): Promise<ResolvedAsset | null> {
+  try {
+    const encoded = encodeURIComponent(prompt)
+    const url     = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&nologo=true&model=flux`
+
+    // GET with a generous timeout — Pollinations generates synchronously,
+    // the response body is the image itself. We just need to confirm it arrives.
+    const controller = new AbortController()
+    const timeout    = setTimeout(() => controller.abort(), 60_000)
+
+    let contentType = ''
+    try {
+      const res = await fetch(url, { signal: controller.signal })
+      clearTimeout(timeout)
+      contentType = res.headers.get('content-type') ?? ''
+      if (!res.ok || !contentType.startsWith('image/')) {
+        console.error('[resolver] Pollinations bad response:', res.status, contentType)
+        return null
+      }
+      // Drain the body so the generation is confirmed complete
+      await res.arrayBuffer()
+    } catch (err: any) {
+      clearTimeout(timeout)
+      console.error('[resolver] Pollinations fetch error:', err?.message)
+      return null
+    }
+
+    return {
+      source:        'ai_generated',
+      url,
+      thumbnail_url: url,
+      width:         1024,
+      height:        1024,
+      asset_id:      null,
+      unsplash_id:   null,
+      alt:           prompt,
+    }
+  } catch (err: any) {
+    console.error('[resolver] Pollinations generation error:', err?.message)
+    return null
+  }
+}
+
+async function generateImage(
+  visualPurpose: string,
+  keywords: string[],
+  falKey: string | null,
+): Promise<ResolvedAsset | null> {
+  const prompt = [visualPurpose, ...keywords.slice(0, 4)].join(', ')
+
+  // Try fal.ai first when a key is present
+  if (falKey) {
+    const result = await generateImageFal(prompt, falKey)
+    if (result) return result
+    console.warn('[resolver] fal.ai failed — falling back to Pollinations')
+  }
+
+  // Free fallback — always available
+  return generateImagePollinations(prompt)
 }
 
 // ─── Uploaded-asset lookup ────────────────────────────────────────────────────
@@ -276,7 +330,32 @@ async function resolveSlot(
   switch (slot.preferred_source) {
     case 'uploaded_asset': {
       const { asset, warning } = await resolveUploadedAsset(db, slot, brand_id)
-      return { ...base, resolvedAsset: asset, warning }
+      if (asset) return { ...base, resolvedAsset: asset, warning }
+
+      // No uploaded asset found — cascade to Unsplash, then AI generation
+      console.warn(`[resolver] ${slot.slot_id}: no uploaded asset, trying Unsplash`)
+      if (unsplashKey) {
+        const unsplashAsset = await searchUnsplash(slot.search_keywords ?? [], unsplashKey)
+        if (unsplashAsset) {
+          return {
+            ...base,
+            source:        'unsplash',
+            resolvedAsset: { ...unsplashAsset, source: 'unsplash' },
+            warning:       'No uploaded asset found — used Unsplash instead',
+          }
+        }
+      }
+
+      console.warn(`[resolver] ${slot.slot_id}: Unsplash also failed, trying AI generation`)
+      const aiAsset = await generateImage(slot.visual_purpose, slot.search_keywords ?? [], falKey)
+      return {
+        ...base,
+        source:        aiAsset ? 'ai_generated' : slot.preferred_source,
+        resolvedAsset: aiAsset ? { ...aiAsset, source: 'ai_generated' } : null,
+        warning:       aiAsset
+          ? 'No uploaded asset found — used AI generation instead'
+          : (warning ?? 'No asset found from any source'),
+      }
     }
 
     case 'unsplash': {
@@ -292,9 +371,6 @@ async function resolveSlot(
     }
 
     case 'ai_generated': {
-      if (!falKey) {
-        return { ...base, resolvedAsset: null, warning: 'FAL_KEY not configured — skipping AI generation' }
-      }
       const asset = await generateImage(slot.visual_purpose, slot.search_keywords ?? [], falKey)
       return {
         ...base,
