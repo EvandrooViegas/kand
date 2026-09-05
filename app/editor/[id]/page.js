@@ -141,6 +141,11 @@ const GRADIENT_PRESETS = [
   { name: 'Fire', stops: [{ color: '#f12711', position: 0, alpha: 100 }, { color: '#f5af19', position: 100, alpha: 100 }], angle: 45 },
   { name: 'Glass', stops: [{ color: '#ffffff', position: 0, alpha: 80 }, { color: '#ffffff', position: 100, alpha: 0 }], angle: 180 },
   { name: 'Fade Out', stops: [{ color: '#000000', position: 0, alpha: 0 }, { color: '#000000', position: 100, alpha: 80 }], angle: 180 },
+  // Radial presets
+  { name: 'Solar', gradientType: 'radial', radialShape: 'circle', focalX: 50, focalY: 50, stops: [{ color: '#ffd700', position: 0, alpha: 100 }, { color: '#ff4500', position: 100, alpha: 100 }], angle: 0 },
+  { name: 'Neon Glow', gradientType: 'radial', radialShape: 'circle', focalX: 50, focalY: 50, stops: [{ color: '#00f5ff', position: 0, alpha: 100 }, { color: '#7b00ff', position: 100, alpha: 100 }], angle: 0 },
+  { name: 'Spotlight', gradientType: 'radial', radialShape: 'ellipse', focalX: 50, focalY: 30, stops: [{ color: '#ffffff', position: 0, alpha: 90 }, { color: '#000000', position: 100, alpha: 100 }], angle: 0 },
+  { name: 'Halo', gradientType: 'radial', radialShape: 'circle', focalX: 50, focalY: 50, stops: [{ color: '#ffffff', position: 0, alpha: 100 }, { color: '#6366f1', position: 60, alpha: 80 }, { color: '#000000', position: 100, alpha: 100 }], angle: 0 },
 ]
 
 // MASK_PRESETS removed
@@ -215,7 +220,11 @@ function buildGradientCssClient(node) {
       return `rgba(${r},${g},${b},${a}) ${s.position || 0}%`
     })
     .join(', ')
-  if (node.gradientType === 'radial') return `radial-gradient(circle at center, ${stops})`
+  if (node.gradientType === 'radial') {
+    const fx = typeof node.focalX === 'number' ? node.focalX : 50
+    const fy = typeof node.focalY === 'number' ? node.focalY : 50
+    return `radial-gradient(circle at ${fx}% ${fy}%, ${stops})`
+  }
   const angle = typeof node.angle === 'number' ? node.angle : 90
   return `linear-gradient(${angle}deg, ${stops})`
 }
@@ -243,22 +252,47 @@ function isValidHex(hex) {
 
 function ColorInput({ value, onChange, className = '' }) {
   const safeHex = isValidHex(value) ? value : '#000000'
+  const isTransparent = value === 'transparent'
+  // Checkered pattern signals transparency in the swatch
+  const checker = 'repeating-conic-gradient(#cbd5e1 0% 25%, #ffffff 0% 50%) 50% / 6px 6px'
   return (
     <div className={`flex items-center gap-2 ${className}`}>
-      <div className="relative w-8 h-8 rounded border border-input shrink-0 overflow-hidden bg-white dark:bg-black">
-        <input 
-          type="color" 
-          className="absolute -inset-2 w-12 h-12 cursor-pointer opacity-0" 
-          value={safeHex} 
-          onChange={(e) => onChange(e.target.value)} 
+      {/* Color swatch + native picker */}
+      <div className="relative w-8 h-8 rounded border border-input shrink-0 overflow-hidden" style={{ background: checker }}>
+        {!isTransparent && (
+          <input
+            type="color"
+            className="absolute -inset-2 w-12 h-12 cursor-pointer opacity-0"
+            value={safeHex}
+            onChange={(e) => onChange(e.target.value)}
+          />
+        )}
+        <div
+          className="w-full h-full pointer-events-none"
+          style={{ backgroundColor: isTransparent ? 'transparent' : (value || 'transparent') }}
         />
-        <div className="w-full h-full pointer-events-none" style={{ backgroundColor: value || 'transparent' }} />
+        {/* Click overlay when transparent so clicking swatch opens picker after clearing transparent */}
+        {isTransparent && (
+          <button
+            className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+            onClick={() => onChange('#ffffff')}
+            title="Click to pick a color"
+          />
+        )}
       </div>
-      <Input 
-        className="h-8 text-xs font-mono" 
-        value={value} 
-        onChange={(e) => onChange(e.target.value)} 
+      {/* Text input */}
+      <Input
+        className="h-8 text-xs font-mono"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
         placeholder="Hex, rgb(), hsl()"
+      />
+      {/* Transparent quick-pick */}
+      <button
+        title="Set transparent"
+        onClick={() => onChange('transparent')}
+        className={`w-8 h-8 shrink-0 rounded border border-input overflow-hidden ${isTransparent ? 'ring-2 ring-primary' : 'opacity-60 hover:opacity-100'}`}
+        style={{ background: checker }}
       />
     </div>
   )
@@ -1127,6 +1161,7 @@ function Editor() {
     const newNode = {
       id: uuidv4(), type: 'gradient',
       gradientType: 'linear', angle: 135, shape: 'rect',
+      radialShape: 'circle', focalX: 50, focalY: 50,
       stops: [{ color: '#667eea', position: 0, alpha: 100 }, { color: '#764ba2', position: 100, alpha: 100 }],
       x: Math.round((canvas.width - 600) / 2), y: Math.round((canvas.height - 400) / 2),
       width: 600, height: 400, borderRadius: 24,
@@ -1575,7 +1610,10 @@ function Editor() {
         const c = s.color + Math.round((typeof s.alpha === 'number' ? s.alpha : 100) * 2.55).toString(16).padStart(2, '0')
         return `${c} ${s.position}%`
       }).join(', ')
-      const bg = gType === 'radial' ? `radial-gradient(circle, ${stopsStr})` : `linear-gradient(${angle}deg, ${stopsStr})`
+      const radialShape = 'circle'
+      const fx = typeof (clsStyle.focalX ?? node.focalX) === 'number' ? (clsStyle.focalX ?? node.focalX) : 50
+      const fy = typeof (clsStyle.focalY ?? node.focalY) === 'number' ? (clsStyle.focalY ?? node.focalY) : 50
+      const bg = gType === 'radial' ? `radial-gradient(${radialShape} at ${fx}% ${fy}%, ${stopsStr})` : `linear-gradient(${angle}deg, ${stopsStr})`
       
       return {
         ...base,
@@ -3096,7 +3134,12 @@ function GradientProperties({ node, updateNode }) {
     updateNode(node.id, { stops: newStops })
   }
   const updateStop = (idx, patch) => updateNode(node.id, { stops: stops.map((s, i) => (i === idx ? { ...s, ...patch } : s)) })
-  const applyPreset = (preset) => updateNode(node.id, { stops: preset.stops, angle: preset.angle, gradientType: 'linear' })
+  const applyPreset = (preset) => updateNode(node.id, {
+    stops: preset.stops,
+    angle: preset.angle,
+    gradientType: preset.gradientType || 'linear',
+    ...(preset.gradientType === 'radial' ? { radialShape: preset.radialShape || 'circle', focalX: preset.focalX ?? 50, focalY: preset.focalY ?? 50 } : {}),
+  })
 
   // Checkered background for transparency visualization
   const checker = 'repeating-conic-gradient(#cbd5e1 0% 25%, #ffffff 0% 50%) 50% / 8px 8px'
@@ -3119,15 +3162,31 @@ function GradientProperties({ node, updateNode }) {
           <Slider value={[node.angle ?? 90]} min={0} max={360} step={1} onValueChange={(v) => updateNode(node.id, { angle: v[0] })} />
         </div>
       )}
-      <div>
-        <Label className="text-xs">Shape</Label>
-        <select className="w-full h-10 border rounded-md px-3 text-sm bg-background" value={node.shape || 'rect'} onChange={(e) => updateNode(node.id, { shape: e.target.value })}>
-          <option value="rect">Rectangle</option>
-          <option value="ellipse">Ellipse</option>
-        </select>
-      </div>
-      {node.shape !== 'ellipse' && (
-        <div><Label className="text-xs">Corner Radius</Label><Input type="number" value={node.borderRadius || 0} onChange={(e) => updateNode(node.id, { borderRadius: parseInt(e.target.value) || 0 })} /></div>
+      {node.gradientType === 'radial' && (
+        <>
+          <div>
+            <div className="flex items-center justify-between"><Label className="text-xs">Focal Point X</Label><span className="text-xs text-muted-foreground">{node.focalX ?? 50}%</span></div>
+            <Slider value={[node.focalX ?? 50]} min={0} max={100} step={1} onValueChange={(v) => updateNode(node.id, { focalX: v[0] })} />
+          </div>
+          <div>
+            <div className="flex items-center justify-between"><Label className="text-xs">Focal Point Y</Label><span className="text-xs text-muted-foreground">{node.focalY ?? 50}%</span></div>
+            <Slider value={[node.focalY ?? 50]} min={0} max={100} step={1} onValueChange={(v) => updateNode(node.id, { focalY: v[0] })} />
+          </div>
+        </>
+      )}
+      {(node.gradientType || 'linear') === 'linear' && (
+        <>
+          <div>
+            <Label className="text-xs">Shape</Label>
+            <select className="w-full h-10 border rounded-md px-3 text-sm bg-background" value={node.shape || 'rect'} onChange={(e) => updateNode(node.id, { shape: e.target.value })}>
+              <option value="rect">Rectangle</option>
+              <option value="ellipse">Ellipse</option>
+            </select>
+          </div>
+          {node.shape !== 'ellipse' && (
+            <div><Label className="text-xs">Corner Radius</Label><Input type="number" value={node.borderRadius || 0} onChange={(e) => updateNode(node.id, { borderRadius: parseInt(e.target.value) || 0 })} /></div>
+          )}
+        </>
       )}
 
       <div>
@@ -3137,17 +3196,26 @@ function GradientProperties({ node, updateNode }) {
         </div>
         <div className="space-y-2">
           {stops.map((stop, i) => (
-            <div key={i} className="space-y-1 bg-muted/30 p-2 rounded border">
-              <div className="flex items-center gap-2 mb-2">
-                <ColorInput className="flex-1" value={stop.color} onChange={(val) => updateStop(i, { color: val })} />
-                <div className="w-16"><Input type="number" className="h-8 text-xs px-1" value={stop.position} onChange={(e) => updateStop(i, { position: parseInt(e.target.value) || 0 })} /></div>
-                <div className="w-16"><Input type="number" className="h-8 text-xs px-1" value={stop.alpha ?? 100} onChange={(e) => updateStop(i, { alpha: parseInt(e.target.value) || 0 })} /></div>
+            <div key={i} className="space-y-2 bg-muted/30 p-2 rounded border">
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-1.5 flex-1 min-w-0">
+                  {/* Color swatch */}
+                  <div className="relative w-7 h-7 rounded border border-input shrink-0 overflow-hidden" style={{ background: 'repeating-conic-gradient(#cbd5e1 0% 25%, #ffffff 0% 50%) 50% / 6px 6px' }}>
+                    <input type="color" className="absolute -inset-2 w-11 h-11 cursor-pointer opacity-0" value={isValidHex(stop.color) ? stop.color : '#000000'} onChange={(e) => updateStop(i, { color: e.target.value })} />
+                    <div className="w-full h-full pointer-events-none" style={{ backgroundColor: stop.color }} />
+                  </div>
+                  <Input className="h-7 text-xs font-mono flex-1 min-w-0" value={stop.color} onChange={(e) => updateStop(i, { color: e.target.value })} placeholder="#rrggbb" />
+                </div>
+                <div className="w-14 shrink-0">
+                  <Input type="number" className="h-7 text-xs px-1 text-center" value={stop.position} min={0} max={100}
+                    onChange={(e) => updateStop(i, { position: Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) })} />
+                </div>
                 <Button variant="ghost" size="icon" className="w-6 h-6 text-muted-foreground hover:text-red-400 shrink-0" onClick={() => removeStop(i)}><Trash2 className="w-3 h-3" /></Button>
               </div>
-              <div className="flex items-center gap-2 px-1">
-                <Label className="text-[10px] uppercase text-muted-foreground w-10">Alpha</Label>
+              <div className="flex items-center gap-2 px-0.5">
+                <Label className="text-[10px] uppercase text-muted-foreground shrink-0">Alpha</Label>
                 <Slider value={[typeof stop.alpha === 'number' ? stop.alpha : 100]} min={0} max={100} step={1} onValueChange={(v) => updateStop(i, { alpha: v[0] })} className="flex-1" />
-                <span className="text-[10px] text-muted-foreground w-9 text-right">{typeof stop.alpha === 'number' ? stop.alpha : 100}%</span>
+                <span className="text-[10px] text-muted-foreground w-8 text-right shrink-0">{typeof stop.alpha === 'number' ? stop.alpha : 100}%</span>
               </div>
             </div>
           ))}
@@ -3160,7 +3228,7 @@ function GradientProperties({ node, updateNode }) {
           {GRADIENT_PRESETS.map((p) => (
             <button key={p.name} title={p.name} onClick={() => applyPreset(p)} className="h-10 rounded border hover:ring-2 hover:ring-primary transition relative overflow-hidden"
               style={{ background: 'repeating-conic-gradient(#cbd5e1 0% 25%, #ffffff 0% 50%) 50% / 6px 6px' }}>
-              <div className="absolute inset-0" style={{ backgroundImage: buildGradientCssClient({ stops: p.stops, angle: p.angle, gradientType: 'linear' }) }} />
+              <div className="absolute inset-0" style={{ backgroundImage: buildGradientCssClient({ stops: p.stops, angle: p.angle, gradientType: p.gradientType || 'linear', radialShape: p.radialShape, focalX: p.focalX, focalY: p.focalY }) }} />
             </button>
           ))}
         </div>
