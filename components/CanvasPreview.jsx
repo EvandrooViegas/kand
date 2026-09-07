@@ -78,6 +78,8 @@ export function CanvasPreview({ canvas, containerWidth, onClick }) {
         {nodes.map((n) => {
           const base = {
             position: 'absolute', left: n.x, top: n.y, width: n.width, height: n.height,
+            transform: n.rotation ? `rotate(${n.rotation}deg)` : undefined,
+            boxSizing: 'border-box',
             display: 'flex', alignItems: 'center',
             justifyContent: n.textAlign === 'center' ? 'center' : n.textAlign === 'right' ? 'flex-end' : 'flex-start',
             overflow: n.type === 'text' ? 'visible' : 'hidden',
@@ -87,6 +89,8 @@ export function CanvasPreview({ canvas, containerWidth, onClick }) {
             style = { ...base, color: n.color || '#000', fontSize: n.fontSize || 48, fontWeight: n.fontWeight || 400,
               fontStyle: n.fontStyle === 'italic' ? 'italic' : 'normal',
               fontFamily: `'${n.fontFamily || 'Inter'}', sans-serif`,
+              lineHeight: n.lineHeight || 1.2, letterSpacing: n.letterSpacing || 0,
+              whiteSpace: 'pre-wrap', overflowWrap: 'anywhere',
               textShadow: n.textShadow?.enabled ? `${n.textShadow.offsetX || 0}px ${n.textShadow.offsetY || 0}px ${n.textShadow.blur || 0}px ${n.textShadow.color || '#000'}` : 'none' }
           } else if (n.type === 'shape') {
             style = { ...base, background: n.fill || '#6366f1',
@@ -96,7 +100,7 @@ export function CanvasPreview({ canvas, containerWidth, onClick }) {
             style = { ...base, backgroundImage: buildGradientCssClient(n),
               borderRadius: n.shape === 'ellipse' ? Math.max(n.width, n.height) : (n.borderRadius || 0) }
           } else if (n.type === 'image') {
-            const br = n.borderRadius || 0
+            const br = n.mask === 'circle' || n.mask === 'pill' ? Math.min(n.width, n.height) / 2 : n.mask === 'rounded' ? Math.min(n.width, n.height) * 0.15 : n.borderRadius || 0
             const cL = n.cropLeft || 0
             const cR = n.cropRight || 0
             const cT = n.cropTop || 0
