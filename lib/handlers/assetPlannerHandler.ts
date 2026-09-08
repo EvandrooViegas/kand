@@ -34,6 +34,10 @@ export interface VisualSlot {
   slot_id:          string   // e.g. "slide_1", "single_main"
   slot_label:       string   // human label e.g. "Cover slide" / "Main visual"
   needs_visual:     boolean
+  treatment?: 'isolated_subject' | 'environmental'
+  subject_description?: string
+  generation_prompt?: string
+  search_queries?:  string[] // ordered standalone stock searches, not tags
   visual_purpose:   string   // what the image should communicate
   search_keywords:  string[] // keywords used to find assets / for Unsplash search
   preferred_source: 'uploaded_asset' | 'unsplash' | 'ai_generated' | 'none'
@@ -86,9 +90,31 @@ Rules for preferred_source:
 - "ai_generated": the visual concept is too specific or abstract for stock/uploads
 - "none": the slide is best served by typography or graphic design only (no photo needed)
 
+Editorial decisions, before searching:
+- Evaluate each slide's headline and body independently. Use photography when seeing a concrete subject, action, setting, or example helps explain that specific message.
+- Consider an explanatory object before choosing text-only: storage costs can use stacked cartons; a catalogue can use an isolated tablet with generic product tiles; checkout can use a card terminal. Prefer generated conceptual illustrations when stock cannot explain the idea. Never invent factual product UI or charts. Reserve text-only for messages without a useful visual interpretation.
+- A cover does not automatically need a photo. Choose one only when a visible subject provides a meaningful hook.
+- Review the whole sequence for pacing, but do not impose an image quota or alternate mechanically. Respect explicit image requests in the brief.
+- Describe the visible subject and its connection to THIS slide in visual_purpose. For text-only slots, explain why text/graphics communicate it better.
+
+Also return treatment (isolated_subject or environmental), subject_description (ONE dominant visible person, object or coherent object assembly), and generation_prompt (English brief with subject, material, pose, lighting and campaign illustration style). Default to isolated_subject for foreground people, products and conceptual illustrations: a real transparent silhouette, never a rounded rectangular photo. Request complete subjects on simple backgrounds. Use environmental only when the setting explains the message.
+
+Campaign art direction:
+- Plan imagery as a coordinated campaign: different poses, actions or product angles that share photographic style, lighting and brand-relevant color cues.
+- We can remove backgrounds from both stock and generated images automatically. When a person/product is the visual hook, describe a clear standalone subject with unclipped head, hands and product, a simple background, and visible silhouette. Avoid crowds, occlusion and wide office scenes for these cutout-led concepts.
+- For generated conceptual visuals, describe an isolated product sculpture, device, or symbolic object on a plain contrasting background, with no text or fabricated brand logos. Do not request fake checkerboard transparency; the segmentation stage creates the actual transparent PNG.
+- Preserve meaningful environmental scenes when context is important. Do not force every image into a cutout or invent factual product imagery.
+
+Search strategy:
+- Also return "search_queries": 2-3 ordered, standalone English stock searches of 2-6 words each. Use concrete subject + action or setting. Alternatives describe the SAME scene with different wording or fewer constraints, keeping the essential subject. Never concatenate these queries.
+- Keep search_keywords as concrete subject/action/setting tags for uploaded-asset matching. Avoid vague themes like success, innovation, business, lifestyle, or growth without a visible subject.
+- Give different image slots distinct scenes grounded in their own copy, not the same keywords rearranged. A soil-checking slide might search ["hands testing garden soil", "gardener holding soil"]; a watering slide ["watering vegetable plant roots", "garden drip irrigation"]. Neither should search "nature growth green".
+- Avoid marketing slogans, camera jargon, and long image-generation prompts in stock queries. Generic stock is appropriate only when it accurately illustrates the message, not as evidence of a named brand product, team, or event.
+- When needs_visual is false, preferred_source must be none and both search arrays must be empty. When preferred_source is none, needs_visual must be false.
+
 Return ONLY valid JSON. No markdown, no explanation.`
 
-function buildPlannerPrompt(copyJson: string, brandJson: string): string {
+function buildPlannerPrompt(copyJson: string, brandJson: string, ideaJson: string): string {
   return `Analyse this Instagram post content and produce the visual asset plan.
 
 BRAND:
@@ -96,6 +122,9 @@ ${brandJson}
 
 POST CONTENT:
 ${copyJson}
+
+POST BRIEF:
+${ideaJson}
 
 Return exactly this structure:
 {
@@ -106,6 +135,7 @@ Return exactly this structure:
       "needs_visual": true,
       "visual_purpose": "...",
       "search_keywords": ["keyword1", "keyword2"],
+      "search_queries": ["concrete subject action", "subject alternative setting wording"],
       "preferred_source": "uploaded_asset",
       "source_reason": "..."
     }
@@ -169,7 +199,7 @@ export async function handlePlanAssets(db: any, body: any) {
     const model = await getGroqModel(groq)
 
     const copyJson  = JSON.stringify(copy,  null, 2)
-    const brandJson = JSON.stringify(brandContext ?? {}, null, 2)
+    const brandJson = JSON.stringify(brandContext ?? {}, (key, value) => key === 'logoVariants' ? undefined : value, 2)
 
     // Call AI to determine visual slots
     let raw: string | null = null
@@ -179,9 +209,9 @@ export async function handlePlanAssets(db: any, body: any) {
           model,
           messages: [
             { role: 'system', content: SYSTEM_PROMPT },
-            { role: 'user',   content: buildPlannerPrompt(copyJson, brandJson) },
+            { role: 'user',   content: buildPlannerPrompt(copyJson, brandJson, JSON.stringify(idea)) },
           ],
-          max_tokens: 2000,
+          max_tokens: 4500,
           temperature: 0.3,
         })
         raw = res.choices[0]?.message?.content?.trim() ?? null
@@ -219,7 +249,10 @@ export async function handlePlanAssets(db: any, body: any) {
 
     // Enrich each slot with ranked candidates from the asset library
     const slots: VisualSlot[] = aiSlots.map((s: any) => {
-      const keywords: string[] = Array.isArray(s.search_keywords) ? s.search_keywords : []
+      const needsVisual = s.needs_visual === true && ['uploaded_asset', 'unsplash', 'ai_generated'].includes(s.preferred_source)
+      const cleanTerms = (value: any): string[] => Array.isArray(value)
+        ? Array.from(new Set<string>(value.filter((v: any) => typeof v === 'string').map((v: string) => v.trim().toLowerCase()).filter(Boolean))) : []
+      const keywords = needsVisual ? cleanTerms(s.search_keywords).slice(0, 8) : []
       const candidates = s.needs_visual && s.preferred_source === 'uploaded_asset'
         ? findCandidates(uploadedAssets, keywords)
         : []
@@ -227,10 +260,14 @@ export async function handlePlanAssets(db: any, body: any) {
       return {
         slot_id:          s.slot_id        ?? 'slot',
         slot_label:       s.slot_label     ?? s.slot_id,
-        needs_visual:     s.needs_visual   ?? false,
+        needs_visual:     needsVisual,
+        treatment: s.treatment === 'environmental' ? 'environmental' : 'isolated_subject',
+        subject_description: typeof s.subject_description === 'string' ? s.subject_description.slice(0, 500) : '',
+        generation_prompt: typeof s.generation_prompt === 'string' ? s.generation_prompt.slice(0, 2500) : '',
         visual_purpose:   s.visual_purpose ?? '',
         search_keywords:  keywords,
-        preferred_source: s.preferred_source ?? 'none',
+        search_queries:   needsVisual ? cleanTerms(s.search_queries).slice(0, 3) : [],
+        preferred_source: needsVisual ? s.preferred_source : 'none',
         source_reason:    s.source_reason   ?? '',
         candidates,
         selected:         candidates[0] ?? null,

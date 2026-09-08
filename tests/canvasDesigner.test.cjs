@@ -5,8 +5,9 @@ const vm = require('node:vm')
 const { stripTypeScriptTypes } = require('node:module')
 const source = fs.readFileSync(require('node:path').join(__dirname, '../lib/handlers/canvasDesignerHandler.ts'), 'utf8')
   .replace(/^import .*$/gm, '').replace('export async function', 'async function')
-const engine = vm.runInNewContext(stripTypeScriptTypes(source) + '\n({validateDesignSpec,renderDesignSpec,fitText,fitTextLayout,normalizeDesignSystem,buildStrategyPalette,ensureContrast,contrastRatio,parseArtDirection,buildSingleCanvas,buildCarouselCanvas,buildPrompt,handleDesignCanvas})', {
-  uuidv4: require('node:crypto').randomUUID, console, process: { env: {} },
+const copyTools = vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname, '../lib/services/copyText.ts'), 'utf8').replace(/export /g, '')) + '\n({withoutEmoji,cleanCopy})')
+const engine = vm.runInNewContext(stripTypeScriptTypes(source) + '\n({validateDesignSpec,renderDesignSpec,fitText,fitTextLayout,normalizeDesignSystem,buildStrategyPalette,ensureContrast,contrastRatio,parseArtDirection,buildSingleCanvas,buildCarouselCanvas,buildPrompt,handleDesignCanvas,designIssues})', {
+  withoutEmoji: copyTools.withoutEmoji, prepareSubjectAssets: async (db, plan) => plan, uuidv4: require('node:crypto').randomUUID, console, process: { env: {} },
   NextResponse: { json: (body, options) => ({ body, status: options?.status ?? 200 }) }, corsify: response => response,
 })
 test('global art direction supplies consistent typography, palette, and visual defaults', () => {
@@ -124,7 +125,9 @@ test('image-backed copy gets a contrast surface; decoration cannot hide text', (
   const d = direction({ ...spec, background: { type: 'image' }, elements: [text, { type: 'ring', x: 700, y: 100, width: 100, height: 100, layer: 20 }] }).slides[0]
   const result = engine.renderDesignSpec(d.design, { d, headline: 'Title', body: '', cta: '', eyebrow: '', imageUrl: slot.resolvedAsset.url })
   assert.equal(result.nodes.at(-1).type, 'text')
-  assert.equal(result.nodes.at(-2).type, 'shape')
+  assert.equal(result.nodes.at(-2).type, 'gradient')
+  assert.equal(result.nodes.at(-2).stops[1].alpha, 100)
+  assert.equal(result.nodes.at(-2).stops[2].alpha, 100)
   assert.equal(result.nodes.find(n => n.shape === 'ellipse').fill, '#00000000')
 })
 test('carousel matches slot IDs even when AI reorders slides', () => {
@@ -149,4 +152,126 @@ test('fallback preserves all supplied copy', () => {
   const d = engine.parseArtDirection('{}', plan, {})
   const canvas = engine.buildSingleCanvas(copy, plan, d, 'Fallback')
   for (const value of Object.values(copy)) assert.ok(canvas.nodes.some(n => n.text === value))
+})
+
+test('brand brief, fonts and secondary colors survive art direction', () => {
+  const brand = { name: 'Studio', description: 'Playful ceramics', audience: 'Collectors', colors: ['#b84324','#386c5f'], fonts: ['Lato','Oswald'] }
+  const prompt = JSON.parse(engine.buildPrompt(brand, { headline: 'Title' }, plan))
+  assert.equal(prompt.brand.description, brand.description)
+  assert.equal(prompt.brand.audience, brand.audience)
+  const dir = engine.parseArtDirection(JSON.stringify({ global: { typography: { heading: 'Poppins' } }, slides: [spec] }), plan, brand)
+  assert.equal(dir.slides[0].heading_font, 'Lato')
+  assert.equal(dir.slides[0].body_font, 'Oswald')
+  assert.equal(dir.slides[0].palette.accent, '#386c5f')
+})
+test('detects repeated geometry and accepts substantially different compositions', () => {
+  const carousel = { format: 'carousel', slots: [slot, { ...slot, slot_id: 'two' }] }
+  const copy = { slides: [{ headline: 'One' }, { headline: 'Two' }] }
+  const repeated = engine.parseArtDirection(JSON.stringify({ slides: [spec, { ...spec, slot_id: 'two' }] }), carousel, {})
+  assert.ok(engine.designIssues(repeated, copy, carousel).some(issue => issue.includes('too similar')))
+  const varied = engine.parseArtDirection(JSON.stringify({ slides: [spec, { ...spec, slot_id: 'two', palette_variant: 'brand', elements: [{ ...text, x: 400, y: 450, width: 600 }, { ...text, role: 'eyebrow', x: 80, y: 80, width: 200, height: 60 }] }] }), carousel, { colors: ['#b84324'] })
+  assert.equal(engine.designIssues(varied, copy, carousel).length, 0)
+  assert.equal(varied.slides[1].palette.bg, varied.slides[0].palette.bg)
+})
+
+test('readable tonal gradients do not acquire hard text panels', () => {
+  const d = direction({ ...spec, background: { type: 'gradient', color: 'bg', to: 'surface' } }).slides[0]
+  d.palette.bg = '#081c12'; d.palette.surface = '#183c29'; d.palette.text = '#e6f3e9'
+  const result = engine.renderDesignSpec(d.design, { d, headline: 'Make your next move', body: '', cta: '', eyebrow: '' })
+  assert.equal(result.nodes.length, 2)
+  assert.equal(result.nodes[0].type, 'gradient')
+  assert.equal(result.nodes[1].type, 'text')
+})
+test('missing AI produces a layered photo-led fallback with all supplied copy', () => {
+  const d = engine.parseArtDirection('{}', plan, { colors: ['#3b7a44'] })
+  const copy = { headline: 'Make your next move', supportingText: 'Build something meaningful.', cta: 'Find out more' }
+  const canvas = engine.buildSingleCanvas(copy, plan, d, 'Social')
+  assert.ok(canvas.nodes.some(n => n.type === 'image' && n.height >= 300))
+  assert.ok(canvas.nodes.some(n => n.type === 'gradient' || n.type === 'shape'))
+  assert.ok(canvas.nodes.some(n => n.type === 'shape'))
+  for (const content of Object.values(copy)) assert.ok(canvas.nodes.some(n => n.text === content))
+})
+
+test('transparent subject is contained without cropping and cannot be covered by headline', () => {
+  const subject = { url: '/api/uploads/subject-test', width: 400, height: 800 }
+  const subjectPlan = { ...plan, slots: [{ ...slot, resolvedAsset: { ...slot.resolvedAsset, subject } }] }
+  const specWithSubject = { ...spec, elements: [text, { type: 'image', image_variant: 'subject', assetId: 'one', x: 600, y: 100, width: 400, height: 800 }] }
+  const d = engine.parseArtDirection(JSON.stringify({ slides: [specWithSubject] }), subjectPlan, {}).slides[0]
+  const input = { d, subject, headline: 'Title', body: '', cta: '', eyebrow: '', imageUrl: slot.resolvedAsset.url }
+  const result = engine.renderDesignSpec(d.design, input)
+  const image = result.nodes.find(n => n.src === subject.url)
+  assert.ok(image)
+  assert.equal(image.width / image.height, .5)
+  assert.equal(image.mask, 'none')
+  d.design.elements[0].x = 650
+  assert.throws(() => engine.renderDesignSpec(d.design, input), /foreground subject/)
+})
+
+test('emoji removal preserves ordinary numbered steps and Portuguese accents', () => {
+  assert.equal(copyTools.withoutEmoji('1\ufe0f\u20e3 Criar \ud83d\ude80 2\ufe0f\u20e3 A\u00e7\u00e3o'), '1 Criar 2 A\u00e7\u00e3o')
+  const prompt = JSON.parse(engine.buildPrompt({}, { headline: 'Hello \ud83d\ude80', cta: 'Go \u2705' }, plan))
+  assert.equal(prompt.slides[0].headline, 'Hello'); assert.equal(prompt.slides[0].cta, 'Go')
+})
+test('image-free fallback varies hierarchy while retaining the campaign palette', () => {
+ const plan = { format: 'carousel', slots: [0,1,2].map(i => ({slot_id:String(i),resolvedAsset:null})) }
+ const copy = { slides: plan.slots.map(() => ({headline:'Build your next idea',body:'A clear supporting message.'})) }
+ const dir = engine.parseArtDirection('{}',plan,{colors:['#23764b','#96c54b'],fonts:['Inter']})
+ const canvas = engine.buildCarouselCanvas(copy,plan,dir,'Diverse')
+ assert.equal(new Set(canvas.pages.map(p => p.background)).size,1)
+ assert.equal(new Set(canvas.pages.map(p => {const n=p.nodes.find(n=>n.text==='Build your next idea');return [n.x,n.y,n.width].join(',')})).size,3)
+ assert.ok(canvas.pages.every(p => !p.nodes.some(n=>n.type==='shape' && n.width>300 && n.height>300)))
+})
+
+test('one slide can combine only trusted assets from the campaign', () => {
+ const portrait = {url:'/api/uploads/portrait',width:400,height:700}
+ const plan2 = {format:'carousel',slots:[slot,{slot_id:'two',resolvedAsset:{url:'https://example.com/product.png',subject:portrait}}]}
+ const design = {...spec,elements:[text,{type:'image',assetId:'two',image_variant:'subject',x:620,y:300,width:360,height:630},{type:'grid',x:600,y:450,width:400,height:500}]}
+ const dir=engine.parseArtDirection(JSON.stringify({global:{visual_theme:'technical'},slides:[design,{...spec,slot_id:'two'}]}),plan2,{})
+ const d=dir.slides[0]
+ assert.equal(d.design.elements.find(e=>e.type==='image').imageVariant,'subject')
+ const rendered=engine.renderDesignSpec(d.design,{d,headline:'Title',body:'',eyebrow:'',cta:'',imageUrl:slot.resolvedAsset.url,assets:Object.fromEntries(plan2.slots.map(s=>[s.slot_id,s.resolvedAsset]))})
+ assert.ok(rendered.nodes.some(n=>n.src===portrait.url))
+ assert.ok(rendered.nodes.filter(n=>n.type==='shape').length>5)
+})
+test('campaign themes create distinct stages while preserving brand anchors', () => {
+ const colors = ['#8b2338','#df5972']
+ const backgrounds = new Set()
+ for(const visual_theme of ['atmospheric','studio','vibrant']) {
+  const system=engine.normalizeDesignSystem({visual_theme})
+  const palette=engine.buildStrategyPalette(colors,system)
+  assert.equal(palette.primary,colors[0]);assert.equal(palette.accent,colors[1])
+  backgrounds.add(palette.bg)
+ }
+ assert.equal(backgrounds.size,3)
+})
+
+test('later readability surfaces cannot cover earlier copy', () => {
+  const d = direction({ ...spec, background: { type: 'image' }, elements: [text, { ...text, role: 'body', x: 610, y: 390, width: 380, height: 300 }] }).slides[0]
+  const result = engine.renderDesignSpec(d.design, { d, headline: 'Title', body: 'Supporting explanation', cta: '', eyebrow: '', imageUrl: slot.resolvedAsset.url })
+  const firstCopy = result.nodes.findIndex(n => n.type === 'text')
+  assert.ok(firstCopy > 0)
+  assert.ok(result.nodes.slice(firstCopy).every(n => n.type === 'text'))
+})
+test('different posts receive diverse campaign concepts, stable within a post', () => {
+  const concepts = new Set()
+  for (let i = 0; i < 30; i++) {
+    const p = { ...plan, post_id: 'post-' + i }
+    const a = JSON.parse(engine.buildPrompt({}, {}, p)).design_brief.campaign_concept
+    assert.equal(a, JSON.parse(engine.buildPrompt({}, {}, p)).design_brief.campaign_concept)
+    concepts.add(a)
+  }
+  assert.ok(concepts.size >= 5)
+})
+
+test('successive posts avoid the five most recent campaign directions', async () => {
+  const saved = []
+  const db = { collection: () => ({
+    find: () => ({ sort: () => ({ limit: () => ({ toArray: async () => saved.slice(-5).reverse() }) }) }),
+    insertOne: async value => saved.push(value),
+  }) }
+  for (let i = 0; i < 6; i++) {
+    const result = await engine.handleDesignCanvas(db, { brandContext: { name: 'Campaign test', colors: ['#35724c'] }, copy: { headline: 'A new idea', supportingText: 'A short explanation.' }, resolvedPlan: { ...plan, post_id: 'post-' + i } })
+    assert.equal(result.status, 200)
+  }
+  assert.equal(new Set(saved.map(c => c.designCampaign.index)).size, 6)
 })

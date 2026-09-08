@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { corsify } from '@/lib/services/middleware'
+import { generateLogoVariants } from '@/lib/services/logoVariants'
 
 export async function handleExtractBusinessInfo(body: any) {
   try {
@@ -21,6 +22,10 @@ export async function handleExtractBusinessInfo(body: any) {
     // Call the extractor with the provided URL
     const businessInfo = await extractBusinessInfo(url)
 
+    if (businessInfo.logo) {
+      try { businessInfo.logoVariants = await generateLogoVariants(businessInfo.logo) }
+      catch (error: any) { businessInfo.logoVariantsError = error.message }
+    }
     return corsify(NextResponse.json(businessInfo))
   } catch (error: any) {
     console.error('Business info extraction error:', error)

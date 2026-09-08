@@ -11,7 +11,8 @@ async function publicUrl(value: string): Promise<URL> {
   const hostname = url.hostname.replace(/^\[|\]$/g, '')
   const addresses = isIP(hostname) ? [{ address: hostname }] : await lookup(hostname, { all: true })
   if (!addresses.length || addresses.some(({ address }) => {
-    // Conservatively decline IPv6, including IPv4-mapped private addresses.
+    // Accept global unicast IPv6, while excluding local, mapped and documentation ranges.
+    if (isIP(address) === 6) return !/^[23][0-9a-f]{3}:/i.test(address) || /^2001:0?db8:/i.test(address)
     if (isIP(address) !== 4) return true
     const [a, b] = address.split('.').map(Number)
     return a === 0 || a === 10 || a === 127 || a >= 224 || (a === 169 && b === 254) || (a === 172 && b >= 16 && b <= 31) || (a === 192 && b === 168) || (a === 100 && b >= 64 && b <= 127)
@@ -19,9 +20,9 @@ async function publicUrl(value: string): Promise<URL> {
   return url
 }
 
-async function downloadLogo(src: string): Promise<Buffer> {
+export async function downloadLogo(src: string, maxBytes = MAX_BYTES, timeoutMs = 4000): Promise<Buffer> {
   let target = src
-  const signal = AbortSignal.timeout(4000)
+  const signal = AbortSignal.timeout(timeoutMs)
   for (let hop = 0; hop < 4; hop++) {
     const url = await publicUrl(target)
     const response = await fetch(url, { redirect: 'manual', signal })
@@ -41,7 +42,7 @@ async function downloadLogo(src: string): Promise<Buffer> {
         const { done, value } = await reader.read()
         if (done) break
         size += value.length
-        if (size > MAX_BYTES) throw new Error('Logo too large')
+        if (size > maxBytes) throw new Error('Image too large')
         chunks.push(Buffer.from(value))
       }
     } finally { await reader.cancel() }
@@ -96,6 +97,7 @@ export async function prepareLogo(src: string): Promise<PreparedLogo | null> {
 
 export async function containPreparedLogo(logo: PreparedLogo, width: number, height: number): Promise<string> {
   const png = await sharp(Buffer.from(logo.src.split(',')[1], 'base64'))
+    .trim({ background: '#00000000', threshold: 8 })
     .resize(Math.max(1, Math.round(width)), Math.max(1, Math.round(height)), { fit: 'contain', background: '#00000000' }).png().toBuffer()
   return `data:image/png;base64,${png.toString('base64')}`
 }

@@ -1,3 +1,4 @@
+import { cleanCopy } from '@/lib/services/copyText'
 import { NextResponse } from 'next/server'
 import { corsify } from '@/lib/services/middleware'
 import Groq from 'groq-sdk'
@@ -33,7 +34,7 @@ IMPORTANT RULES:
 * Avoid generic AI-sounding phrases.
 * Avoid exaggerated marketing language.
 * Avoid clickbait.
-* Avoid unnecessary emojis.
+* Never use emojis or emoji number/keycap symbols. Use ordinary numbers and punctuation.
 * Avoid excessive use of exclamation marks.
 * Avoid repetitive phrases.
 * Avoid unnecessarily complicated language.
@@ -183,7 +184,7 @@ export async function handleGenerateCopywriting(body: any) {
     const groq = new Groq({ apiKey })
     const model = await getGroqModel(groq)
 
-    const brandJson = JSON.stringify(brandContext, null, 2)
+    const brandJson = JSON.stringify(brandContext, (key, value) => key === 'logoVariants' ? undefined : value, 2)
     const briefJson = JSON.stringify(idea, null, 2)
     const userPrompt = buildUserPrompt(brandJson, briefJson)
 
@@ -227,7 +228,7 @@ export async function handleGenerateCopywriting(body: any) {
       return corsify(NextResponse.json({ error: 'AI returned invalid JSON', raw: cleaned }, { status: 500 }))
     }
 
-    return corsify(NextResponse.json(parsed))
+    return corsify(NextResponse.json(cleanCopy(parsed)))
   } catch (error: any) {
     console.error('Copywriting generation error:', error)
     return corsify(

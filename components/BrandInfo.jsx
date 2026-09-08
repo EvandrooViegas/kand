@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import LogoVariants from '@/components/LogoVariants'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -32,6 +33,7 @@ export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSel
             name:     bc.name     || '',
             about:    bc.about    || '',
             logo:     bc.logo     || '',
+            logoVariants: bc.logoVariants || null,
             language: bc.language || '',
             colors:   bc.colors   || [],
             fonts:    bc.fonts    || [],
@@ -133,6 +135,7 @@ export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSel
       }
 
       const data = await response.json()
+      if (data.logoVariantsError) toast.warning(data.logoVariantsError)
       
       // Mark all steps as completed
       setExtractionProgress(prev => prev.map(p => ({ ...p, completed: true })))
@@ -144,6 +147,7 @@ export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSel
           about: data.about || '',
           language: data.language || 'unknown',
           logo: data.logo || '',
+          logoVariants: data.logoVariants || null,
           colors: data.designSystem?.colors || [],
           fonts: data.designSystem?.fonts || [],
         })
@@ -249,6 +253,7 @@ export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSel
             name: extractedData.name,
             about: extractedData.about,
             logo: extractedData.logo,
+            logoVariants: extractedData.logoVariants?.source === extractedData.logo ? extractedData.logoVariants : null,
             language: extractedData.language,
             colors: extractedData.colors,
             fonts: extractedData.fonts,
@@ -440,6 +445,7 @@ export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSel
                 />
               </div>
 
+              <LogoVariants key={String(flowId) + extractedData.logo} logo={extractedData.logo} variants={extractedData.logoVariants} onChange={variants => setExtractedData(prev => prev.logo === variants.source ? { ...prev, logoVariants: variants } : prev)} />
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Label htmlFor="logo" className="text-sm font-medium mb-2 block">

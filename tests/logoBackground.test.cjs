@@ -32,3 +32,11 @@ test('invalid images and non-public downloads fail safely', async () => {
   assert.equal(await service.prepareLogo('http://127.0.0.1/logo.png'), null)
   await assert.rejects(service.removeFlatLogoBackground(Buffer.from('not an image')))
 })
+
+test('dual-stack public image hosts are accepted; private IPv6 stays blocked', async () => {
+  const check = addresses => vm.runInNewContext(stripTypeScriptTypes(source) + '\n({publicUrl})', {
+    URL, isIP: require('node:net').isIP, lookup: async () => addresses.map(address => ({ address })),
+  }).publicUrl('https://images.example/photo')
+  await check(['146.75.90.208', '2a04:4e42:86::720'])
+  for (const address of ['::1', 'fc00::1', 'fe80::1', '::ffff:127.0.0.1', '2001:db8::1']) await assert.rejects(check([address]), /Non-public/)
+})

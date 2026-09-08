@@ -1,3 +1,5 @@
+const { PHASE_DEVELOPMENT_SERVER } = require('next/constants');
+
 const nextConfig = {
   output: 'standalone',
   images: {
@@ -71,4 +73,8 @@ const nextConfig = {
   },
 };
 
-module.exports = nextConfig;
+module.exports = (phase) => ({
+  ...nextConfig,
+  // Keep production builds from replacing chunks used by a running dev server.
+  distDir: phase === PHASE_DEVELOPMENT_SERVER ? '.next-dev' : '.next',
+});

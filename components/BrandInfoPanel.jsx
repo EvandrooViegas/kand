@@ -1,6 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import LogoVariants from '@/components/LogoVariants'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -63,6 +64,7 @@ export default function BrandInfoPanel({ flowId, flows = [], onFlowCreated }) {
             name:     bc.name     || '',
             about:    bc.about    || '',
             logo:     bc.logo     || '',
+            logoVariants: bc.logoVariants || null,
             language: bc.language || '',
             colors:   bc.colors   || [],
             fonts:    bc.fonts    || [],
@@ -106,10 +108,12 @@ export default function BrandInfoPanel({ flowId, flows = [], onFlowCreated }) {
         throw new Error(e.error || 'Extraction failed')
       }
       const d = await res.json()
+      if (d.logoVariantsError) toast.warning(d.logoVariantsError)
       setData({
         name:     d.name                  || '',
         about:    d.about                 || '',
         logo:     d.logo                  || '',
+        logoVariants: d.logoVariants || null,
         language: d.language              || '',
         colors:   d.designSystem?.colors  || [],
         fonts:    d.designSystem?.fonts   || [],
@@ -169,6 +173,7 @@ export default function BrandInfoPanel({ flowId, flows = [], onFlowCreated }) {
             name:     data.name,
             about:    data.about,
             logo:     data.logo,
+            logoVariants: data.logoVariants?.source === data.logo ? data.logoVariants : null,
             language: data.language,
             colors:   data.colors,
             fonts:    data.fonts,
@@ -236,6 +241,7 @@ export default function BrandInfoPanel({ flowId, flows = [], onFlowCreated }) {
           </div>
         ) : (
           <div className="px-4 py-4 space-y-5">
+              <LogoVariants key={String(flowId) + data.logo} logo={data.logo} variants={data.logoVariants} onChange={variants => setData(prev => prev.logo === variants.source ? { ...prev, logoVariants: variants } : prev)} />
 
             {/* ── Identity block ── */}
             <div className="flex items-start gap-3">

@@ -20,6 +20,7 @@
  *   none           → resolvedAsset: null (typography-only slot)
  */
 
+import { prepareSubjectAssets } from '@/lib/services/subjectAssets'
 import { NextResponse } from 'next/server'
 import { corsify } from '@/lib/services/middleware'
 import type { AssetPlan, VisualSlot } from './assetPlannerHandler'
@@ -29,6 +30,7 @@ import type { AssetPlan, VisualSlot } from './assetPlannerHandler'
 export type AssetSource = 'uploaded_asset' | 'unsplash' | 'ai_generated' | 'none'
 
 export interface ResolvedAsset {
+  subject?: { url: string; width: number; height: number }
   source:        AssetSource
   url:           string
   thumbnail_url: string
@@ -43,6 +45,7 @@ export interface ResolvedAsset {
 }
 
 export interface ResolvedSlot {
+  treatment?: 'isolated_subject' | 'environmental'
   slot_id:       string
   slot_label:    string
   needs_visual:  boolean
@@ -55,6 +58,7 @@ export interface ResolvedSlot {
 }
 
 export interface ResolvedAssetPlan {
+  campaign_index?: number
   post_id: string
   format:  string
   slots:   ResolvedSlot[]
@@ -65,40 +69,58 @@ export interface ResolvedAssetPlan {
 const UNSPLASH_API = 'https://api.unsplash.com'
 
 async function searchUnsplash(
-  keywords: string[],
+  slot: VisualSlot,
   accessKey: string,
+  usedPhotoIds: Set<string>,
 ): Promise<ResolvedAsset | null> {
-  const query = keywords.slice(0, 5).join(' ')
-  const url   = `${UNSPLASH_API}/search/photos?query=${encodeURIComponent(query)}&per_page=5&orientation=squarish`
+  const clean = (values: unknown): string[] => Array.isArray(values)
+    ? values.filter((v): v is string => typeof v === 'string' && !!v.trim()).map(v => v.trim()) : []
+  const explicit = clean(slot.search_queries)
+  const queries = [...new Set(explicit.length ? explicit : [clean(slot.search_keywords).slice(0, 5).join(' ')])].filter(Boolean).slice(0, 3)
+  for (const query of queries) {
+    const url   = `${UNSPLASH_API}/search/photos?query=${encodeURIComponent(query)}&per_page=20`
 
-  let data: any
-  try {
-    const res = await fetch(url, {
-      headers: { Authorization: `Client-ID ${accessKey}` },
-    })
-    if (!res.ok) {
-      console.error(`[resolver] Unsplash ${res.status} for query "${query}"`)
+    let data: any
+    try {
+      const res = await fetch(url, {
+        headers: { Authorization: `Client-ID ${accessKey}` },
+      })
+      if (!res.ok) {
+        console.error(`[resolver] Unsplash ${res.status} for query "${query}"`)
+        return null
+      }
+      data = await res.json()
+    } catch (err: any) {
+      console.error('[resolver] Unsplash fetch error:', err?.message)
       return null
     }
-    data = await res.json()
-  } catch (err: any) {
-    console.error('[resolver] Unsplash fetch error:', err?.message)
-    return null
-  }
 
-  const photo = data?.results?.[0]
-  if (!photo) return null
+    const candidates = (Array.isArray(data?.results) ? data.results : [])
+      .filter((photo: any) => photo.id && (photo.urls?.regular || photo.urls?.full) && !usedPhotoIds.has(photo.id))
+      .slice(0, 20)
+    if (!candidates.length) continue
+    // Rank subject relevance; reserve before another slot resumes.
+    const terms = clean(slot.search_keywords).join(' ').toLowerCase().split(/\W+/).filter(t => t.length > 2)
+    const score = (photo: any) => {
+      const description = [photo.alt_description, photo.description, ...(photo.tags ?? []).map((t: any) => t.title)].join(' ').toLowerCase()
+      return terms.filter(term => description.includes(term)).length + (slot.treatment === 'isolated_subject'
+        ? (/portrait|isolated|single|studio|close.up/.test(description) ? 3 : 0) - (/crowd|group of|aerial|skyline|landscape/.test(description) ? 6 : 0) : 0)
+    }
+    const photo = candidates.sort((a: any, b: any) => score(b) - score(a))[0]
+    usedPhotoIds.add(photo.id)
 
-  return {
-    source:        'unsplash',
-    url:           photo.urls?.regular ?? photo.urls?.full ?? '',
-    thumbnail_url: photo.urls?.thumb   ?? photo.urls?.small ?? '',
-    width:         photo.width         ?? 1080,
-    height:        photo.height        ?? 1080,
-    asset_id:      null,
-    unsplash_id:   photo.id            ?? null,
-    alt:           photo.alt_description ?? photo.description ?? keywords.join(', '),
+    return {
+      source:        'unsplash',
+      url:           photo.urls?.regular ?? photo.urls?.full ?? '',
+      thumbnail_url: photo.urls?.thumb   ?? photo.urls?.small ?? '',
+      width:         photo.width         ?? 1080,
+      height:        photo.height        ?? 1080,
+      asset_id:      null,
+      unsplash_id:   photo.id            ?? null,
+      alt:           photo.alt_description ?? photo.description ?? slot.visual_purpose,
+    }
   }
+  return null
 }
 
 // ─── AI image generation ──────────────────────────────────────────────────────
@@ -217,7 +239,9 @@ async function generateImage(
   keywords: string[],
   falKey: string | null,
 ): Promise<ResolvedAsset | null> {
-  const prompt = [visualPurpose, ...keywords.slice(0, 4)].join(', ')
+  const prompt = [visualPurpose, ...keywords.slice(0, 4),
+    'Professional campaign photography or polished conceptual product render as described. One clear focal subject, complete silhouette, no clipped head or hands, no text, no watermark, no invented logos. If an isolated subject is requested, use a plain contrasting studio background, never a checkerboard pattern; background removal is performed separately.',
+  ].join(', ')
 
   // Try fal.ai first when a key is present
   if (falKey) {
@@ -314,8 +338,10 @@ async function resolveSlot(
   brand_id: string | null,
   unsplashKey: string | null,
   falKey: string | null,
+  usedPhotoIds: Set<string>,
 ): Promise<ResolvedSlot> {
   const base: Omit<ResolvedSlot, 'resolvedAsset' | 'warning'> = {
+    treatment:     slot.treatment,
     slot_id:       slot.slot_id,
     slot_label:    slot.slot_label,
     needs_visual:  slot.needs_visual,
@@ -335,7 +361,7 @@ async function resolveSlot(
       // No uploaded asset found — cascade to Unsplash, then AI generation
       console.warn(`[resolver] ${slot.slot_id}: no uploaded asset, trying Unsplash`)
       if (unsplashKey) {
-        const unsplashAsset = await searchUnsplash(slot.search_keywords ?? [], unsplashKey)
+        const unsplashAsset = await searchUnsplash(slot, unsplashKey, usedPhotoIds)
         if (unsplashAsset) {
           return {
             ...base,
@@ -347,7 +373,7 @@ async function resolveSlot(
       }
 
       console.warn(`[resolver] ${slot.slot_id}: Unsplash also failed, trying AI generation`)
-      const aiAsset = await generateImage(slot.visual_purpose, slot.search_keywords ?? [], falKey)
+      const aiAsset = await generateImage([slot.generation_prompt || slot.visual_purpose, slot.subject_description, slot.treatment === 'isolated_subject' ? 'One complete isolated subject on a plain contrasting background, no scenery, no panels, no collage' : ''].filter(Boolean).join('. '), slot.search_keywords ?? [], falKey)
       return {
         ...base,
         source:        aiAsset ? 'ai_generated' : slot.preferred_source,
@@ -362,7 +388,7 @@ async function resolveSlot(
       if (!unsplashKey) {
         return { ...base, resolvedAsset: null, warning: 'UNSPLASH_ACCESS_KEY not configured' }
       }
-      const asset = await searchUnsplash(slot.search_keywords ?? [], unsplashKey)
+      const asset = await searchUnsplash(slot, unsplashKey, usedPhotoIds)
       return {
         ...base,
         resolvedAsset: asset,
@@ -371,7 +397,7 @@ async function resolveSlot(
     }
 
     case 'ai_generated': {
-      const asset = await generateImage(slot.visual_purpose, slot.search_keywords ?? [], falKey)
+      const asset = await generateImage([slot.generation_prompt || slot.visual_purpose, slot.subject_description, slot.treatment === 'isolated_subject' ? 'One complete isolated subject on a plain contrasting background, no scenery, no panels, no collage' : ''].filter(Boolean).join('. '), slot.search_keywords ?? [], falKey)
       return {
         ...base,
         resolvedAsset: asset,
@@ -399,10 +425,11 @@ export async function handleResolveAssets(db: any, body: any) {
     const unsplashKey = process.env.UNSPLASH_ACCESS_KEY ?? null
     const falKey      = process.env.FAL_KEY             ?? null
 
-    // Resolve all slots concurrently — each resolution is independent
+    // Shared synchronous reservations prevent duplicate photos across concurrent slots.
+    const usedPhotoIds = new Set<string>()
     const slots: ResolvedSlot[] = await Promise.all(
       plan.slots.map(slot =>
-        resolveSlot(db, slot, brand_id ?? null, unsplashKey, falKey)
+        resolveSlot(db, slot, brand_id ?? null, unsplashKey, falKey, usedPhotoIds)
       )
     )
 
@@ -412,7 +439,7 @@ export async function handleResolveAssets(db: any, body: any) {
       slots,
     }
 
-    return corsify(NextResponse.json(result))
+    return corsify(NextResponse.json(await prepareSubjectAssets(db, result)))
   } catch (error: any) {
     console.error('[resolver] error:', error)
     return corsify(

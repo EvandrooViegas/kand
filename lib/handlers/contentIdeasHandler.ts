@@ -144,7 +144,7 @@ export async function handleGenerateContentIdeas(body: any) {
       // stick with default
     }
 
-    const brandJson = JSON.stringify(brandContext, null, 2)
+    const brandJson = JSON.stringify(brandContext, (key, value) => key === 'logoVariants' ? undefined : value, 2)
     const userPrompt = buildUserPrompt(brandJson)
 
     const response = await groq.chat.completions.create({
