@@ -192,46 +192,27 @@ async function generateImageFal(
 }
 
 async function generateImagePollinations(prompt: string): Promise<ResolvedAsset | null> {
-  try {
-    const encoded = encodeURIComponent(prompt)
-    const url     = `https://image.pollinations.ai/prompt/${encoded}?width=1024&height=1024&nologo=true&model=flux`
+  const key = process.env.POLLINATIONS_API_KEY
+  if (!key) throw new Error('Pollinations: POLLINATIONS_API_KEY is not configured')
+  return requestGeneratedImage('Pollinations', 'https://gen.pollinations.ai/image/'+encodeURIComponent(prompt)+'?model=flux&width=1024&height=1024&seed='+Math.floor(Math.random()*2147483647), {method:'GET',headers:{Authorization:'Bearer '+key}},prompt)
+}
 
-    // GET with a generous timeout — Pollinations generates synchronously,
-    // the response body is the image itself. We just need to confirm it arrives.
-    const controller = new AbortController()
-    const timeout    = setTimeout(() => controller.abort(), 60_000)
+async function requestGeneratedImage(provider: string, url: string, options: any, prompt: string): Promise<ResolvedAsset> {
+  const res = await fetch(url,{...options,signal:AbortSignal.timeout(90000)})
+  if (!res.ok) { await res.body?.cancel(); throw new Error(provider+': HTTP '+res.status+(res.status===401||res.status===403?' (check token/model access)':res.status===429?' (rate limit)':res.status===402?' (credits exhausted)':'')) }
+  if (!res.headers.get('content-type')?.startsWith('image/')) {await res.body?.cancel();throw new Error(provider+': response was not an image')}
+  const reader=res.body!.getReader(), chunks:Uint8Array[]=[]
+  let size=0
+  try {while(true){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>6*1024*1024)throw new Error(provider+': image exceeds size limit');chunks.push(value)}}finally{await reader.cancel()}
+  const bytes=Buffer.concat(chunks)
+  const src='data:'+res.headers.get('content-type')!.split(';')[0]+';base64,'+bytes.toString('base64')
+  return {source:'ai_generated',url:src,thumbnail_url:src,width:1024,height:1024,asset_id:null,unsplash_id:null,alt:prompt}
+}
 
-    let contentType = ''
-    try {
-      const res = await fetch(url, { signal: controller.signal })
-      clearTimeout(timeout)
-      contentType = res.headers.get('content-type') ?? ''
-      if (!res.ok || !contentType.startsWith('image/')) {
-        console.error('[resolver] Pollinations bad response:', res.status, contentType)
-        return null
-      }
-      // Drain the body so the generation is confirmed complete
-      await res.arrayBuffer()
-    } catch (err: any) {
-      clearTimeout(timeout)
-      console.error('[resolver] Pollinations fetch error:', err?.message)
-      return null
-    }
-
-    return {
-      source:        'ai_generated',
-      url,
-      thumbnail_url: url,
-      width:         1024,
-      height:        1024,
-      asset_id:      null,
-      unsplash_id:   null,
-      alt:           prompt,
-    }
-  } catch (err: any) {
-    console.error('[resolver] Pollinations generation error:', err?.message)
-    return null
-  }
+async function generateImageHuggingFace(prompt: string): Promise<ResolvedAsset | null> {
+  if (!process.env.HF_TOKEN) throw new Error('Hugging Face: HF_TOKEN is not configured')
+  const model=process.env.HF_IMAGE_MODEL || 'stabilityai/stable-diffusion-3-medium-diffusers'
+  return requestGeneratedImage('Hugging Face','https://router.huggingface.co/hf-inference/models/'+model,{method:'POST',headers:{Authorization:'Bearer '+process.env.HF_TOKEN,'Content-Type':'application/json'},body:JSON.stringify({inputs:prompt})},prompt)
 }
 
 async function generateImage(
@@ -243,15 +224,25 @@ async function generateImage(
     'Follow the requested visual medium exactly: photorealistic only for photographic briefs, a clean conceptual render for illustration briefs. Strong readable silhouette, deliberate studio lighting, clear separation of subject and background, realistic geometry, no warped devices or malformed hands. No watermark or signature. Professional campaign photography or polished conceptual product render as described. One clear focal subject, complete silhouette, no clipped head or hands, no text, no watermark, no invented logos. If an isolated subject is requested, use a plain contrasting studio background, never a checkerboard pattern; background removal is performed separately.',
   ].join(', ')
 
-  // Try fal.ai first when a key is present
-  if (falKey) {
-    const result = await generateImageFal(prompt, falKey)
-    if (result) return result
-    console.warn('[resolver] fal.ai failed — falling back to Pollinations')
+  const failures: string[] = []
+  const providers: {name:string;run:()=>Promise<ResolvedAsset|null>}[] = []
+  if (process.env.POLLINATIONS_API_KEY) providers.push({name:'Pollinations',run:()=>generateImagePollinations(prompt)})
+  if (process.env.HF_TOKEN) providers.push({name:'Hugging Face',run:()=>generateImageHuggingFace(prompt)})
+  if (falKey) providers.push({name:'fal.ai',run:()=>generateImageFal(prompt,falKey)})
+  if (!providers.length) throw new Error('No image provider configured. Set POLLINATIONS_API_KEY, HF_TOKEN or FAL_KEY.')
+  for (const provider of providers) {
+    console.info('[resolver] Generating image with '+provider.name)
+    try {
+      const image=await provider.run()
+      if(image){console.info('[resolver] '+provider.name+' image ready');return image}
+      failures.push(provider.name+': generation failed (see provider error above)')
+    } catch(error) {
+      const reason=(error as Error).name==='TimeoutError'?provider.name+': timed out':(error as Error).message
+      failures.push(reason)
+      console.warn('[resolver] '+reason)
+    }
   }
-
-  // Free fallback — always available
-  return generateImagePollinations(prompt)
+  throw new Error(failures.join('; '))
 }
 
 // ─── Uploaded-asset lookup ────────────────────────────────────────────────────
@@ -427,12 +418,19 @@ export async function handleResolveAssets(db: any, body: any) {
 
     // Shared synchronous reservations prevent duplicate photos across concurrent slots.
     const usedPhotoIds = new Set<string>()
+    if (brand_id) {
+      try { const recent=await db.collection('assetImageHistory').find({brand_id}).sort({createdAt:-1}).limit(80).toArray();recent.forEach((item:any)=>usedPhotoIds.add(item.photoId)) } catch(error) {console.warn('[resolver] Image history unavailable')}
+    }
     const slots: ResolvedSlot[] = await Promise.all(
       plan.slots.map(slot =>
-        resolveSlot(db, slot, brand_id ?? null, unsplashKey, falKey, usedPhotoIds)
+        resolveSlot(db, slot, brand_id ?? null, unsplashKey, falKey, usedPhotoIds).catch(error=>({slot_id:slot.slot_id,slot_label:slot.slot_label,needs_visual:slot.needs_visual,visual_purpose:slot.visual_purpose,source:slot.preferred_source,resolvedAsset:null,warning:(error as Error).message}))
       )
     )
 
+    if (brand_id) {
+      const history=slots.filter(s=>s.resolvedAsset?.unsplash_id).map(s=>({brand_id,photoId:s.resolvedAsset!.unsplash_id,createdAt:new Date()}))
+      if(history.length)try{await db.collection('assetImageHistory').insertMany(history)}catch(error){console.warn('[resolver] Could not save image history')}
+    }
     const result: ResolvedAssetPlan = {
       post_id: plan.post_id,
       format:  plan.format,

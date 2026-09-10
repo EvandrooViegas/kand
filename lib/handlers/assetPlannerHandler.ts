@@ -106,6 +106,8 @@ Visual quality and relevance:
 - generation_prompt must specify exactly what is visible, what it communicates, focal subject, viewpoint, material and lighting. Include no lettering, no fake brand marks, no watermarks, no UI screenshots, no collages or duplicated objects unless explicitly needed.
 - Match the actual number of copy slides exactly. Never invent extra slots or default to five.
 
+For ai_generated, generation_prompt must be a detailed 60–120 word English brief: exact subject and number of objects, action, viewpoint, composition, material, lighting, background and exclusions. Translate technical benefits into a tangible visual metaphor; never ask the model to render words such as SSR, SSG or SEO. Stock search_queries must remain short and broad even when this generation brief is very specific.
+
 Campaign art direction:
 - Plan imagery as a coordinated campaign: different poses, actions or product angles that share photographic style, lighting and brand-relevant color cues.
 - We can remove backgrounds from both stock and generated images automatically. When a person/product is the visual hook, describe a clear standalone subject with unclipped head, hands and product, a simple background, and visible silhouette. Avoid crowds, occlusion and wide office scenes for these cutout-led concepts.
@@ -113,7 +115,7 @@ Campaign art direction:
 - Preserve meaningful environmental scenes when context is important. Do not force every image into a cutout or invent factual product imagery.
 
 Search strategy:
-- Also return "search_queries": 2-3 ordered, standalone English stock searches of 2-6 words each. Use concrete subject + action or setting. Alternatives describe the SAME scene with different wording or fewer constraints, keeping the essential subject. Never concatenate these queries.
+- Also return "search_queries": 2-3 ordered, standalone English stock searches of 2-4 words each. Use a broad concrete subject plus one action: "payment terminal", "warehouse shelves", "person laptop". Do not include lighting, brand colors, camera angles, isolated-background instructions or technical marketing jargon. Alternatives describe the SAME scene with different wording or fewer constraints, keeping the essential subject. Never concatenate these queries.
 - Keep search_keywords as concrete subject/action/setting tags for uploaded-asset matching. Avoid vague themes like success, innovation, business, lifestyle, or growth without a visible subject.
 - Give different image slots distinct scenes grounded in their own copy, not the same keywords rearranged. A soil-checking slide might search ["hands testing garden soil", "gardener holding soil"]; a watering slide ["watering vegetable plant roots", "garden drip irrigation"]. Neither should search "nature growth green".
 - Avoid marketing slogans, camera jargon, and long image-generation prompts in stock queries. Generic stock is appropriate only when it accurately illustrates the message, not as evidence of a named brand product, team, or event.
