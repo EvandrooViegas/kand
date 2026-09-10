@@ -1,4 +1,5 @@
 'use client'
+import DesignLibrary from '@/components/DesignLibrary'
 import { useEffect, useState, useRef, useLayoutEffect, useCallback } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { useTheme } from 'next-themes'
@@ -1244,6 +1245,24 @@ function Editor() {
     }
   }
 
+  const switchDesign = async (designId, preview, paletteId) => {
+    try {
+      const response = preview ? null : await fetch('/api/canvases/'+id+'/design',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({designId,paletteId})})
+      const data = preview ?? await response.json()
+      if (response && !response.ok) throw new Error(data.error || 'Could not apply design')
+      const pages = data.pages?.map((p,i)=>({...p,id:canvas.pages?.[i]?.id || p.id}))
+      const updated = {...canvas,...data,id:canvas.id,pages,createdAt:canvas.createdAt,_designChanged:true}
+      if (canvas._carouselPageId) {
+        const page = pages?.find(p=>p.id===canvas._carouselPageId)
+        if (page) Object.assign(updated,{nodes:page.nodes,groups:page.groups,background:page.background})
+      }
+      // Store all pages in the undo snapshot, including current unsaved page edits.
+      setCanvas(c=>({...c,_designChanged:true,pages:c.pages?.map(p=>p.id===c._carouselPageId?{...p,nodes:c.nodes,groups:c.groups,background:c.background}:p)}),true)
+      setCanvas(updated)
+      toast.success('Design applied to the whole post')
+    } catch(error) { toast.error(error.message); throw error }
+  }
+
   const save = async () => {
     if (!canvas) return
 
@@ -1254,7 +1273,7 @@ function Editor() {
       const parentRes = await fetch(`/api/canvases/${id}`)
       const parent = await parentRes.json()
       if (parent.error) return toast.error('Could not load parent canvas')
-      const updatedPages = (parent.pages || []).map(p =>
+      const updatedPages = (canvas._designChanged ? canvas.pages || [] : parent.pages || []).map(p =>
         p.id === pageId
           ? { ...p, nodes: canvas.nodes || [], groups: canvas.groups || [], classes: canvas.classes || {}, background: canvas.background }
           : p
@@ -1262,7 +1281,7 @@ function Editor() {
       const res = await fetch(`/api/canvases/${id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...parent, pages: updatedPages }),
+        body: JSON.stringify({ ...parent, pages: updatedPages, designSelection:canvas.designSelection, designInput:canvas.designInput }),
       })
       if (res.ok) {
         savedCanvasRef.current = JSON.stringify(canvas)
@@ -1848,6 +1867,7 @@ function Editor() {
           )}
         </div>
         <div className="flex items-center gap-1.5 sm:gap-2">
+          <DesignLibrary canvas={canvas} canvasId={id} selected={canvas.designSelection} onSelect={switchDesign} />
           <Button variant="ghost" size="icon" className="hover:bg-[#D4FF00] hover:text-foreground" onClick={undo} disabled={historyRef.current.past.length === 0} title="Undo (Ctrl+Z)"><Undo2 className="w-4 h-4" /></Button>
           <Button variant="ghost" size="icon" className="hover:bg-[#D4FF00] hover:text-foreground" onClick={redo} disabled={historyRef.current.future.length === 0} title="Redo (Ctrl+Y)"><Redo2 className="w-4 h-4" /></Button>
           <div className="w-px h-6 bg-foreground/20 mx-0.5 hidden sm:block" />

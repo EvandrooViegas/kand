@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const sharp = require('sharp')
 const { stripTypeScriptTypes } = require('node:module')
 const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '../lib/services/logoVariants.ts'), 'utf8').replace(/^import .*$/gm, '').replace(/export /g, '')
-const { createLogoVariants } = require('node:vm').runInNewContext(stripTypeScriptTypes(source) + '\n({createLogoVariants})', { sharp, Buffer, Uint8Array, Int32Array })
+const { createLogoVariants, generateLogoVariants } = require('node:vm').runInNewContext(stripTypeScriptTypes(source) + '\n({createLogoVariants,generateLogoVariants})', { sharp, Buffer, Uint8Array, Int32Array })
 const decode = src => sharp(Buffer.from(src.split(',')[1], 'base64')).ensureAlpha().raw().toBuffer()
 
 test('removes colored flat backgrounds and generates contrasting opaque and transparent variants', async () => {
@@ -48,4 +48,29 @@ test('designer selects contrasting saved variants without downloading the origin
     assert.equal(canvas.nodes[0].src, expected)
     assert.equal(canvas.nodes[0].width, 100)
   }
+})
+
+test('URL-encoded SVG data logos produce variants',async()=>{
+ const svg='<svg xmlns="http://www.w3.org/2000/svg" width="80" height="80"><rect x="20" y="20" width="40" height="40" fill="red"/></svg>'
+ const result=await generateLogoVariants('data:image/svg+xml,'+encodeURIComponent(svg))
+ assert.ok(result.whiteTransparent.startsWith('data:image/png;base64,'))
+})
+test('PNG inside ICO is decoded automatically',async()=>{
+ const png=await sharp(Buffer.from('<svg width="32" height="32"><rect x="8" y="8" width="16" height="16" fill="red"/></svg>')).png().toBuffer()
+ const header=Buffer.alloc(22);header.writeUInt16LE(1,2);header.writeUInt16LE(1,4);header[6]=32;header[7]=32;header.writeUInt32LE(png.length,14);header.writeUInt32LE(22,18)
+ const result=await createLogoVariants(Buffer.concat([header,png]))
+ assert.ok(result.blackTransparent)
+})
+
+test('badge variants retain the lettering instead of a solid circle',async()=>{
+ const input=await sharp(Buffer.from('<svg width="100" height="100"><circle cx="50" cy="50" r="48" fill="black"/><path d="M35 70 V30 L65 70 V30" fill="none" stroke="white" stroke-width="7"/></svg>')).png().toBuffer()
+ const result=await createLogoVariants(input)
+ const black=await decode(result.blackTransparent),white=await decode(result.whiteTransparent),original=await decode(result.originalTransparent)
+ const badge=(50*100+15)*4,ink=(40*100+35)*4
+ assert.equal(original[badge+3],255)
+ assert.equal(black[badge+3],0)
+ assert.equal(white[badge+3],0)
+ assert.ok(black[ink+3]>220)
+ assert.equal(black[ink],0)
+ assert.equal(white[ink],255)
 })

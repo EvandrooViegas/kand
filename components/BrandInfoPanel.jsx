@@ -1,5 +1,6 @@
 'use client'
 
+import ColorPriority, { reorderColors } from '@/components/ColorPriority'
 import { useState, useEffect } from 'react'
 import LogoVariants from '@/components/LogoVariants'
 import { Button } from '@/components/ui/button'
@@ -371,8 +372,10 @@ export default function BrandInfoPanel({ flowId, flows = [], onFlowCreated }) {
                       </div>
 
                       {/* editable rows */}
+                      <p className="text-xs text-muted-foreground mb-2">Order by importance: primary first, secondary next. Use the arrows, then save the brand.</p>
                       {data.colors.map((c, i) => (
                         <div key={i} className="flex items-center gap-1.5">
+                          <ColorPriority index={i} count={data.colors.length} onMove={(from,to)=>setData(prev=>({...prev,colors:reorderColors(prev.colors,from,to)}))} />
                           <input
                             type="color"
                             value={c}

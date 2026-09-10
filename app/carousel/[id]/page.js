@@ -1,4 +1,5 @@
 'use client'
+import DesignLibrary from '@/components/DesignLibrary'
 import { useEffect, useState, useCallback, useRef } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { useTheme } from 'next-themes'
@@ -49,6 +50,8 @@ export default function CarouselManager() {
   const [selectedPage, setSelectedPage] = useState(null)
   const [iframeKey, setIframeKey]   = useState(0)  // bump to force iframe reload
   const [copiedApi, setCopiedApi]   = useState(false)
+  const [previousDesign, setPreviousDesign] = useState(null)
+  const [switchingDesign, setSwitchingDesign] = useState(false)
   const savedStr = useRef(null)
 
   const load = useCallback(async () => {
@@ -83,7 +86,43 @@ export default function CarouselManager() {
     return () => window.removeEventListener('message', handler)
   }, [canvas])
 
+  const persistDesign = async (next) => {
+    const response = await fetch('/api/canvases/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(next)})
+    if (!response.ok) throw new Error('Could not save design')
+    savedStr.current = JSON.stringify(next)
+    setCanvas(next)
+    setHasChanges(false)
+    setIframeKey(k=>k+1)
+  }
+
+  const switchDesign = async (designId, preview, paletteId) => {
+    setSwitchingDesign(true)
+    try {
+      const response = preview ? null : await fetch('/api/canvases/'+id+'/design',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({designId,paletteId})})
+      const data = preview ?? await response.json()
+      if (response && !response.ok) throw new Error(data.error || 'Could not apply design')
+      const currentResponse = await fetch('/api/canvases/'+id)
+      if (!currentResponse.ok) throw new Error('Could not load current post')
+      const current = await currentResponse.json()
+      const before = {...current,name:canvas.name}
+      const next = {...before,...data,id:canvas.id,name:canvas.name,createdAt:canvas.createdAt,
+        pages:data.pages.map((page,index)=>({...page,id:canvas.pages?.[index]?.id || page.id}))}
+      await persistDesign(next)
+      setPreviousDesign(before)
+      toast.success('Design applied to every slide')
+    } catch(error) { toast.error(error.message); throw error }
+    finally { setSwitchingDesign(false) }
+  }
+
+  const undoDesign = async () => {
+    setSwitchingDesign(true)
+    try { await persistDesign(previousDesign); setPreviousDesign(null) }
+    catch(error) { toast.error(error.message) }
+    finally { setSwitchingDesign(false) }
+  }
+
   const save = async () => {
+    if (switchingDesign) return
     if (!canvas) return
     const updated = { ...canvas, pages: canvas.pages.map((p, i) => ({ ...p, order: i })) }
     const res = await fetch(`/api/canvases/${id}`, {
@@ -307,6 +346,8 @@ export default function CarouselManager() {
             className="w-48 sm:w-64 font-semibold border-2 border-foreground/20 rounded-lg bg-card focus-visible:ring-[#D4FF00]" />
         </div>
         <div className="flex items-center gap-1.5 sm:gap-2">
+          <DesignLibrary canvas={canvas} canvasId={id} selected={canvas.designSelection} onSelect={switchDesign} disabled={switchingDesign} />
+          {previousDesign && <Button variant="outline" size="sm" disabled={switchingDesign} onClick={undoDesign}>Undo design</Button>}
           <ThemeToggle />
           <Button size="sm" onClick={save} disabled={!hasChanges}
             className={`rounded-full px-5 font-semibold ${hasChanges ? 'bg-foreground text-background hover:bg-foreground/85' : 'bg-muted text-muted-foreground'}`}>

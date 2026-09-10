@@ -4,9 +4,11 @@ const fs = require('node:fs')
 const vm = require('node:vm')
 const { stripTypeScriptTypes } = require('node:module')
 const source = fs.readFileSync(require('node:path').join(__dirname, '../lib/handlers/canvasDesignerHandler.ts'), 'utf8')
-  .replace(/^import .*$/gm, '').replace('export async function', 'async function')
+  .replace(/^import .*$/gm, '').replace(/export async function/g, 'async function')
 const copyTools = vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname, '../lib/services/copyText.ts'), 'utf8').replace(/export /g, '')) + '\n({withoutEmoji,cleanCopy})')
-const engine = vm.runInNewContext(stripTypeScriptTypes(source) + '\n({validateDesignSpec,renderDesignSpec,fitText,fitTextLayout,normalizeDesignSystem,buildStrategyPalette,ensureContrast,contrastRatio,parseArtDirection,buildSingleCanvas,buildCarouselCanvas,buildPrompt,handleDesignCanvas,designIssues})', {
+const engine = vm.runInNewContext(stripTypeScriptTypes(source) + '\n({splitDesignSteps,emphasizeHeadline,recoverDesignInput,handleSwitchDesign,validateDesignSpec,renderDesignSpec,fitText,fitTextLayout,normalizeDesignSystem,buildStrategyPalette,ensureContrast,contrastRatio,parseArtDirection,buildSingleCanvas,buildCarouselCanvas,buildPrompt,handleDesignCanvas,designIssues})', {
+  ...vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname, '../lib/designs/library.ts'),'utf8').replace(/export /g,''))+'\n({DESIGN_LIBRARY,librarySpec,splitBulletItems})'),
+  ...vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname,'../lib/designs/palettes.ts'),'utf8').replace(/export /g,''))+'\n({PALETTE_PICKS,paletteColors,choosePalette})'),
   withoutEmoji: copyTools.withoutEmoji, prepareSubjectAssets: async (db, plan) => plan, uuidv4: require('node:crypto').randomUUID, console, process: { env: {} },
   NextResponse: { json: (body, options) => ({ body, status: options?.status ?? 200 }) }, corsify: response => response,
 })
@@ -274,4 +276,112 @@ test('successive posts avoid the five most recent campaign directions', async ()
     assert.equal(result.status, 200)
   }
   assert.equal(new Set(saved.map(c => c.designCampaign.index)).size, 6)
+})
+
+test('all ten library designs render brand copy and explicit choice bypasses AI', async () => {
+  const library = vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname,'../lib/designs/library.ts'),'utf8').replace(/export /g,''))+'\nDESIGN_LIBRARY')
+  const layouts = new Set()
+  for (const design of library) {
+    let writes=0
+    const db={collection:()=>({find:()=>({sort:()=>({limit:()=>({toArray:async()=>[]})})}),insertOne:async()=>{writes++}})}
+    const result=await engine.handleDesignCanvas(db,{brandContext:{name:'Test',colors:['#35724c'],fonts:['Inter']},copy:{headline:'A smarter business',supportingText:'Tools that help your team grow.',cta:'Learn more'},resolvedPlan:plan,designId:design.id},false)
+    assert.equal(result.status,200)
+    assert.equal(result.body.designSelection.id,design.id)
+    assert.equal(writes,0)
+    assert.equal(result.body.designCampaign.issues.length,0,design.id)
+    layouts.add(JSON.stringify(result.body.nodes.filter(n=>n.type==='text').map(n=>[n.x,n.y,n.width,n.height])))
+  }
+  assert.equal(layouts.size,10)
+})
+
+test('older canvases recover content and switch without inserting a duplicate', async () => {
+  const current={id:'old',name:'Older post',type:'single',nodes:[
+    {type:'text',text:'Headline',fontSize:70,fontFamily:'Inter',color:'#35724c',x:80,y:100},
+    {type:'text',text:'Supporting copy',fontSize:28,fontFamily:'Inter',x:80,y:400},
+    {type:'image',src:'https://example.com/photo.png',width:500,height:600},
+  ]}
+  const input=engine.recoverDesignInput(current)
+  assert.equal(input.copy.headline,'Headline')
+  assert.equal(input.copy.supportingText,'Supporting copy')
+  assert.equal(input.resolvedPlan.slots[0].resolvedAsset.url,'https://example.com/photo.png')
+  const db={collection:()=>({findOne:async()=>current,find:()=>({sort:()=>({limit:()=>({toArray:async()=>[]})})}),insertOne:async()=>{throw Error('Must not insert')}})}
+  const result=await engine.handleSwitchDesign(db,'old',{designId:'editorial'})
+  assert.equal(result.status,200)
+  assert.equal(result.body.designSelection.id,'editorial')
+  assert.ok(result.body.designInput)
+})
+
+test('every library family varies carousel chapters and keeps cutouts clear of copy', () => {
+  const lib = vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname,'../lib/designs/library.ts'),'utf8').replace(/export /g,''))+'\n({DESIGN_LIBRARY,librarySpec})')
+  for (const design of lib.DESIGN_LIBRARY) {
+    const layouts = new Set()
+    for (let index=0;index<5;index++) {
+      const assetSlot = {...slot,resolvedAsset:{...slot.resolvedAsset,subject:{url:'https://example.com/cutout.png',width:500,height:800}}}
+      const content = {headline:'A better way to grow',body:'Build your business with tools that work together.',cta:'Start today',eyebrow:index?'02':''}
+      const system=engine.normalizeDesignSystem({visual_theme:design.theme,spacing:'compact'})
+      const raw=lib.librarySpec(design,assetSlot,content,index,5)
+      const spec=engine.validateDesignSpec(raw,assetSlot,system)
+      const d={...direction().slides[0],palette:engine.buildStrategyPalette(['#35724c','#a7ce78'],system)}
+      assert.doesNotThrow(()=>engine.renderDesignSpec(spec,{d,...content,subject:assetSlot.resolvedAsset.subject,imageUrl:assetSlot.resolvedAsset.url,slideNumber:index,totalSlides:5}),design.id+' chapter '+index)
+      layouts.add(JSON.stringify(raw.elements.filter(e=>e.type==='text'&&e.role==='headline').map(e=>[e.x,e.y,e.width,e.size])))
+    }
+    assert.ok(layouts.size>=4,design.id)
+  }
+})
+
+test('subtle grid does not create full-width readability bands',()=>{
+ const system=engine.normalizeDesignSystem({visual_theme:'technical',spacing:'compact'})
+ const palette=engine.buildStrategyPalette(['#35724c'],system)
+ const spec=engine.validateDesignSpec({background:{type:'solid',color:'bg'},elements:[{type:'grid',x:40,y:120,width:1000,height:800,color:'primary',opacity:5},{type:'text',role:'headline',x:570,y:180,width:440,height:310,size:66}]},slot,system)
+ const result=engine.renderDesignSpec(spec,{d:{palette,logo_placement:'none'},headline:'A better business',body:'',cta:'',eyebrow:''})
+ assert.equal(result.nodes.filter(n=>n.type==='gradient').length,0)
+})
+
+test('numbered copy is separated without confusing numbers inside sentences',()=>{
+ const steps=engine.splitDesignSteps('1 Cria o catálogo digital → 2 Integra os produtos → 3 O cliente recebe o pedido.')
+ assert.equal(steps.length,3)
+ assert.equal(steps[1].text,'Integra os produtos')
+ assert.equal(engine.splitDesignSteps('Poupe 30 dias e cresça 2 vezes.').length,0)
+ assert.match(engine.emphasizeHeadline('Comece a vender sem armazém'),/textDecoration=underline/)
+})
+
+test('headline emphasis supports underline, color and readable background without changing words',()=>{
+ const text='Build a better business'
+ assert.match(engine.emphasizeHeadline(text,0),/textDecoration=underline/)
+ assert.match(engine.emphasizeHeadline(text,1,'#82bd60'),/color=#82bd60/)
+ const marked=engine.emphasizeHeadline(text,2,'#82bd60','#102019')
+ assert.match(marked,/backgroundColor=#102019/)
+ assert.match(marked,/color=#ffffff/)
+ assert.equal(marked.replace(/<%inline:[^:]+:([^]*?)%>/g,'$1'),text)
+ assert.equal(engine.emphasizeHeadline('Hi',2),'Hi')
+})
+
+test('emphasis respects sentence boundaries and supports contrasting fonts',()=>{
+ const title='Quer abrir a sua loja online em menos de um mês? Descubra como!'
+ const marked=engine.emphasizeHeadline(title,2,'#aabbcc','#112233')
+ assert.ok(marked.includes('mês? <%inline:'))
+ assert.ok(marked.endsWith(':Descubra como!%>'))
+ assert.match(engine.emphasizeHeadline(title,3),/fontFamily=Playfair Display/)
+ assert.match(engine.emphasizeHeadline(title,3,'#fff','#000','Playfair Display'),/fontFamily=Inter/)
+ assert.doesNotMatch(engine.emphasizeHeadline(title,3),/textDecoration|backgroundColor|color=/)
+})
+
+test('palette randomization covers every choice and preserves explicit selection',()=>{
+ const lib=vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname,'../lib/designs/palettes.ts'),'utf8').replace(/export /g,''))+'\n({choosePalette,PALETTE_PICKS})')
+ lib.PALETTE_PICKS.forEach((p,i)=>assert.equal(lib.choosePalette(undefined,()=> (i+.5)/lib.PALETTE_PICKS.length).id,p.id))
+ assert.equal(lib.choosePalette('dark',()=>{throw Error('Must not randomize explicit choice')}).id,'dark')
+ assert.equal(lib.choosePalette('invalid'),undefined)
+})
+
+test('bulleted benefits become four separate cards without changing their copy',()=>{
+ const lib=vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname,'../lib/designs/library.ts'),'utf8').replace(/export /g,''))+'\n({DESIGN_LIBRARY,librarySpec,splitBulletItems})')
+ const body='• Lower storage costs\n• Faster launch\n• Focus on growth\n• Secure deliveries'
+ const system=engine.normalizeDesignSystem({spacing:'compact'})
+ const raw=lib.librarySpec(lib.DESIGN_LIBRARY[2],slot,{headline:'Benefits',body},1,5)
+ assert.equal(raw.elements.some(e=>e.type==='image'),false)
+ const spec=engine.validateDesignSpec(raw,slot,system)
+ const result=engine.renderDesignSpec(spec,{d:{library:true,palette:engine.buildStrategyPalette(['#35724c'],system),logo_placement:'none'},headline:'Benefits',body,cta:'',eyebrow:'',slideNumber:1,totalSlides:5})
+ for(const item of lib.splitBulletItems(body))assert.ok(result.nodes.some(n=>n.type==='text'&&n.text===item))
+ assert.equal(result.nodes.some(n=>n.type==='text'&&n.text.includes('•')),false)
+ assert.equal(lib.splitBulletItems('A cost-effective option.').length,0)
 })

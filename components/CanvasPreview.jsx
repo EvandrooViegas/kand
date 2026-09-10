@@ -1,6 +1,7 @@
 'use client'
 
-import { useRef, useEffect, useState } from 'react'
+import { parseStyledText, renderStyledText } from '@/lib/styleParser'
+import { createElement, useRef, useEffect, useState } from 'react'
 
 export function buildGradientCssClient(node) {
   const stops = (node.stops || [{ color: '#6366f1', position: 0, alpha: 100 }, { color: '#ec4899', position: 100, alpha: 100 }])
@@ -114,7 +115,7 @@ export function CanvasPreview({ canvas, containerWidth, onClick }) {
           }
           return (
             <div key={n.id} style={style}>
-              {n.type === 'text' ? (n.text || '') : n.type === 'image' && n.src ? (
+              {n.type === 'text' ? <div style={{width:'100%',display:'block'}}>{renderStyledText(parseStyledText(n.text || '',canvas.classes || {}),createElement,{canvasClasses:canvas.classes || {}})}</div> : n.type === 'image' && n.src ? (
                 <img src={n.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', filter: buildFilterCssClient(n.filters) }} />
               ) : null}
             </div>
