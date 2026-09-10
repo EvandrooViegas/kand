@@ -44,6 +44,8 @@ export function librarySpec(design: typeof DESIGN_LIBRARY[number], slot: any, co
         ? [72,130,936,180,72,420,280,450,400,340,640,600]
         : [72,145,936,210,72,800,936,120,220,385,640,380]
   }
+  // A headline-only cover gives the focal image the full lower stage.
+  if (index === 0 && !copy.body && slot.resolvedAsset?.url) b = [72,140,936,230,72,800,936,100,72,400,936,560]
   const numbered = /(?:^|[→\n])\s*\d+[.)]?\s+/.test(copy.body || '') && (String(copy.body).match(/(?:^|[→\n])\s*\d+[.)]?\s+/g)||[]).length > 1
   if (!slot.resolvedAsset?.url && index === 0) b = [72,175,936,340,72,630,820,230,780,760,220,160]
   const bulleted = splitBulletItems(copy.body).length > 1

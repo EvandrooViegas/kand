@@ -1903,8 +1903,8 @@ function extractSlideText(copy: any, idx: number, format: string, total: number)
   const eyebrow = idx === 0 ? '' : `${String(idx).padStart(2, '0')}`
   return {
     headline: copySafe(slide.headline, ''),
-    body:     copySafe(slide.body, ''),
-    cta:      copySafe(slide.cta, ''),
+    body:     idx === 0 ? '' : copySafe(slide.body, ''),
+    cta:      idx === 0 ? '' : copySafe(slide.cta, ''),
     eyebrow,
   }
 }

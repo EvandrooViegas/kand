@@ -52,7 +52,7 @@ Create:
 * cta
 
 For a CAROUSEL:
-Create 5–7 slides.
+Choose the slide count from the amount of useful content, usually 3–10 slides. Do not default to five. A simple idea may need 3; a detailed sequence may need 7–10. Plan one distinct point per content slide and remove filler. Honor an explicit slide count in the brief.
 Each slide should have:
 * slideNumber
 * purpose
@@ -60,7 +60,7 @@ Each slide should have:
 * body
 * cta
 
-The first slide must work as the hook/cover.
+The first slide is a headline-only hook: a specific benefit, tension or intriguing question grounded in the brief. Aim for 5–12 words. Set its body and cta to empty strings; put explanations on subsequent slides.
 The middle slides should develop the idea logically.
 The final slide should summarize the message or provide a natural CTA.
 Do not put too much text on a slide.
@@ -71,13 +71,13 @@ FIELD DEFINITIONS:
 
 "headline": The main piece of text that should attract attention. Short, clear and easy to understand. For a single post, this is the primary headline on the graphic. For a carousel, the headline on slide 1 should act as the main hook. Avoid making headlines unnecessarily long.
 
-"subheadline": A short sentence that provides context or expands on the headline. Optional when it does not add value. For carousel posts, use it primarily on the cover slide.
+"subheadline": A short sentence that provides context or expands on the headline. Optional when it does not add value. For carousels, leave this empty; the cover contains only its headline.
 
 "supportingText": Short supporting copy that explains or reinforces the main message. Concise enough to appear on a graphic. Do not write a long paragraph.
 
 "cta": A short call to action appropriate to the post. Should feel natural and match the objective. Do not force a sales CTA into educational content.
 
-"slides": An array containing the content of every carousel slide. Use between 5 and 7 slides.
+"slides": An array containing the content of every carousel slide. Use as many slides as the content requires, usually 3–10, without padding or a fixed default.
 
 "slideNumber": The numerical order of the slide. Start at 1.
 
@@ -143,7 +143,7 @@ If the format is "single", populate:
 and return an empty "slides" array.
 
 If the format is "carousel", populate:
-* slides (between 5 and 7 slides, first is hook, last is conclusion/CTA)
+* slides (content-driven slide count, first is hook, last is conclusion/CTA)
 * caption
 * hashtags
 * visualNotes

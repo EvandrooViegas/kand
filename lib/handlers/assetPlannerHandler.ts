@@ -99,6 +99,13 @@ Editorial decisions, before searching:
 
 Also return treatment (isolated_subject or environmental), subject_description (ONE dominant visible person, object or coherent object assembly), and generation_prompt (English brief with subject, material, pose, lighting and campaign illustration style). Default to isolated_subject for foreground people, products and conceptual illustrations: a real transparent silhouette, never a rounded rectangular photo. Request complete subjects on simple backgrounds. Use environmental only when the setting explains the message.
 
+Visual quality and relevance:
+- Build a concrete visual metaphor for the slide, not generic business filler. Checkout: a single payment terminal or hand holding a card. Inventory costs: cartons on a shelf. Automation: a coherent device/object assembly. Do not use unrelated smiling portraits for these concepts.
+- A cover can use a compelling subject even though it has only a headline. Its image must support that hook, with a complete visible silhouette and a useful pose.
+- Stock works for real, recognizable subjects. Use ai_generated for specific conceptual objects, 3D illustration or staged combinations that stock is unlikely to provide. Do not search stock with abstract marketing slogans.
+- generation_prompt must specify exactly what is visible, what it communicates, focal subject, viewpoint, material and lighting. Include no lettering, no fake brand marks, no watermarks, no UI screenshots, no collages or duplicated objects unless explicitly needed.
+- Match the actual number of copy slides exactly. Never invent extra slots or default to five.
+
 Campaign art direction:
 - Plan imagery as a coordinated campaign: different poses, actions or product angles that share photographic style, lighting and brand-relevant color cues.
 - We can remove backgrounds from both stock and generated images automatically. When a person/product is the visual hook, describe a clear standalone subject with unclipped head, hands and product, a simple background, and visible silhouette. Avoid crowds, occlusion and wide office scenes for these cutout-led concepts.

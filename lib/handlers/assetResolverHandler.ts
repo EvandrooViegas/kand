@@ -240,7 +240,7 @@ async function generateImage(
   falKey: string | null,
 ): Promise<ResolvedAsset | null> {
   const prompt = [visualPurpose, ...keywords.slice(0, 4),
-    'Professional campaign photography or polished conceptual product render as described. One clear focal subject, complete silhouette, no clipped head or hands, no text, no watermark, no invented logos. If an isolated subject is requested, use a plain contrasting studio background, never a checkerboard pattern; background removal is performed separately.',
+    'Follow the requested visual medium exactly: photorealistic only for photographic briefs, a clean conceptual render for illustration briefs. Strong readable silhouette, deliberate studio lighting, clear separation of subject and background, realistic geometry, no warped devices or malformed hands. No watermark or signature. Professional campaign photography or polished conceptual product render as described. One clear focal subject, complete silhouette, no clipped head or hands, no text, no watermark, no invented logos. If an isolated subject is requested, use a plain contrasting studio background, never a checkerboard pattern; background removal is performed separately.',
   ].join(', ')
 
   // Try fal.ai first when a key is present
