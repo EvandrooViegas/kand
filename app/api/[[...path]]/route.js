@@ -1,3 +1,4 @@
+import { handleBrandDesigns, handleDeleteBrandDesign } from '@/lib/handlers/brandDesignHandler'
 import { NextResponse } from 'next/server'
 import { connectToMongo } from '@/lib/services/db/mongo'
 import { corsify } from '@/lib/services/middleware'
@@ -28,6 +29,10 @@ async function handleRoute(request, { params }) {
 
   try {
     const db = await connectToMongo()
+
+    if (route === '/brand-designs' && method === 'POST') return await handleBrandDesigns(db, await request.json())
+
+    if (route === '/brand-designs' && method === 'DELETE') return await handleDeleteBrandDesign(db, await request.json())
 
     // Root
     if (route === '/' && method === 'GET') {

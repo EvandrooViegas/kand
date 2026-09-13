@@ -1,4 +1,6 @@
 'use client'
+import { textGradientStyle } from '@/lib/textGradient'
+
 
 import { parseStyledText, renderStyledText } from '@/lib/styleParser'
 import { createElement, useRef, useEffect, useState } from 'react'
@@ -87,7 +89,7 @@ export function CanvasPreview({ canvas, containerWidth, onClick }) {
           }
           let style = base
           if (n.type === 'text') {
-            style = { ...base, color: n.color || '#000', fontSize: n.fontSize || 48, fontWeight: n.fontWeight || 400,
+            style = { ...base, color: n.color || '#000', ...textGradientStyle(n), fontSize: n.fontSize || 48, fontWeight: n.fontWeight || 400,
               fontStyle: n.fontStyle === 'italic' ? 'italic' : 'normal',
               fontFamily: `'${n.fontFamily || 'Inter'}', sans-serif`,
               lineHeight: n.lineHeight || 1.2, letterSpacing: n.letterSpacing || 0,

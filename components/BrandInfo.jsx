@@ -1,4 +1,5 @@
 'use client'
+import BrandDesignStudio from '@/components/BrandDesignStudio'
 
 import ColorPriority, { reorderColors } from '@/components/ColorPriority'
 import { useState, useEffect } from 'react'
@@ -31,6 +32,7 @@ export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSel
         const bc = flow?.brandContext
         if (bc && (bc.name || bc.about || bc.colors?.length || bc.fonts?.length)) {
           setExtractedData({
+            ...bc,
             name:     bc.name     || '',
             about:    bc.about    || '',
             logo:     bc.logo     || '',
@@ -293,7 +295,7 @@ export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSel
               <Globe className="w-5 h-5 text-primary" />
             </div>
             <div>
-              <CardTitle className="text-lg">Extract Brand Information</CardTitle>
+              <CardTitle className="text-lg">Extract Brand Personalization</CardTitle>
               <CardDescription>Enter a website URL to automatically extract brand details</CardDescription>
             </div>
           </div>
@@ -692,6 +694,7 @@ export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSel
             </CardContent>
           </Card>
 
+          <BrandDesignStudio flowId={flowId} brand={extractedData} onChange={setExtractedData}/>
           {/* Save Button */}
           <div className="sticky bottom-6 z-10">
             <Button
@@ -708,7 +711,7 @@ export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSel
               ) : (
                 <>
                   <Save className="w-5 h-5 mr-2" />
-                  Save Brand Information
+                  Save Brand Personalization
                 </>
               )}
             </Button>

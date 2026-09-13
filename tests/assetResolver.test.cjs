@@ -96,3 +96,10 @@ test('missing OpenAI key reports configuration error without fetching',async()=>
  const e=engine(()=>{throw Error('must not fetch')})
  await assert.rejects(e.generateImageOpenAI('photo',false),/OPENAI_API_KEY/)
 })
+
+test('drawing design requests illustration instead of photorealistic output',()=>{
+ const brief=engine(()=>{}).buildGenerationBrief({...slot,image_style:'drawing',treatment:'isolated_subject'},true)
+ assert.ok(brief.includes('editorial illustration'))
+ assert.ok(brief.includes('Intentional editorial drawing'))
+ assert.equal(brief.includes('Photorealistic natural skin'),false)
+})

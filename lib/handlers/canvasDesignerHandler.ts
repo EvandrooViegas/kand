@@ -1,3 +1,4 @@
+import { blueprintSpec, complementaryAccent } from '@/lib/designs/brandBlueprint'
 import { persistInlineImages } from '@/lib/services/persistInlineImages'
 import { PALETTE_PICKS, paletteColors, choosePalette } from '@/lib/designs/palettes'
 import { DESIGN_LIBRARY, librarySpec, splitBulletItems } from '@/lib/designs/library'
@@ -1400,7 +1401,7 @@ interface DesignElement {
   color: PaletteRole; radius: number; opacity: number; rotation: number; layer: number
   size: number; weight: number; lineHeight: number; letterSpacing: number; align: TextAlign
   treatment: ImageTreatment; mask: string; angle: number; to: PaletteRole; stroke: number
-  minSize: number; font: string; fill: PaletteRole; endOpacity: number
+  minSize: number; font: string; fill: PaletteRole; endOpacity: number; shadow: boolean
 }
 interface DesignSpec {
   system: CarouselDesignSystem
@@ -1452,6 +1453,7 @@ function validateDesignSpec(ai: any, slot: ResolvedSlot, system = normalizeDesig
       minSize: finite(e.minSize, e.role === 'headline' ? 32 : 18, 18, finite(e.size, e.role === 'headline' ? system.typography.headingSize : system.typography.bodySize, 18, 180)),
       font: e.font === undefined ? (e.role === 'headline' || e.type === 'number' ? system.typography.heading : system.typography.body) : clampFont(e.font),
       fill: paletteRole(e.fill, e.type === 'badge' ? 'accent' : 'surface'),
+      shadow: e.shadow === true,
       endOpacity: finite(e.endOpacity, raw.type === 'gradient_scrim' ? 0 : 100, 0, 100),
     })
   }
@@ -1572,8 +1574,8 @@ function shouldHighlightSlide(index = 0, total = 1): boolean {
   return index % 3 === 0
 }
 
-function emphasizeHeadline(text: string, variant = 0, accent = '#ffffff', background = '#000000', headingFont = 'Inter'): string {
-  if (text.includes('<%')) return text
+function emphasizeHeadline(text: string, variant = 0, accent = '#ffffff', background = '#000000', headingFont = 'Inter', secondaryFont?: string): string {
+  if (variant < 0 || text.includes('<%')) return text
   // Prefer a complete short closing sentence, never span a question boundary.
   const segments = [...text.matchAll(/[^.!?;:]+[.!?;:]*/g)]
   const last = segments.at(-1)
@@ -1585,10 +1587,13 @@ function emphasizeHeadline(text: string, variant = 0, accent = '#ffffff', backgr
   const highlight = words.slice(-count).join(' ')
   const offset = text.lastIndexOf(highlight)
   if (offset < 0) return text
-  const font = headingFont === 'Playfair Display' ? 'Inter' : 'Playfair Display'
-  const style = variant % 4 === 1 ? 'color='+accent
+  const font = secondaryFont || (headingFont === 'Playfair Display' ? 'Inter' : 'Playfair Display')
+  if (variant === 6) return text.slice(0,offset)+'<%inline:backgroundColor='+background+':<%inline:backgroundImage=linear-gradient(110deg, '+accent+', '+ensureContrast('#ffffff',background)+')|backgroundClip=text|color=transparent:'+highlight+'%>%>'+text.slice(offset+highlight.length)
+  const style = variant === 4 ? 'backgroundImage=linear-gradient(110deg, '+accent+', '+background+')|backgroundClip=text|color=transparent'
+    : variant === 5 ? 'backgroundImage=linear-gradient(110deg, '+background+', '+accent+')|color='+ensureContrast('#ffffff',background)
+    : variant % 4 === 1 ? 'color='+accent
     : variant % 4 === 2 ? 'backgroundColor='+background+'|color='+ensureContrast('#ffffff',background)
-    : variant % 4 === 3 ? 'fontFamily='+font
+    : variant % 4 === 3 ? (font===headingFont?'fontStyle=italic':'fontFamily='+font)
     : 'textDecoration=underline'
   return text.slice(0,offset)+'<%inline:'+style+':'+highlight+'%>'+text.slice(offset+highlight.length)
 
@@ -1653,6 +1658,7 @@ function renderDesignSpec(spec: DesignSpec, si: SlideInput): { nodes: object[]; 
     const rw = e.width * Math.cos(rad) + e.height * Math.sin(rad), rh = e.height * Math.cos(rad) + e.width * Math.sin(rad)
     const dx = (rw - e.width) / 2, dy = (rh - e.height) / 2
     node.rotation = e.x >= dx && e.y >= dy && e.x + e.width + dx <= W && e.y + e.height + dy <= H ? e.rotation : 0
+    if (e.shadow) nodes.push(grad({x:e.x,y:Math.min(1080-e.height,e.y+16),w:e.width,h:e.height,radial:true,stops:[{color:'#000000',position:0,alpha:16},{color:'#000000',position:100,alpha:0}]}))
     nodes.push(node)
   }
   const copyNodes: any[] = []
@@ -1708,7 +1714,7 @@ function renderDesignSpec(spec: DesignSpec, si: SlideInput): { nodes: object[]; 
         }
       }
     }
-    copyNodes.push(txt({ x: e.x + padding, y: e.y + padding, w: e.width - padding * 2, h: fit.height, text: si.d.library && e.role === 'headline' && shouldHighlightSlide(si.slideNumber, si.totalSlides) ? emphasizeHeadline(content, (si.d.highlight_style ?? 0), resolvedColor ? (textColorOverLayers(p.accent, background, behind) ?? resolvedColor) : ensureContrast(p.accent,surface), p.primary, e.font) : content, font: e.font, size: fit.fontSize, weight: e.weight, color: resolvedColor ?? ensureContrast(p[e.color], surface), align: e.align, lineHeight: fit.lineHeight, letterSpacing: e.letterSpacing }))
+    copyNodes.push(txt({ x: e.x + padding, y: e.y + padding, w: e.width - padding * 2, h: fit.height, text: si.d.library && e.role === 'headline' && shouldHighlightSlide(si.slideNumber, si.totalSlides) ? emphasizeHeadline(content, (si.d.highlight_style ?? 0), resolvedColor ? (textColorOverLayers(p.accent, background, behind) ?? resolvedColor) : ensureContrast(p.accent,surface), p.primary, e.font, spec.system.typography.body) : content, font: e.font, size: fit.fontSize, weight: e.weight, color: resolvedColor ?? ensureContrast(p[e.color], surface), align: e.align, lineHeight: fit.lineHeight, letterSpacing: e.letterSpacing, shadow:e.shadow }))
   }
   nodes.push(...copyNodes)
   if (si.d.logo_url && si.d.logo_placement !== 'none') {
@@ -2177,10 +2183,17 @@ async function softenCanvasLogos(canvas: any, logoUrl: string | null, variants?:
 
 export async function handleDesignCanvas(db: any, body: any, persist = true) {
   try {
-    const { brandContext, copy, resolvedPlan: inputPlan, canvasName } = body as {
+    let { brandContext, copy, resolvedPlan: inputPlan, canvasName } = body as {
       brandContext: any; copy: any; resolvedPlan: ResolvedAssetPlan; canvasName?: string
     }
 
+    if (brandContext?.id) {
+      const flow = await db.collection('flows').findOne({id:brandContext.id})
+      if (flow?.brandContext) brandContext=flow.brandContext
+    }
+    const brandDesigns = (Array.isArray(brandContext?.designs)?brandContext.designs:[]).filter((p:any)=>DESIGN_LIBRARY.some(d=>d.id===p.baseId))
+    const requestedDesignId=body.designId || inputPlan?.designId
+    const preset = requestedDesignId ? brandDesigns.find((p:any)=>p.id===requestedDesignId) : brandDesigns[Math.floor(Math.random()*brandDesigns.length)]
     let resolvedPlan = inputPlan
     if (!copy)         return corsify(NextResponse.json({ error: 'copy is required' },         { status: 400 }))
     if (!resolvedPlan) return corsify(NextResponse.json({ error: 'resolvedPlan is required' }, { status: 400 }))
@@ -2211,7 +2224,7 @@ export async function handleDesignCanvas(db: any, body: any, persist = true) {
     // ── Art direction from Groq ────────────────────────────────────────────
     let direction: ArtDirection = fallback(brandContext, resolvedPlan)
 
-    const requested = body.designId
+    const requested = preset?.baseId || body.designId
     if (requested && !DESIGN_LIBRARY.some(d => d.id === requested)) return corsify(NextResponse.json({error:'Unknown design'}, {status:400}))
     let choices = [...DESIGN_LIBRARY] as (typeof DESIGN_LIBRARY[number])[]
     const apiKey = process.env.GROQ_API_KEY
@@ -2231,13 +2244,14 @@ export async function handleDesignCanvas(db: any, body: any, persist = true) {
     const fresh = choices.filter(d=>!recentIds.includes(d.id))
     const pool = fresh.length ? fresh : DESIGN_LIBRARY.filter(d=>!recentIds.includes(d.id))
     const selected = DESIGN_LIBRARY.find(d=>d.id===requested) ?? pool[Math.floor(Math.random()*pool.length)] ?? DESIGN_LIBRARY[0]
-    const palettePick = choosePalette(body.paletteId)
+    const palettePick = choosePalette(body.paletteId || preset?.paletteId)
     if (!palettePick) return corsify(NextResponse.json({error:'Unknown palette'},{status:400}))
-    const system = brandDesignSystem(brandContext, {visual_theme:palettePick.theme || selected.theme,spacing:'compact'})
+    const system = brandDesignSystem(brandContext, {visual_theme:preset?.blueprint?.theme || palettePick.theme || selected.theme,spacing:preset?.blueprint?.spacing || 'compact'})
     const palette = buildStrategyPalette(paletteColors(Array.isArray(brandContext?.colors)?brandContext.colors:[],palettePick.id),system)
-    direction = {...direction, system, slides:direction.slides.map((d,index)=>({...d, library:true, highlight_style:DESIGN_LIBRARY.findIndex(item=>item.id===selected.id)%4, campaign:system,palette:{...palette},
+    if (preset?.blueprint?.complementary) palette.accent=complementaryAccent(palette.primary)
+    direction = {...direction, system, slides:direction.slides.map((d,index)=>({...d, library:true, highlight_style:preset?.blueprint ? ({none:-1,underline:0,color:1,background:2,font:3,gradient_text:4,gradient_background:5,boxed_gradient_text:6} as any)[preset.blueprint.highlight] : DESIGN_LIBRARY.findIndex(item=>item.id===selected.id)%4, campaign:system,palette:{...palette},
       heading_font:system.typography.heading,body_font:system.typography.body,
-      design:validateDesignSpec(librarySpec(selected,resolvedPlan.slots[index],extractSlideText(copy,index,format,resolvedPlan.slots.length),index,resolvedPlan.slots.length),resolvedPlan.slots[index],system,resolvedPlan.slots)
+      design:validateDesignSpec(preset?.blueprint ? blueprintSpec(preset.blueprint,resolvedPlan.slots[index],extractSlideText(copy,index,format,resolvedPlan.slots.length),index,resolvedPlan.slots.length) : librarySpec(selected,resolvedPlan.slots[index],extractSlideText(copy,index,format,resolvedPlan.slots.length),index,resolvedPlan.slots.length,preset?.artDirection),resolvedPlan.slots[index],system,resolvedPlan.slots)
     }))}
 
     // ── Build canvas ───────────────────────────────────────────────────────
@@ -2248,7 +2262,7 @@ export async function handleDesignCanvas(db: any, body: any, persist = true) {
     await softenCanvasLogos(canvas, logoUrl, brandContext?.logoVariants)
 
     // ── Persist ────────────────────────────────────────────────────────────
-    const saved = await persistInlineImages(db, { ...canvas, designSelection: {paletteId:palettePick.id,id:selected.id,name:selected.name,tags:selected.tags}, designInput:{brandContext,copy,resolvedPlan}, designCampaign: { brand: campaignBrand, index: campaignIndex, concept: campaignConcept(resolvedPlan), issues: designIssues(direction, copy, resolvedPlan) } })
+    const saved = await persistInlineImages(db, { ...canvas, designSelection: {paletteId:palettePick.id,id:preset?.id || selected.id,name:preset?.name || selected.name,tags:preset?.tags || selected.tags}, designInput:{brandContext,copy,resolvedPlan}, designCampaign: { brand: campaignBrand, index: campaignIndex, concept: campaignConcept(resolvedPlan), issues: designIssues(direction, copy, resolvedPlan) } })
     if (persist) await db.collection('canvases').insertOne(saved)
     const { _id, ...result } = saved as any
     return corsify(NextResponse.json(result))
@@ -2284,7 +2298,6 @@ function recoverDesignInput(canvas: any) {
 }
 
 export async function handleSwitchDesign(db: any, id: string, body: any) {
-  if (!DESIGN_LIBRARY.some(d=>d.id===body.designId)) return corsify(NextResponse.json({error:'Choose a valid design'},{status:400}))
   const current = await db.collection('canvases').findOne({id})
   if (!current) return corsify(NextResponse.json({error:'Canvas not found'},{status:404}))
   const input = current.designInput ?? recoverDesignInput(current)

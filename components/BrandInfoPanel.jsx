@@ -62,6 +62,7 @@ export default function BrandInfoPanel({ flowId, flows = [], onFlowCreated }) {
         const bc = flow?.brandContext
         if (bc && (bc.name || bc.about)) {
           setData({
+            ...bc,
             name:     bc.name     || '',
             about:    bc.about    || '',
             logo:     bc.logo     || '',
@@ -171,6 +172,7 @@ export default function BrandInfoPanel({ flowId, flows = [], onFlowCreated }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           brandContext: {
+            ...data,
             name:     data.name,
             about:    data.about,
             logo:     data.logo,

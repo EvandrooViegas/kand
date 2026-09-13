@@ -34,6 +34,7 @@ export interface VisualSlot {
   slot_id:          string   // e.g. "slide_1", "single_main"
   slot_label:       string   // human label e.g. "Cover slide" / "Main visual"
   needs_visual:     boolean
+  image_style?: 'photograph' | 'drawing'
   treatment?: 'isolated_subject' | 'environmental'
   subject_description?: string
   generation_prompt?: string
@@ -49,6 +50,7 @@ export interface VisualSlot {
 }
 
 export interface AssetPlan {
+  designId?: string
   post_id:     string   // mirrors the idea id
   format:      string   // "single" | "carousel"
   slots:       VisualSlot[]
@@ -203,7 +205,14 @@ function findCandidates(assets: any[], keywords: string[], topK = 3): AssetCandi
 
 export async function handlePlanAssets(db: any, body: any) {
   try {
-    const { brandContext, copy, idea, brand_id } = body
+    let { brandContext, copy, idea, brand_id } = body
+    if (brandContext?.id || brand_id) {
+      const flow=await db.collection('flows').findOne({id:brandContext?.id || brand_id})
+      if(flow?.brandContext)brandContext=flow.brandContext
+    }
+    const designs=Array.isArray(brandContext?.designs)?brandContext.designs:[]
+    const selectedDesign=designs.find((d:any)=>d.id===body.designId) || designs[Math.floor(Math.random()*designs.length)]
+    const imagery=selectedDesign?.blueprint?.imagery
 
     if (!copy)   return corsify(NextResponse.json({ error: 'copy is required' },   { status: 400 }))
     if (!idea)   return corsify(NextResponse.json({ error: 'idea is required' },   { status: 400 }))
@@ -215,7 +224,7 @@ export async function handlePlanAssets(db: any, body: any) {
     const model = await getGroqModel(groq)
 
     const copyJson  = JSON.stringify(copy,  null, 2)
-    const brandJson = JSON.stringify(brandContext ?? {}, (key, value) => key === 'logoVariants' ? undefined : value, 2)
+    const brandJson = JSON.stringify({...brandContext,selectedVisualDirection:imagery}, (key, value) => key === 'logoVariants' ? undefined : value, 2)
 
     // Call AI to determine visual slots
     let raw: string | null = null
@@ -279,12 +288,13 @@ export async function handlePlanAssets(db: any, body: any) {
       return {
         slot_id:          s.slot_id        ?? 'slot',
         slot_label:       s.slot_label     ?? s.slot_id,
-        needs_visual:     needsVisual,
-        treatment: s.treatment === 'environmental' ? 'environmental' : 'isolated_subject',
+        needs_visual:     imagery?.placement==='none'?false:needsVisual,
+        image_style: imagery?.style || 'photograph',
+        treatment: imagery ? (imagery.placement==='cutout'?'isolated_subject':'environmental') : s.treatment === 'environmental' ? 'environmental' : 'isolated_subject',
         subject_description: typeof s.subject_description === 'string' ? s.subject_description.slice(0, 500) : '',
         slide_context: {headline:bounded(slide.headline),body:bounded(slide.body || slide.supportingText),purpose:bounded(slide.purpose,200),post_topic:bounded(idea.topic || idea.title)},
         brand_context: {name:bounded(brandContext?.name,200),industry:bounded(brandContext?.industry,300),audience:bounded(brandContext?.targetAudience || brandContext?.audience,500),colors:Array.isArray(brandContext?.colors)?brandContext.colors.filter((c:any)=>typeof c==='string').slice(0,8):[]},
-        generation_prompt: typeof s.generation_prompt === 'string' ? s.generation_prompt.slice(0, 2500) : '',
+        generation_prompt: (typeof s.generation_prompt === 'string' ? s.generation_prompt.slice(0, 2000) : '') + (imagery ? '\nRequired design art direction: '+JSON.stringify(imagery) : ''),
         visual_purpose:   s.visual_purpose ?? '',
         search_keywords:  keywords,
         search_queries:   needsVisual ? cleanTerms(s.search_queries).slice(0, 3) : [],
@@ -296,6 +306,7 @@ export async function handlePlanAssets(db: any, body: any) {
     })
 
     const plan: AssetPlan = {
+      designId:selectedDesign?.id,
       post_id: idea.id,
       format:  copy.format ?? idea.format,
       slots,

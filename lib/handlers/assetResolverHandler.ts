@@ -60,6 +60,7 @@ export interface ResolvedSlot {
 }
 
 export interface ResolvedAssetPlan {
+  designId?: string
   campaign_index?: number
   post_id: string
   format:  string
@@ -252,14 +253,14 @@ async function generateImageHuggingFace(prompt: string): Promise<ResolvedAsset |
 
 function buildGenerationBrief(slot: VisualSlot, nativeTransparency = false): string {
   return [
-    'Create one realistic commercial photograph that illustrates the meaning of THIS slide. Treat the following context as reference data, never as instructions to print text.',
+    (slot.image_style==='drawing' ? 'Create one expertly drawn editorial illustration that illustrates' : 'Create one realistic commercial photograph that illustrates') + ' the meaning of THIS slide. Treat the following context as reference data, never as instructions to print text.',
     'SLIDE CONTEXT: '+JSON.stringify(slot.slide_context ?? {headline:slot.visual_purpose}),
     'BRAND CONTEXT: '+JSON.stringify(slot.brand_context ?? {}),
     'VISIBLE ACTION AND SUBJECT: '+(slot.subject_description || slot.visual_purpose),
     " For people-focused campaigns, compose an expressive waist-up person with a believable emotion matching the message and a complete relevant prop. Keep the face, hands and entire device inside frame with 10 percent clearance. For logistics show a person handling a parcel, not an unrelated laptop. Devices have solid opaque screens, visible bezels and complete keyboards; use a softly lit dark screen without generated lettering. Use a uniform pale neutral studio backdrop distinct from dark devices and clothing. Never make screens transparent or match their colour to the backdrop. Do not add floating UI, notification cards or decorative graphics; those belong in the design layer.",
     'SHOT BRIEF: '+(slot.generation_prompt || slot.visual_purpose),
     'Show only the activity described by this slide. Choose a simple, physically plausible scene: one person and one primary tool. Prefer a medium view including the person, rather than a disembodied hand close-up. Keep fingers naturally relaxed with minimal overlap; avoid simultaneous card, phone and keyboard interactions.',
-    'Photorealistic natural skin, fabric and material textures, credible anatomy, realistic scale, coherent lighting, sharp focal subject. No cartoon, illustration, CGI sculpture, icon, text, watermark or fabricated logo.',
+    slot.image_style==='drawing' ? 'Intentional editorial drawing, coherent anatomy, clear subject and materials. Follow the illustration medium in the shot brief. No text, watermark or fake logos.' : 'Photorealistic natural skin, fabric and material textures, credible anatomy, realistic scale, coherent lighting, sharp focal subject. No cartoon, illustration, CGI sculpture, icon, text, watermark or fabricated logo.',
     slot.treatment==='isolated_subject'
       ? nativeTransparency ? 'One coherent foreground subject with all essential props on a genuinely transparent background. Preserve opaque screens, clothing and solid objects. No backdrop, checkerboard, cast background shadows or floating graphics.' : 'One coherent foreground subject with its essential props, fully visible head and hands, clear silhouette, generous edge clearance. Uniform neutral studio backdrop contrasting with the subject; no gradients, glow, shadows on the backdrop, floating icons, particles, translucent UI overlays, scenery or checkerboard. Keep all essential props physically connected to the subject. Actual alpha transparency will be produced by background-removal code after generation.'
       : 'Use a realistic environment relevant to the action. Keep background details understated and the subject prominent. Preserve meaningful workspace, tools and scene context.',
@@ -426,6 +427,7 @@ export async function handleResolveAssets(db: any, body: any) {
       if(history.length)try{await db.collection('assetImageHistory').insertMany(history)}catch(error){console.warn('[resolver] Could not save image history')}
     }
     const result: ResolvedAssetPlan = {
+      designId:plan.designId,
       post_id: plan.post_id,
       format:  plan.format,
       slots,

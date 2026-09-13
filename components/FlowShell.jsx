@@ -16,7 +16,7 @@ import { toast } from 'sonner'
 
 const TABS = [
   { slug: 'creation',           label: 'Creation',           icon: Wand2     },
-  { slug: 'brand-information',  label: 'Brand Information',  icon: Sparkles  },
+  { slug: 'brand-information',  label: 'Brand Personalization',  icon: Sparkles  },
   { slug: 'gallery',            label: 'Gallery',            icon: Images    },
 ]
 

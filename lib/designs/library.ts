@@ -12,7 +12,7 @@ export const DESIGN_LIBRARY = [
 ] as const
 
 /** Shared visual language, different compositions for each chapter of a carousel. */
-export function librarySpec(design: typeof DESIGN_LIBRARY[number], slot: any, copy: any, index = 0, total = 1) {
+export function librarySpec(design: typeof DESIGN_LIBRARY[number], slot: any, copy: any, index = 0, total = 1, art: any = null) {
   const family = DESIGN_LIBRARY.findIndex(d => d.id === design.id)
   const closing = total > 1 && index === total - 1
   const chapter = index === 0 ? 0 : closing ? 4 : 1 + (index - 1) % 3
@@ -46,6 +46,18 @@ export function librarySpec(design: typeof DESIGN_LIBRARY[number], slot: any, co
   }
   // A headline-only cover gives the focal image the full lower stage.
   if (index === 0 && !copy.body && slot.resolvedAsset?.url) b = [72,140,936,230,72,800,936,100,72,400,936,560]
+  if (art) {
+    const mirrored = chapter % 2 === 1
+    if (art.composition === 'split') b = mirrored
+      ? [570,150,440,290,570,520,420,350,40,180,480,720]
+      : [72,150,440,290,72,520,420,350,560,180,480,720]
+    if (art.composition === 'stage') b = chapter === 0
+      ? [90,130,900,220,72,820,936,100,140,400,800,380]
+      : [72,560,936,220,72,810,900,110,220,130,640,360]
+    if (art.composition === 'diagonal') b = mirrored
+      ? [72,130,936,220,72,440,300,420,440,400,570,500]
+      : [72,130,936,220,730,440,280,420,50,400,610,500]
+  }
   const numbered = /(?:^|[→\n])\s*\d+[.)]?\s+/.test(copy.body || '') && (String(copy.body).match(/(?:^|[→\n])\s*\d+[.)]?\s+/g)||[]).length > 1
   if (!slot.resolvedAsset?.url && index === 0) b = [72,175,936,340,72,630,820,230,780,760,220,160]
   const bulleted = splitBulletItems(copy.body).length > 1
@@ -59,6 +71,11 @@ export function librarySpec(design: typeof DESIGN_LIBRARY[number], slot: any, co
   if (design.motif === 'shape') Object.assign(motif,{x:0,y:chapter%2?120:480,width:1080,height:chapter%2?300:440,opacity:35})
   if (design.motif === 'number') Object.assign(motif,{...box(8),size:260})
   if (slot.resolvedAsset?.subject && ['glow','gradient','circle'].includes(design.motif)) Object.assign(motif,{type:'glow',...box(8),radius:0,opacity:42})
+  if (art) {
+    motif.type = art.motif === 'ring' ? 'ring' : art.motif === 'beam' ? 'shape' : 'gradient'
+    Object.assign(motif,{x:art.composition==='split'?480:40,y:chapter%2?220:100,width:art.composition==='split'?580:1000,height:850,opacity:art.motif==='beam'?32:18,rotation:art.motif==='beam'?-12:0})
+    elements.push({type:'glow',x:chapter%2?0:480,y:80,width:580,height:650,color:'accent',opacity:art.lighting==='dramatic'?44:20,layer:-6})
+  }
   if (!(index === 0 && motif.type === 'number')) elements.push(motif)
   const hasImage = !!slot.resolvedAsset?.url && !numbered && !bulleted
   const subject = !!slot.resolvedAsset?.subject
@@ -84,6 +101,10 @@ export function librarySpec(design: typeof DESIGN_LIBRARY[number], slot: any, co
     } else if (['gallery','collage','editorial'].includes(design.id)) {
       elements.push({type:'card',x:Math.max(0,imageBox.x-12),y:Math.max(0,imageBox.y-12),width:imageBox.width+24,height:imageBox.height+24,fill:accent,color:accent,opacity:22,radius:16,layer:-2})
     }
+    if (art && !subject) {
+      elements.push({type:'glow',x:imageBox.x+18,y:imageBox.y+32,width:imageBox.width,height:imageBox.height,color:'text',opacity:art.lighting==='dramatic'?22:10,layer:0})
+      elements.push({type:'card',x:Math.max(0,imageBox.x-12),y:Math.max(0,imageBox.y-12),width:imageBox.width+24,height:imageBox.height+24,fill:'surface',color:'surface',opacity:100,radius:20,layer:1})
+    }
     elements.push({type:'image',assetId:slot.slot_id,image_variant:subject?'subject':'photo',...imageBox,radius:subject?0:design.id==='orbit'?140:12,treatment:'natural',layer:2})
     if (subject && !grounded) {
       // A deliberate foreground ledge hides the waist crop on upper-stage portraits.
@@ -93,7 +114,7 @@ export function librarySpec(design: typeof DESIGN_LIBRARY[number], slot: any, co
     // Give text-led chapters a focal graphic in the space reserved for imagery.
     elements.push({type:['blueprint','editorial','poster'].includes(design.id)?'number':'ring',...box(8),size:240,color:accent,opacity:22,stroke:8,layer:-1})
   }
-  const size = chapter===0 ? (design.id==='poster'?106:86) : closing ? 92 : chapter===2 ? 82 : chapter===3 ? 76 : 68
+  const size = art ? (chapter===0?96:chapter===2?82:70) : chapter===0 ? (design.id==='poster'?106:86) : closing ? 92 : chapter===2 ? 82 : chapter===3 ? 76 : 68
   elements.push({type:'text',role:'headline',...box(0),size,minSize:28,color:'text',align:chapter===4&&family%2?'center':'left',lineHeight:1.08})
   if (copy.body) elements.push({type:'text',role:'body',...box(4),size:chapter===2?28:chapter===3?34:30,minSize:18,color:'text'})
   if (copy.eyebrow) elements.push({type:'text',role:'eyebrow',x:72,y:66,width:650,height:44,size:22,color:'text'})

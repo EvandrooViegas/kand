@@ -1,4 +1,5 @@
 'use client'
+import { DEFAULT_TEXT_GRADIENT, buildTextGradientCss, textGradientStyle } from '@/lib/textGradient'
 import DesignLibrary from '@/components/DesignLibrary'
 import { useEffect, useState, useRef, useLayoutEffect, useCallback } from 'react'
 import { useRouter, useParams } from 'next/navigation'
@@ -174,7 +175,7 @@ function LayerPreview({ node }) {
     return (
       <div
         className="w-11 h-11 shrink-0 rounded-md border-2 border-foreground/20 bg-background flex items-center justify-center p-1 overflow-hidden"
-        style={{ fontFamily: `'${node.fontFamily || 'Inter'}', sans-serif`, color: node.color || '#111' }}
+        style={{ fontFamily: `'${node.fontFamily || 'Inter'}', sans-serif`, color: node.color || '#111', ...textGradientStyle(node) }}
       >
         <span className="text-[7px] leading-[1.1] text-center line-clamp-4 font-medium w-full break-words">
           {preview.slice(0, 48)}
@@ -1595,7 +1596,7 @@ function Editor() {
       const ts = clsStyle.textShadow && clsStyle.textShadow.enabled ? clsStyle.textShadow : (node.textShadow && node.textShadow.enabled ? node.textShadow : null)
       return {
         ...base,
-        color: clsStyle.color || node.color || '#000', 
+        color: clsStyle.color || node.color || '#000', ...textGradientStyle(node),
         backgroundColor: clsStyle.background || clsStyle.backgroundColor || 'transparent',
         fontSize: node.fontSize || 48, 
         fontWeight: clsStyle.fontWeight || node.fontWeight || 400,
@@ -2346,7 +2347,7 @@ function Editor() {
                         textAlign: enode.textAlign || 'left', lineHeight: enode.lineHeight || 1.2, whiteSpace: 'pre-wrap', wordBreak: 'break-word',
                         textShadow: enode.textShadow?.enabled ? `${enode.textShadow.offsetX || 0}px ${enode.textShadow.offsetY || 0}px ${enode.textShadow.blur || 0}px ${enode.textShadow.color || '#000'}` : 'none',
                         outline: '2px solid #6366f1', outlineOffset: 2,
-                        zIndex: 50, cursor: 'text'
+                        zIndex: 50, cursor: 'text', ...textGradientStyle(enode)
                       }}
                       onMouseDown={(e) => e.stopPropagation()}
                       onMouseUp={handleSelectionChange}
@@ -2891,10 +2892,15 @@ function TextProperties({ node, updateNode, meta, canvas, editorRef, savedRangeR
           <span className="text-xs font-bold">S</span>
         </Button>
       </div>
-      <div>
+      <div><Label className="text-xs">Text Fill</Label>
+        <select aria-label="Text fill" className="w-full h-10 border rounded-md px-3 text-sm bg-background" value={node.fillType || 'solid'} onChange={e => updateNode(node.id, { fillType: e.target.value, textGradient: node.textGradient || DEFAULT_TEXT_GRADIENT })}>
+          <option value="solid">Solid color</option><option value="gradient">Gradient</option>
+        </select>
+      </div>
+      {node.fillType === 'gradient' ? <GradientProperties textFill node={{ ...DEFAULT_TEXT_GRADIENT, ...node.textGradient, id: node.id }} updateNode={(id, patch) => updateNode(id, { textGradient: { ...DEFAULT_TEXT_GRADIENT, ...node.textGradient, ...patch } })} /> : (      <div>
         <Label className="text-xs">Color</Label>
         <ColorInput value={node.color || '#000000'} onChange={(val) => updateNode(node.id, { color: val })} />
-      </div>
+      </div>)}
       <div>
         <Label className="text-xs">Alignment</Label>
         <select className="w-full h-10 border rounded-md px-3 text-sm bg-background" value={node.textAlign || 'left'} onChange={(e) => updateNode(node.id, { textAlign: e.target.value })}>
@@ -3142,11 +3148,16 @@ function ShapeProperties({ node, updateNode }) {
   )
 }
 
-function GradientProperties({ node, updateNode }) {
+function GradientProperties({ node, updateNode, textFill = false }) {
   const stops = node.stops || []
   const addStop = () => {
-    const lastPos = stops.length ? stops[stops.length - 1].position : 0
-    updateNode(node.id, { stops: [...stops, { color: '#ffffff', position: Math.min(100, lastPos + 25), alpha: 100 }] })
+    const ordered = [...stops].sort((a, b) => a.position - b.position)
+    let position = 50, largestGap = -1
+    for (let i = 1; i < ordered.length; i++) {
+      const gap = ordered[i].position - ordered[i - 1].position
+      if (gap > largestGap) { largestGap = gap; position = (ordered[i].position + ordered[i - 1].position) / 2 }
+    }
+    updateNode(node.id, { stops: [...stops, { color: '#ffffff', position, alpha: 100 }] })
   }
   const removeStop = (idx) => {
     const newStops = stops.filter((_, i) => i !== idx)
@@ -3167,7 +3178,7 @@ function GradientProperties({ node, updateNode }) {
   return (
     <>
       <div className="rounded-md border h-16 relative overflow-hidden" style={{ background: checker }}>
-        <div className="absolute inset-0" style={{ backgroundImage: buildGradientCssClient(node) }} />
+        <div className="absolute inset-0" style={{ backgroundImage: textFill ? buildTextGradientCss(node) : buildGradientCssClient(node) }} />
       </div>
       <div>
         <Label className="text-xs">Type</Label>
@@ -3194,7 +3205,7 @@ function GradientProperties({ node, updateNode }) {
           </div>
         </>
       )}
-      {(node.gradientType || 'linear') === 'linear' && (
+      {!textFill && (node.gradientType || 'linear') === 'linear' && (
         <>
           <div>
             <Label className="text-xs">Shape</Label>
@@ -3209,6 +3220,12 @@ function GradientProperties({ node, updateNode }) {
         </>
       )}
 
+      {textFill && <>
+        <div><Label className="text-xs">Spread (%)</Label><Input aria-label="Gradient spread" type="number" min={1} max={200} value={node.spread ?? 100} onChange={e => updateNode(node.id, { spread: Math.max(1, Math.min(200, Number(e.target.value) || 1)) })} /></div>
+        <div><Label className="text-xs">Spread behavior</Label><select aria-label="Spread behavior" className="w-full h-10 border rounded-md px-3 text-sm bg-background" value={node.spreadMethod || 'pad'} onChange={e => updateNode(node.id, { spreadMethod: e.target.value })}><option value="pad">Extend edge colors</option><option value="repeat">Repeat</option><option value="reflect">Reflect</option></select></div>
+        {node.gradientType === 'radial' && <div><Label className="text-xs">Radial shape</Label><select aria-label="Radial shape" className="w-full h-10 border rounded-md px-3 text-sm bg-background" value={node.radialShape || 'circle'} onChange={e => updateNode(node.id, { radialShape: e.target.value })}><option value="circle">Circle</option><option value="ellipse">Ellipse</option></select></div>}
+        <div className="flex gap-2"><Button variant="outline" size="sm" onClick={() => updateNode(node.id, { stops: [...stops].reverse().map(s => ({ ...s, position: 100 - s.position })) })}>Reverse colors</Button><Button variant="outline" size="sm" onClick={() => updateNode(node.id, { stops: [...stops].sort((a,b) => a.position-b.position).map((s,i) => ({ ...s, position: i * 100 / (stops.length - 1) })) })}>Space evenly</Button></div>
+      </>}
       <div>
         <div className="flex items-center justify-between mb-1">
           <Label className="text-xs">Color Stops</Label>
@@ -3227,10 +3244,10 @@ function GradientProperties({ node, updateNode }) {
                   <Input className="h-7 text-xs font-mono flex-1 min-w-0" value={stop.color} onChange={(e) => updateStop(i, { color: e.target.value })} placeholder="#rrggbb" />
                 </div>
                 <div className="w-14 shrink-0">
-                  <Input type="number" className="h-7 text-xs px-1 text-center" value={stop.position} min={0} max={100}
-                    onChange={(e) => updateStop(i, { position: Math.max(0, Math.min(100, parseInt(e.target.value) || 0)) })} />
+                  <Input type="number" className="h-7 text-xs px-1 text-center" aria-label={`Stop ${i + 1} position (%)`} value={stop.position} min={0} max={100} step={0.1}
+                    onChange={(e) => updateStop(i, { position: Math.max(0, Math.min(100, parseFloat(e.target.value) || 0)) })} />
                 </div>
-                <Button variant="ghost" size="icon" className="w-6 h-6 text-muted-foreground hover:text-red-400 shrink-0" onClick={() => removeStop(i)}><Trash2 className="w-3 h-3" /></Button>
+                <Button variant="ghost" size="icon" className="w-6 h-6 text-muted-foreground hover:text-red-400 shrink-0" aria-label={`Remove stop ${i + 1}`} disabled={stops.length <= 2} onClick={() => removeStop(i)}><Trash2 className="w-3 h-3" /></Button>
               </div>
               <div className="flex items-center gap-2 px-0.5">
                 <Label className="text-[10px] uppercase text-muted-foreground shrink-0">Alpha</Label>
