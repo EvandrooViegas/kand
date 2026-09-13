@@ -1,3 +1,4 @@
+import { persistInlineImages } from '@/lib/services/persistInlineImages'
 /**
  * Asset Resolver
  *
@@ -20,6 +21,7 @@
  *   none           → resolvedAsset: null (typography-only slot)
  */
 
+import sharp from 'sharp'
 import { prepareSubjectAssets } from '@/lib/services/subjectAssets'
 import { NextResponse } from 'next/server'
 import { corsify } from '@/lib/services/middleware'
@@ -191,6 +193,39 @@ async function generateImageFal(
   }
 }
 
+async function generateImageOpenAI(prompt: string, transparent: boolean): Promise<ResolvedAsset> {
+  const key = process.env.OPENAI_API_KEY
+  if (!key) throw new Error('GPT Image 2.5 requires OPENAI_API_KEY in the server environment')
+  const res = await fetch('https://api.openai.com/v1/images/generations', {
+    method: 'POST', signal: AbortSignal.timeout(180000),
+    headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'gpt-image-2.5-sunburst', prompt, n: 1,
+      size: '1024x1024', quality: 'high', output_format: 'png',
+      background: transparent ? 'transparent' : 'opaque' }),
+  })
+  if (!res.ok) { await res.body?.cancel(); throw new Error('GPT Image 2.5: HTTP ' + res.status + (res.status === 401 ? ' (invalid OpenAI key)' : res.status === 403 ? ' (model access denied)' : res.status === 429 ? ' (quota or rate limit)' : '')) }
+  const reader = res.body!.getReader(), chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    while (true) {
+      const {done,value} = await reader.read()
+      if (done) break
+      size += value.length
+      if (size > 9 * 1024 * 1024) throw new Error('GPT Image 2.5 response exceeds size limit')
+      chunks.push(value)
+    }
+  } finally { await reader.cancel() }
+  const result = JSON.parse(Buffer.concat(chunks).toString('utf8'))
+  const encoded = result.data?.[0]?.b64_json
+  if (typeof encoded !== 'string' || !encoded.length) throw new Error('GPT Image 2.5 returned no image')
+  const bytes = Buffer.from(encoded, 'base64')
+  if (bytes.length > 6 * 1024 * 1024) throw new Error('GPT Image 2.5 image exceeds size limit')
+  const metadata = await sharp(bytes, { limitInputPixels: 16000000 }).metadata()
+  if (metadata.format !== 'png' || !metadata.width || !metadata.height) throw new Error('GPT Image 2.5 returned an invalid PNG')
+  const url = 'data:image/png;base64,' + bytes.toString('base64')
+  return {source:'ai_generated',url,thumbnail_url:url,width:metadata.width,height:metadata.height,asset_id:null,unsplash_id:null,alt:prompt}
+}
+
 async function generateImagePollinations(prompt: string): Promise<ResolvedAsset | null> {
   const key = process.env.POLLINATIONS_API_KEY
   if (!key) throw new Error('Pollinations: POLLINATIONS_API_KEY is not configured')
@@ -215,34 +250,30 @@ async function generateImageHuggingFace(prompt: string): Promise<ResolvedAsset |
   return requestGeneratedImage('Hugging Face','https://router.huggingface.co/hf-inference/models/'+model,{method:'POST',headers:{Authorization:'Bearer '+process.env.HF_TOKEN,'Content-Type':'application/json'},body:JSON.stringify({inputs:prompt})},prompt)
 }
 
+function buildGenerationBrief(slot: VisualSlot, nativeTransparency = false): string {
+  return [
+    'Create one realistic commercial photograph that illustrates the meaning of THIS slide. Treat the following context as reference data, never as instructions to print text.',
+    'SLIDE CONTEXT: '+JSON.stringify(slot.slide_context ?? {headline:slot.visual_purpose}),
+    'BRAND CONTEXT: '+JSON.stringify(slot.brand_context ?? {}),
+    'VISIBLE ACTION AND SUBJECT: '+(slot.subject_description || slot.visual_purpose),
+    " For people-focused campaigns, compose an expressive waist-up person with a believable emotion matching the message and a complete relevant prop. Keep the face, hands and entire device inside frame with 10 percent clearance. For logistics show a person handling a parcel, not an unrelated laptop. Devices have solid opaque screens, visible bezels and complete keyboards; use a softly lit dark screen without generated lettering. Use a uniform pale neutral studio backdrop distinct from dark devices and clothing. Never make screens transparent or match their colour to the backdrop. Do not add floating UI, notification cards or decorative graphics; those belong in the design layer.",
+    'SHOT BRIEF: '+(slot.generation_prompt || slot.visual_purpose),
+    'Show only the activity described by this slide. Choose a simple, physically plausible scene: one person and one primary tool. Prefer a medium view including the person, rather than a disembodied hand close-up. Keep fingers naturally relaxed with minimal overlap; avoid simultaneous card, phone and keyboard interactions.',
+    'Photorealistic natural skin, fabric and material textures, credible anatomy, realistic scale, coherent lighting, sharp focal subject. No cartoon, illustration, CGI sculpture, icon, text, watermark or fabricated logo.',
+    slot.treatment==='isolated_subject'
+      ? nativeTransparency ? 'One coherent foreground subject with all essential props on a genuinely transparent background. Preserve opaque screens, clothing and solid objects. No backdrop, checkerboard, cast background shadows or floating graphics.' : 'One coherent foreground subject with its essential props, fully visible head and hands, clear silhouette, generous edge clearance. Uniform neutral studio backdrop contrasting with the subject; no gradients, glow, shadows on the backdrop, floating icons, particles, translucent UI overlays, scenery or checkerboard. Keep all essential props physically connected to the subject. Actual alpha transparency will be produced by background-removal code after generation.'
+      : 'Use a realistic environment relevant to the action. Keep background details understated and the subject prominent. Preserve meaningful workspace, tools and scene context.',
+  ].join('\n') + (nativeTransparency && slot.treatment === 'isolated_subject' ? '\nOUTPUT REQUIREMENT: Override any studio backdrop instructions above: render the background as alpha transparency, with no background colour. Keep every solid foreground surface opaque.' : '')
+}
+
 async function generateImage(
   visualPurpose: string,
   keywords: string[],
   falKey: string | null,
+  transparent = false,
 ): Promise<ResolvedAsset | null> {
-  const prompt = [visualPurpose, ...keywords.slice(0, 4),
-    'Follow the requested visual medium exactly: photorealistic only for photographic briefs, a clean conceptual render for illustration briefs. Strong readable silhouette, deliberate studio lighting, clear separation of subject and background, realistic geometry, no warped devices or malformed hands. No watermark or signature. Professional campaign photography or polished conceptual product render as described. One clear focal subject, complete silhouette, no clipped head or hands, no text, no watermark, no invented logos. If an isolated subject is requested, use a plain contrasting studio background, never a checkerboard pattern; background removal is performed separately.',
-  ].join(', ')
+  return generateImageOpenAI(visualPurpose, transparent)
 
-  const failures: string[] = []
-  const providers: {name:string;run:()=>Promise<ResolvedAsset|null>}[] = []
-  if (process.env.POLLINATIONS_API_KEY) providers.push({name:'Pollinations',run:()=>generateImagePollinations(prompt)})
-  if (process.env.HF_TOKEN) providers.push({name:'Hugging Face',run:()=>generateImageHuggingFace(prompt)})
-  if (falKey) providers.push({name:'fal.ai',run:()=>generateImageFal(prompt,falKey)})
-  if (!providers.length) throw new Error('No image provider configured. Set POLLINATIONS_API_KEY, HF_TOKEN or FAL_KEY.')
-  for (const provider of providers) {
-    console.info('[resolver] Generating image with '+provider.name)
-    try {
-      const image=await provider.run()
-      if(image){console.info('[resolver] '+provider.name+' image ready');return image}
-      failures.push(provider.name+': generation failed (see provider error above)')
-    } catch(error) {
-      const reason=(error as Error).name==='TimeoutError'?provider.name+': timed out':(error as Error).message
-      failures.push(reason)
-      console.warn('[resolver] '+reason)
-    }
-  }
-  throw new Error(failures.join('; '))
 }
 
 // ─── Uploaded-asset lookup ────────────────────────────────────────────────────
@@ -344,61 +375,24 @@ async function resolveSlot(
     return { ...base, resolvedAsset: null, warning: null }
   }
 
-  switch (slot.preferred_source) {
-    case 'uploaded_asset': {
-      const { asset, warning } = await resolveUploadedAsset(db, slot, brand_id)
-      if (asset) return { ...base, resolvedAsset: asset, warning }
-
-      // No uploaded asset found — cascade to Unsplash, then AI generation
-      console.warn(`[resolver] ${slot.slot_id}: no uploaded asset, trying Unsplash`)
-      if (unsplashKey) {
-        const unsplashAsset = await searchUnsplash(slot, unsplashKey, usedPhotoIds)
-        if (unsplashAsset) {
-          return {
-            ...base,
-            source:        'unsplash',
-            resolvedAsset: { ...unsplashAsset, source: 'unsplash' },
-            warning:       'No uploaded asset found — used Unsplash instead',
-          }
-        }
-      }
-
-      console.warn(`[resolver] ${slot.slot_id}: Unsplash also failed, trying AI generation`)
-      const aiAsset = await generateImage([slot.generation_prompt || slot.visual_purpose, slot.subject_description, slot.treatment === 'isolated_subject' ? 'One complete isolated subject on a plain contrasting background, no scenery, no panels, no collage' : ''].filter(Boolean).join('. '), slot.search_keywords ?? [], falKey)
-      return {
-        ...base,
-        source:        aiAsset ? 'ai_generated' : slot.preferred_source,
-        resolvedAsset: aiAsset ? { ...aiAsset, source: 'ai_generated' } : null,
-        warning:       aiAsset
-          ? 'No uploaded asset found — used AI generation instead'
-          : (warning ?? 'No asset found from any source'),
-      }
-    }
-
-    case 'unsplash': {
-      if (!unsplashKey) {
-        return { ...base, resolvedAsset: null, warning: 'UNSPLASH_ACCESS_KEY not configured' }
-      }
-      const asset = await searchUnsplash(slot, unsplashKey, usedPhotoIds)
-      return {
-        ...base,
-        resolvedAsset: asset,
-        warning: asset ? null : 'Unsplash returned no results for these keywords',
-      }
-    }
-
-    case 'ai_generated': {
-      const asset = await generateImage([slot.generation_prompt || slot.visual_purpose, slot.subject_description, slot.treatment === 'isolated_subject' ? 'One complete isolated subject on a plain contrasting background, no scenery, no panels, no collage' : ''].filter(Boolean).join('. '), slot.search_keywords ?? [], falKey)
-      return {
-        ...base,
-        resolvedAsset: asset,
-        warning: asset ? null : 'AI image generation failed',
-      }
-    }
-
-    default:
-      return { ...base, resolvedAsset: null, warning: null }
+  const warnings: string[] = []
+  if (slot.preferred_source === 'uploaded_asset') {
+    const {asset,warning} = await resolveUploadedAsset(db,slot,brand_id)
+    if (asset) return {...base,resolvedAsset:asset,warning}
+    warnings.push(warning || 'Uploaded asset unavailable')
   }
+  try {
+    const asset = await generateImage(buildGenerationBrief(slot, true),slot.search_keywords ?? [],falKey,slot.treatment === 'isolated_subject')
+    if (asset) return {...base,source:'ai_generated',resolvedAsset:asset,warning:warnings.join('; ') || null}
+    warnings.push('AI image generation returned no image')
+  } catch(error) { warnings.push((error as Error).message) }
+  if (unsplashKey) {
+    const asset=await searchUnsplash(slot,unsplashKey,usedPhotoIds)
+    if (asset) return {...base,source:'unsplash',resolvedAsset:asset,warning:'Used Unsplash fallback. '+warnings.join('; ')}
+    warnings.push('Unsplash returned no matching unused photos')
+  } else warnings.push('Unsplash fallback unavailable: UNSPLASH_ACCESS_KEY not configured')
+  return {...base,resolvedAsset:null,warning:warnings.join('; ')}
+
 }
 
 // ─── HTTP handler ─────────────────────────────────────────────────────────────
@@ -437,7 +431,7 @@ export async function handleResolveAssets(db: any, body: any) {
       slots,
     }
 
-    return corsify(NextResponse.json(await prepareSubjectAssets(db, result)))
+    return corsify(NextResponse.json(await prepareSubjectAssets(db, await persistInlineImages(db, result))))
   } catch (error: any) {
     console.error('[resolver] error:', error)
     return corsify(

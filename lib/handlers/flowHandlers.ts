@@ -1,3 +1,4 @@
+import { persistInlineImages } from '@/lib/services/persistInlineImages'
 import { NextResponse } from 'next/server'
 import { v4 as uuidv4 } from 'uuid'
 import { corsify } from '@/lib/services/middleware'
@@ -51,7 +52,7 @@ export async function handleUpdateFlow(db: any, flowId: string, body: any) {
       { id: flowId },
       {
         $set: {
-          ...body,
+          ...await persistInlineImages(db, body),
           updatedAt: new Date(),
         },
       },

@@ -5,9 +5,9 @@ const vm = require('node:vm')
 const { stripTypeScriptTypes } = require('node:module')
 const source = fs.readFileSync(require('node:path').join(__dirname, '../lib/handlers/assetResolverHandler.ts'), 'utf8')
   .replace(/^import .*$/gm, '').replace(/export /g, '')
-function engine(fetch) {
-  return vm.runInNewContext(stripTypeScriptTypes(source) + '\n({ searchUnsplash, resolveSlot })', {
-    fetch, console, Math: Object.assign(Object.create(Math), { random: () => 0 }),
+function engine(fetch, generation, env = {}) {
+  return vm.runInNewContext(stripTypeScriptTypes(source) + (generation ? '\ngenerateImage = generation;\n' : '') + '\n({ searchUnsplash, resolveSlot, buildGenerationBrief, generateImageOpenAI })', {
+    fetch, generation, console, Buffer, Uint8Array, AbortSignal, sharp: require('sharp'), process: {env}, Math: Object.assign(Object.create(Math), { random: () => 0 }),
   })
 }
 const photo = id => ({ id, urls: { regular: `https://images.example/${id}` } })
@@ -55,4 +55,44 @@ test('isolated subject ranking prefers a relevant portrait over crowds', async (
   ] }) }))
   const result = await e.searchUnsplash({ ...slot, treatment: 'isolated_subject', search_keywords: ['person'] }, 'key', new Set())
   assert.equal(result.unsplash_id, 'portrait')
+})
+
+test('generation brief includes exact slide context and explicit realism and cutout instructions',()=>{
+ const brief=engine().buildGenerationBrief({...slot,treatment:'isolated_subject',slide_context:{headline:'Work efficiently',body:'Type and manage orders on your laptop'},subject_description:'Shop owner typing on a laptop',brand_context:{name:'Example'}})
+ assert.ok(brief.includes('Type and manage orders on your laptop'))
+ assert.ok(brief.includes('Shop owner typing on a laptop'))
+ assert.ok(brief.includes('Photorealistic'))
+ assert.ok(brief.includes('background-removal code'))
+ const scene=engine().buildGenerationBrief({...slot,treatment:'environmental'})
+ assert.ok(scene.includes('Preserve meaningful workspace'))
+ assert.ok(!scene.includes('Plain contrasting studio backdrop'))
+})
+
+test('AI failure falls back to Unsplash and reports the actual source',async()=>{
+ const order=[]
+ const e=engine(async()=>{order.push('stock');return {ok:true,json:async()=>({results:[photo('fallback')]})}},async()=>{order.push('ai');throw Error('Provider unavailable')})
+ const result=await e.resolveSlot(null,{...slot,needs_visual:true,preferred_source:'ai_generated'},null,'key',null,new Set())
+ assert.deepEqual(order,['ai','stock'])
+ assert.equal(result.source,'unsplash')
+ assert.match(result.warning,/Provider unavailable/)
+})
+test('successful AI skips stock even for older Unsplash plans',async()=>{
+ const e=engine(async()=>{throw Error('Stock must not run')},async()=>({source:'ai_generated',url:'data:image/png;base64,fixture'}))
+ const result=await e.resolveSlot(null,{...slot,needs_visual:true,preferred_source:'unsplash'},null,'key',null,new Set())
+ assert.equal(result.source,'ai_generated')
+})
+
+test('GPT Image 2.5 requests native transparent PNG and reads real dimensions', async () => {
+  const png=await require('sharp')({create:{width:64,height:80,channels:4,background:'#00000000'}}).png().toBuffer()
+  let request
+  const e=engine(async (url,options)=>{request=JSON.parse(options.body);assert.equal(url,'https://api.openai.com/v1/images/generations');return new Response(JSON.stringify({data:[{b64_json:png.toString('base64')}]}))},null,{OPENAI_API_KEY:'test-only'})
+  const image=await e.generateImageOpenAI('person holding complete laptop',true)
+  assert.equal(request.model,'gpt-image-2.5-sunburst')
+  assert.equal(request.background,'transparent')
+  assert.equal(request.output_format,'png')
+  assert.equal(image.width,64);assert.equal(image.height,80)
+})
+test('missing OpenAI key reports configuration error without fetching',async()=>{
+ const e=engine(()=>{throw Error('must not fetch')})
+ await assert.rejects(e.generateImageOpenAI('photo',false),/OPENAI_API_KEY/)
 })

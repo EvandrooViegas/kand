@@ -1,3 +1,4 @@
+import { persistInlineImages } from '@/lib/services/persistInlineImages'
 import { PALETTE_PICKS, paletteColors, choosePalette } from '@/lib/designs/palettes'
 import { DESIGN_LIBRARY, librarySpec, splitBulletItems } from '@/lib/designs/library'
 import { withoutEmoji } from '@/lib/services/copyText'
@@ -2247,7 +2248,7 @@ export async function handleDesignCanvas(db: any, body: any, persist = true) {
     await softenCanvasLogos(canvas, logoUrl, brandContext?.logoVariants)
 
     // ── Persist ────────────────────────────────────────────────────────────
-    const saved = { ...canvas, designSelection: {paletteId:palettePick.id,id:selected.id,name:selected.name,tags:selected.tags}, designInput:{brandContext,copy,resolvedPlan}, designCampaign: { brand: campaignBrand, index: campaignIndex, concept: campaignConcept(resolvedPlan), issues: designIssues(direction, copy, resolvedPlan) } }
+    const saved = await persistInlineImages(db, { ...canvas, designSelection: {paletteId:palettePick.id,id:selected.id,name:selected.name,tags:selected.tags}, designInput:{brandContext,copy,resolvedPlan}, designCampaign: { brand: campaignBrand, index: campaignIndex, concept: campaignConcept(resolvedPlan), issues: designIssues(direction, copy, resolvedPlan) } })
     if (persist) await db.collection('canvases').insertOne(saved)
     const { _id, ...result } = saved as any
     return corsify(NextResponse.json(result))

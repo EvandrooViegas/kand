@@ -63,7 +63,20 @@ export function librarySpec(design: typeof DESIGN_LIBRARY[number], slot: any, co
   const hasImage = !!slot.resolvedAsset?.url && !numbered && !bulleted
   const subject = !!slot.resolvedAsset?.subject
   if (hasImage) {
-    const imageBox = box(8)
+    let imageBox = box(8)
+    let grounded = false
+    if (subject) {
+      const ratio = slot.resolvedAsset.subject.width / slot.resolvedAsset.subject.height
+      const hasCopyBelow = !!copy.cta || b[5] >= imageBox.y + imageBox.height
+      // Match the asset aspect ratio so contain cannot leave a floating base.
+      const availableHeight = hasCopyBelow ? imageBox.height : 1080 - imageBox.y
+      const height = Math.min(availableHeight, imageBox.width / ratio)
+      const width = height * ratio
+      imageBox = { x:imageBox.x + (imageBox.width-width)/2, y:hasCopyBelow ? imageBox.y : 1080-height, width, height }
+      grounded = !hasCopyBelow
+      elements.push({type:'glow',x:Math.max(0,imageBox.x-40),y:Math.max(0,imageBox.y-50),width:Math.min(1080,imageBox.width+80),height:imageBox.height,color:accent,opacity:chapter===0?30:16,layer:-3})
+      elements.push({type:'ring',x:imageBox.x+imageBox.width*.1,y:imageBox.y+imageBox.height*.12,width:imageBox.width*.8,height:imageBox.height*.65,color:accent,stroke:3,opacity:24,layer:-2})
+    }
     if (['spotlight','orbit','panorama','botanical'].includes(design.id)) {
       // Light sits behind the silhouette, never over its face or the copy.
       elements.push({type:'glow',...imageBox,color:accent,opacity:chapter===0?38:24,layer:-3})
@@ -71,14 +84,18 @@ export function librarySpec(design: typeof DESIGN_LIBRARY[number], slot: any, co
     } else if (['gallery','collage','editorial'].includes(design.id)) {
       elements.push({type:'card',x:Math.max(0,imageBox.x-12),y:Math.max(0,imageBox.y-12),width:imageBox.width+24,height:imageBox.height+24,fill:accent,color:accent,opacity:22,radius:16,layer:-2})
     }
-    elements.push({type:'image',assetId:slot.slot_id,image_variant:subject?'subject':'photo',...imageBox,radius:design.id==='orbit'?140:12,treatment:'natural',layer:2})
+    elements.push({type:'image',assetId:slot.slot_id,image_variant:subject?'subject':'photo',...imageBox,radius:subject?0:design.id==='orbit'?140:12,treatment:'natural',layer:2})
+    if (subject && !grounded) {
+      // A deliberate foreground ledge hides the waist crop on upper-stage portraits.
+      elements.push({type:'card',x:Math.max(0,imageBox.x-20),y:imageBox.y+imageBox.height-22,width:Math.min(1040,imageBox.width+40),height:30,fill:accent,color:accent,opacity:100,radius:0,layer:3})
+    }
   } else if (design.motif !== 'number' && index !== 0 && !numbered && !bulleted) {
     // Give text-led chapters a focal graphic in the space reserved for imagery.
     elements.push({type:['blueprint','editorial','poster'].includes(design.id)?'number':'ring',...box(8),size:240,color:accent,opacity:22,stroke:8,layer:-1})
   }
-  const size = chapter===0 ? (design.id==='poster'?106:86) : closing ? 92 : chapter===2 ? 78 : 66
+  const size = chapter===0 ? (design.id==='poster'?106:86) : closing ? 92 : chapter===2 ? 82 : chapter===3 ? 76 : 68
   elements.push({type:'text',role:'headline',...box(0),size,minSize:28,color:'text',align:chapter===4&&family%2?'center':'left',lineHeight:1.08})
-  if (copy.body) elements.push({type:'text',role:'body',...box(4),size:chapter===2?28:30,minSize:18,color:'text'})
+  if (copy.body) elements.push({type:'text',role:'body',...box(4),size:chapter===2?28:chapter===3?34:30,minSize:18,color:'text'})
   if (copy.eyebrow) elements.push({type:'text',role:'eyebrow',x:72,y:66,width:650,height:44,size:22,color:'text'})
   if (copy.cta) elements.push({type:closing?'badge':'text',role:'cta',x:72,y:960,width:closing?Math.min(830,Math.max(300,String(copy.cta).length*16+48)):830,height:64,size:26,minSize:18,fill:'primary',color:'text',radius:24})
   const light = design.theme==='studio'

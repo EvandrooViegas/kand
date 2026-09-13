@@ -1,3 +1,4 @@
+import { persistInlineImages } from '@/lib/services/persistInlineImages'
 /**
  * Canvas CRUD handlers for API routes
  */
@@ -72,7 +73,7 @@ export async function handleGetCanvas(db: any, id: string) {
 }
 
 export async function handleUpdateCanvas(db: any, id: string, body: any) {
-  const update = { ...body, id, updatedAt: new Date() }
+  const update = { ...await persistInlineImages(db, body), id, updatedAt: new Date() }
   delete (update as any)._id
   delete (update as any).createdAt
   await db.collection('canvases').updateOne({ id }, { $set: update })

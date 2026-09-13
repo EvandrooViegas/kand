@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
+import ResolvedImagePreview from '@/components/ResolvedImagePreview'
 import {
   Loader2, Sparkles, Lightbulb, Check, RefreshCw,
   LayoutTemplate, Image as ImageIcon, ChevronDown, ChevronUp,
@@ -71,6 +72,8 @@ function PostPipelineCard({
 }) {
   // Which step's content is currently visible
   const [activeView, setActiveView] = useState(null)
+  const [autoRunning, setAutoRunning] = useState(false)
+  const autoLock = useRef(false)
   // Which step is showing a regenerate confirmation popover
   const [confirmRegen, setConfirmRegen] = useState(null)
 
@@ -89,7 +92,7 @@ function PostPipelineCard({
   const resolveError = resolveState?.error ?? null
   const designError  = designState?.error  ?? null
 
-  const anyLoading = copyLoading || planLoading || resolveLoading || designLoading
+  const anyLoading = autoRunning || copyLoading || planLoading || resolveLoading || designLoading
 
   // ── cascade clear downstream steps ───────────────────────────────────────
   // When step N is rerun, steps N+1…4 are invalidated.
@@ -127,7 +130,7 @@ function PostPipelineCard({
           if (!res.ok) throw new Error(data.error || 'Failed')
           onCopyDone(idea.id, { loading: false, error: null, copy: data })
           setActiveView('copy')
-          return
+          return data
         } catch (err) {
           const is429 = err?.message?.includes('429') || err?.message?.includes('rate_limit')
           if (is429 && attempt < 2) { await sleep(15000); continue }
@@ -142,20 +145,21 @@ function PostPipelineCard({
     }
   }
 
-  const runPlan = async () => {
-    if (!copy) { toast.error('Write copy first'); return }
+  const runPlan = async (currentCopy = copy) => {
+    if (!currentCopy) { toast.error('Write copy first'); return }
     clearFrom('plan')
     setPlanLoading(true)
     try {
       const res = await fetch('/api/plan-assets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brandContext, copy, idea, brand_id: brandId }),
+        body: JSON.stringify({ brandContext, copy: currentCopy, idea, brand_id: brandId }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed')
       onPlanDone(idea.id, { loading: false, error: null, plan: data })
       setActiveView('plan')
+      return data
     } catch (err) {
       onPlanDone(idea.id, { loading: false, error: err.message, plan: null })
       toast.error(`Asset plan failed: ${err.message}`)
@@ -164,20 +168,21 @@ function PostPipelineCard({
     }
   }
 
-  const runResolve = async () => {
-    if (!plan) { toast.error('Plan assets first'); return }
+  const runResolve = async (currentPlan = plan) => {
+    if (!currentPlan) { toast.error('Plan assets first'); return }
     clearFrom('resolve')
     setResolveLoading(true)
     try {
       const res = await fetch('/api/resolve-assets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plan, brand_id: brandId }),
+        body: JSON.stringify({ plan: currentPlan, brand_id: brandId }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed')
       onResolveDone(idea.id, { loading: false, error: null, resolved: data })
       setActiveView('resolve')
+      return data
     } catch (err) {
       onResolveDone(idea.id, { loading: false, error: err.message, resolved: null })
       toast.error(`Asset resolve failed: ${err.message}`)
@@ -186,8 +191,8 @@ function PostPipelineCard({
     }
   }
 
-  const runDesign = async () => {
-    if (!resolved) { toast.error('Resolve assets first'); return }
+  const runDesign = async (currentResolved = resolved, currentCopy = copy) => {
+    if (!currentResolved) { toast.error('Resolve assets first'); return }
     clearFrom('design')
     setDesignLoading(true)
     try {
@@ -195,7 +200,7 @@ function PostPipelineCard({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          brandContext, copy, resolvedPlan: resolved,
+          brandContext, copy: currentCopy, resolvedPlan: currentResolved,
           canvasName: `${brandContext?.name ?? ''} — ${idea.topic}`.trim(),
         }),
       })
@@ -203,11 +208,33 @@ function PostPipelineCard({
       if (!res.ok) throw new Error(data.error || 'Failed')
       onDesignDone(idea.id, { loading: false, error: null, canvas: data })
       setActiveView('design')
+      return data
     } catch (err) {
       onDesignDone(idea.id, { loading: false, error: err.message, canvas: null })
       toast.error(`Canvas design failed: ${err.message}`)
     } finally {
       setDesignLoading(false)
+    }
+  }
+
+  const generatePost = async () => {
+    if (autoLock.current || anyLoading) return
+    autoLock.current = true
+    setAutoRunning(true)
+    setConfirmRegen(null)
+    try {
+      let currentCopy = copyError ? null : copy
+      let currentPlan = currentCopy && !planError ? plan : null
+      let currentResolved = currentPlan && !resolveError ? resolved : null
+      if (!currentCopy) { setActiveView('copy'); currentCopy = await runCopy(); if (!currentCopy) return }
+      if (!currentPlan) { setActiveView('plan'); currentPlan = await runPlan(currentCopy); if (!currentPlan) return }
+      if (!currentResolved) { setActiveView('resolve'); currentResolved = await runResolve(currentPlan); if (!currentResolved) return }
+      setActiveView('design')
+      const result = await runDesign(currentResolved, currentCopy)
+      if (result) toast.success('Post ready to edit')
+    } finally {
+      autoLock.current = false
+      setAutoRunning(false)
     }
   }
 
@@ -311,11 +338,19 @@ function PostPipelineCard({
 
       {/* ── Primary action row ── */}
       <div className="px-5 pb-4 flex items-center gap-2 flex-wrap">
+        {(nextStep || autoRunning) && <Button size="sm" onClick={generatePost} disabled={anyLoading} className="gap-1.5">
+          {autoRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+          {autoRunning ? 'Generating post…' : copy ? 'Continue generating post' : 'Generate post'}
+        </Button>}
+        <span role="status" aria-live="polite" className="text-xs text-slate-500">
+          {autoRunning ? copyLoading ? 'Step 1 of 4 · Writing copy' : planLoading ? 'Step 2 of 4 · Planning visuals' : resolveLoading ? 'Step 3 of 4 · Creating images' : designLoading ? 'Step 4 of 4 · Designing post' : 'Preparing next step…' : ''}
+        </span>
         {/* Next step button */}
         {nextStep && (
           <Button
             size="sm"
-            onClick={nextStep.run}
+            variant="outline"
+            onClick={() => nextStep.run()}
             disabled={nextStep.loading || anyLoading}
             className="gap-1.5"
           >
@@ -506,14 +541,7 @@ function PostPipelineCard({
                       }[slot.source] ?? 'bg-slate-100 text-slate-500'
                       return (
                         <div key={slot.slot_id} className="flex items-start gap-3">
-                          {/* Thumbnail */}
-                          <div className="w-20 h-20 rounded-lg overflow-hidden flex-shrink-0 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center">
-                            {asset?.thumbnail_url || asset?.url ? (
-                              <img src={asset.thumbnail_url || asset.url} alt={slot.slot_label} className="w-full h-full object-cover" />
-                            ) : (
-                              <Ban className="w-5 h-5 text-slate-300" />
-                            )}
-                          </div>
+                          <ResolvedImagePreview asset={asset} label={slot.slot_label} />
                           {/* Info */}
                           <div className="flex-1 min-w-0 space-y-1">
                             <div className="flex items-center gap-2 flex-wrap">
@@ -531,12 +559,7 @@ function PostPipelineCard({
                                 <AlertCircle className="w-3 h-3 flex-shrink-0" />{slot.warning}
                               </div>
                             )}
-                            {asset?.url && (
-                              <a href={asset.url} target="_blank" rel="noopener noreferrer"
-                                className="text-xs text-primary hover:underline truncate block">
-                                {asset.url.length > 60 ? asset.url.slice(0, 60) + '…' : asset.url}
-                              </a>
-                            )}
+
                           </div>
                         </div>
                       )

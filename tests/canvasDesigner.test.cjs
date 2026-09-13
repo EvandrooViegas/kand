@@ -9,7 +9,7 @@ const copyTools = vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(requir
 const engine = vm.runInNewContext(stripTypeScriptTypes(source) + '\n({splitDesignSteps,emphasizeHeadline,recoverDesignInput,handleSwitchDesign,validateDesignSpec,renderDesignSpec,fitText,fitTextLayout,normalizeDesignSystem,buildStrategyPalette,ensureContrast,contrastRatio,parseArtDirection,buildSingleCanvas,buildCarouselCanvas,buildPrompt,handleDesignCanvas,designIssues})', {
   ...vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname, '../lib/designs/library.ts'),'utf8').replace(/export /g,''))+'\n({DESIGN_LIBRARY,librarySpec,splitBulletItems})'),
   ...vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname,'../lib/designs/palettes.ts'),'utf8').replace(/export /g,''))+'\n({PALETTE_PICKS,paletteColors,choosePalette})'),
-  withoutEmoji: copyTools.withoutEmoji, prepareSubjectAssets: async (db, plan) => plan, uuidv4: require('node:crypto').randomUUID, console, process: { env: {} },
+  withoutEmoji: copyTools.withoutEmoji, prepareSubjectAssets: async (db, plan) => plan, persistInlineImages: async (db, value) => value, uuidv4: require('node:crypto').randomUUID, console, process: { env: {} },
   NextResponse: { json: (body, options) => ({ body, status: options?.status ?? 200 }) }, corsify: response => response,
 })
 test('global art direction supplies consistent typography, palette, and visual defaults', () => {
