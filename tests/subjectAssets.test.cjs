@@ -5,7 +5,7 @@ const vm = require('node:vm')
 const sharp = require('sharp')
 const { stripTypeScriptTypes } = require('node:module')
 const source = fs.readFileSync(require('node:path').join(__dirname, '../lib/services/subjectAssets.ts'), 'utf8').replace(/^import .*$/gm, '').replace(/export /g, '')
-const service = vm.runInNewContext(stripTypeScriptTypes(source) + '\n({validateSubject,createSubject,prepareSubjectAssets,cleanSubjectMask,restoreSubjectSurfaces,removeStudioBackground})', {
+const service = vm.runInNewContext(stripTypeScriptTypes(source) + '\n({hydrateSubjectCrops,validateSubject,createSubject,prepareSubjectAssets,cleanSubjectMask,restoreSubjectSurfaces,removeStudioBackground})', {
   require, sharp, Buffer, Blob, Uint8Array, URL, console,
   createHash: require('node:crypto').createHash, Binary: require('mongodb').Binary,
   downloadLogo: async () => { throw new Error('offline fixture') },
@@ -22,6 +22,12 @@ test('empty and opaque masks are rejected', async () => {
   assert.equal(await service.validateSubject(await fixture('white')), null)
   const empty = await sharp({ create: { width: 100, height: 100, channels: 4, background: '#00000000' } }).png().toBuffer()
   assert.equal(await service.validateSubject(empty), null)
+})
+test('source crop edges are recorded before transparent padding is trimmed',async()=>{
+ const image=await sharp(Buffer.from('<svg width="100" height="120"><rect x="0" y="20" width="60" height="100" fill="red"/></svg>')).png().toBuffer()
+ const result=await service.validateSubject(image)
+ assert.equal(result.cropEdges.left,true);assert.equal(result.cropEdges.bottom,true)
+ assert.equal(result.cropEdges.top,false);assert.equal(result.cropEdges.right,false)
 })
 test('derivative persists once and subsequent requests reuse it', async () => {
   const uploads = new Map(); let writes = 0
@@ -80,4 +86,32 @@ test('plain code declines complex borders and empty scenes', async () => {
   assert.equal(await service.removeStudioBackground(complex),null)
   const empty=await sharp({create:{width:100,height:100,channels:4,background:'white'}}).png().toBuffer()
   assert.equal(await service.removeStudioBackground(empty),null)
+})
+
+test('saved transparent cutouts gain crop metadata without generating a new asset',async()=>{
+ const png=await sharp(Buffer.from('<svg width="100" height="120"><rect x="40" y="20" width="60" height="100" fill="red"/></svg>')).png().toBuffer()
+ const subject={url:'data:image/png;base64,'+png.toString('base64'),width:100,height:120}
+ const plan={slots:[{slot_id:'existing',treatment:'isolated_subject',resolvedAsset:{url:'original',subject}}]}
+ const result=await service.hydrateSubjectCrops({},plan)
+ assert.equal(result.slots[0].resolvedAsset.subject.url,subject.url)
+ assert.equal(result.slots[0].resolvedAsset.subject.cropEdges.right,true)
+ assert.equal(result.slots[0].resolvedAsset.subject.cropEdges.left,false)
+ assert.equal(plan.slots[0].resolvedAsset.subject.cropEdges,undefined)
+})
+
+test('older padded cutouts with false crop flags are reinspected',async()=>{
+ const png=await sharp(Buffer.from('<svg width="100" height="120"><rect x="4" y="20" width="50" height="96" fill="red"/></svg>')).png().toBuffer()
+ const subject={url:'data:image/png;base64,'+png.toString('base64'),width:100,height:120,cropEdges:{left:false,right:false,top:false,bottom:false}}
+ const plan={slots:[{slot_id:'old',treatment:'environmental',resolvedAsset:{url:'original',subject}}]}
+ const result=await service.hydrateSubjectCrops({},plan)
+ assert.equal(result.slots[0].resolvedAsset.subject.cropEdges.left,true)
+ assert.equal(result.slots[0].resolvedAsset.subject.cropEdges.right,false)
+ assert.equal(result.slots[0].resolvedAsset.subject.cropVersion,3)
+})
+
+test('a complete parcel edge does not compete with the long cropped van edge',async()=>{
+ const png=await sharp(Buffer.from('<svg width="100" height="120"><rect x="40" y="20" width="56" height="90" fill="white"/><rect x="4" y="70" width="60" height="40" fill="brown"/></svg>')).png().toBuffer()
+ const result=await service.validateSubject(png)
+ assert.equal(result.cropEdges.right,true)
+ assert.equal(result.cropEdges.left,false)
 })

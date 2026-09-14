@@ -1,4 +1,5 @@
 import { brandDesignRequest } from '@/lib/designs/brandDesignRequest'
+import { retrySeconds } from '@/lib/services/ai/requestBudget'
 import { normalizeBlueprint } from '@/lib/designs/brandBlueprint'
 import { normalizeBrandDesigns } from '@/lib/designs/normalizeBrandDesigns'
 import { availableGroqCompletion } from '@/lib/services/ai/availableGroqCompletion'
@@ -10,9 +11,9 @@ export async function handleBrandDesigns(db: any, body: any) {
   try {
   const flow = await db.collection('flows').findOne({id:body.flowId})
   if (!flow) return NextResponse.json({error:'Save your brand first'},{status:404})
-  if (!process.env.GROQ_API_KEY) return NextResponse.json({error:'GROQ_API_KEY is required to generate brand designs'},{status:400})
+  if (!(process.env.GROQ_API_KEY || process.env.GROQ_API_KEY_2)) return NextResponse.json({error:'GROQ_API_KEY is required to generate brand designs'},{status:400})
   const brand = {...flow.brandContext,...body.brandContext,id:flow.id}
-  const groq = new Groq({apiKey:process.env.GROQ_API_KEY,maxRetries:0})
+  const groq = new Groq({apiKey:(process.env.GROQ_API_KEY || process.env.GROQ_API_KEY_2),maxRetries:0})
   let parsed:any={}
   let failure=''
   for(let attempt=0;attempt<2;attempt++) {
@@ -32,7 +33,7 @@ export async function handleBrandDesigns(db: any, body: any) {
   return NextResponse.json({brandContext:brand,notice:null})
   } catch (error: any) {
     const status = [413,429].includes(error.status) ? error.status : 502
-    const retryAfter=Math.max(61,Math.min(120,Number(error.headers?.['retry-after'])||61))
+    const retryAfter=retrySeconds(error)
     return NextResponse.json({error: error.status === 401 ? 'Groq authentication failed. Check GROQ_API_KEY.' : error.status === 429 ? 'Groq rate limit reached. Please retry shortly.' : error.status === 413 ? 'The design request exceeds the current Groq token limit. Please retry with a shorter brand description.' : error.message || 'Brand design generation failed. Please retry.'},{status,headers:status===429?{'Retry-After':String(retryAfter)}:{}})
   }
 }

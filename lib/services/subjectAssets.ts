@@ -11,7 +11,7 @@ const VERSION = 'hybrid-v4-border-fill'
 let modelPromise: Promise<any> | undefined
 let inferenceQueue: Promise<unknown> = Promise.resolve()
 
-export interface SubjectAsset { url: string; width: number; height: number }
+export interface SubjectAsset { url: string; width: number; height: number; silhouette?:Array<{top:number;bottom:number;left:number;right:number}>; cropVersion?:number; cropEdges?: {left:boolean;right:boolean;top:boolean;bottom:boolean} }
 
 async function segment(input: Buffer) {
   const { pipeline, RawImage, env } = require('@huggingface/transformers')
@@ -148,7 +148,7 @@ export async function removeStudioBackground(input: Buffer): Promise<Buffer | nu
 }
 
 /** Retain soft hair edges; reject degenerate masks and trim only transparent margins. */
-export async function validateSubject(png: Buffer): Promise<{ png: Buffer; width: number; height: number } | null> {
+export async function validateSubject(png: Buffer): Promise<{ png: Buffer; width: number; height: number; cropEdges: {left:boolean;right:boolean;bottom:boolean;top:boolean} } | null> {
   const { data, info } = await sharp(png, { limitInputPixels: 16000000 }).ensureAlpha().raw().toBuffer({ resolveWithObject: true })
   const total = info.width * info.height
   let opaque = 0, clear = 0, left = info.width, top = info.height, right = 0, bottom = 0
@@ -163,15 +163,38 @@ export async function validateSubject(png: Buffer): Promise<{ png: Buffer; width
     }
   }
   if (opaque / total < .025 || clear / total < .08 || clear / total > .97 || left >= right || top >= bottom) return null
+  // Record hard source edges before trimming transparency; fitting can align them with the canvas.
+  const edgeCoverage=(edge:string)=>{
+    const length=edge==='left'||edge==='right'?info.height:info.width
+    let solid=0
+    for(let i=0;i<length;i++){
+      const x=edge==='left'?0:edge==='right'?info.width-1:i
+      const y=edge==='top'?0:edge==='bottom'?info.height-1:i
+      if(data[(y*info.width+x)*4+3]>220)solid++
+    }
+    if(solid/length>.1)return true
+    // Native alpha and older trimmed PNGs can have transparent padding around a hard crop.
+    // Look for a sustained straight boundary at the silhouette, not just the PNG border.
+    const padding=edge==='left'?left:edge==='right'?info.width-1-right:edge==='top'?top:info.height-1-bottom
+    if(padding>8)return false
+    let boundary=0
+    for(let i=0;i<length;i++){
+      const x=edge==='left'?Math.min(right,left+2):edge==='right'?Math.max(left,right-2):i
+      const y=edge==='top'?Math.min(bottom,top+2):edge==='bottom'?Math.max(top,bottom-2):i
+      if(data[(y*info.width+x)*4+3]>220)boundary++
+    }
+    return boundary/length>.6
+  }
+  const cropEdges={left:edgeCoverage('left'),right:edgeCoverage('right'),top:edgeCoverage('top'),bottom:edgeCoverage('bottom')}
   const padding = 4
   left = Math.max(0, left - padding); top = Math.max(0, top - padding)
   right = Math.min(info.width - 1, right + padding); bottom = Math.min(info.height - 1, bottom + padding)
   const width = right - left + 1, height = bottom - top + 1
   const output = await sharp(png).extract({ left, top, width, height }).png().toBuffer()
-  return { png: output, width, height }
+  return { png: output, width, height, cropEdges }
 }
 
-export async function createSubject(input: Buffer): Promise<{ png: Buffer; width: number; height: number } | null> {
+export async function createSubject(input: Buffer): Promise<{ png: Buffer; width: number; height: number; cropEdges: {left:boolean;right:boolean;bottom:boolean;top:boolean} } | null> {
   const normalized = await sharp(input, { limitInputPixels: 16000000 }).rotate()
     .resize({ width: 1200, height: 1200, fit: 'inside', withoutEnlargement: true }).ensureAlpha().png().toBuffer()
   const existing = await validateSubject(normalized)
@@ -206,6 +229,33 @@ async function sourceBytes(db: any, url: string): Promise<Buffer> {
 }
 
 /** Add optional derivatives; preserve original assets and the existing resolver contract. */
+export async function hydrateSubjectCrops(db:any,plan:ResolvedAssetPlan):Promise<ResolvedAssetPlan> {
+ const inspected=new Map<string,any>()
+ const slots=[]
+ for(const slot of plan.slots){
+  const subject=slot.resolvedAsset?.subject as SubjectAsset|undefined
+  if(!subject||subject.cropVersion===3&&subject.silhouette){slots.push(slot);continue}
+  try{
+   if(!inspected.has(subject.url)){
+    const bytes=await sourceBytes(db,subject.url)
+    const cutout=await validateSubject(bytes)
+    const {data,info}=await sharp(bytes,{limitInputPixels:16000000}).ensureAlpha().raw().toBuffer({resolveWithObject:true})
+    const silhouette=[]
+    for(let band=0;band<24;band++){
+     const top=Math.floor(band*info.height/24),bottom=Math.floor((band+1)*info.height/24)
+     let left=info.width,right=-1
+     for(let y=top;y<bottom;y++)for(let x=0;x<info.width;x++)if(data[(y*info.width+x)*4+3]>32){left=Math.min(left,x);right=Math.max(right,x)}
+     if(right>=left)silhouette.push({top:top/info.height,bottom:bottom/info.height,left:left/info.width,right:(right+1)/info.width})
+    }
+    inspected.set(subject.url,cutout?{cropEdges:cutout.cropEdges,silhouette}:undefined)
+   }
+   const metadata=inspected.get(subject.url)
+   slots.push(metadata?{...slot,resolvedAsset:{...slot.resolvedAsset,subject:{...subject,...metadata,cropVersion:3}}}:slot)
+  }catch(error){console.warn('[subject-assets] crop inspection unavailable:',(error as Error).message);slots.push(slot)}
+ }
+ return {...plan,slots}
+}
+
 export async function prepareSubjectAssets(db: any, plan: ResolvedAssetPlan): Promise<ResolvedAssetPlan> {
   const slots = []
   const prepared = new Map<string, SubjectAsset | null>()
@@ -220,16 +270,16 @@ export async function prepareSubjectAssets(db: any, plan: ResolvedAssetPlan): Pr
         const bytes = await sourceBytes(db, asset.url)
         const id = 'subject-' + createHash('sha256').update(VERSION).update(bytes).digest('hex')
         const cached = await db.collection('uploads').findOne({ id })
-        if (cached?.subject) subject = { url: `/api/uploads/${id}`, width: cached.subject.width, height: cached.subject.height }
+        if (cached?.subject) subject = { url: `/api/uploads/${id}`, width: cached.subject.width, height: cached.subject.height, cropEdges: cached.subject.cropEdges }
         else {
           const cutout = await createSubject(bytes)
           if (!cutout) failures.set(asset.url, "No usable foreground silhouette detected")
           if (cutout) {
             await db.collection('uploads').updateOne({ id }, { $setOnInsert: {
               id, contentType: 'image/png', bytes: new Binary(cutout.png), createdAt: new Date(),
-              subject: { width: cutout.width, height: cutout.height, model: MODEL },
+              subject: { width: cutout.width, height: cutout.height, cropEdges: cutout.cropEdges, model: MODEL },
             } }, { upsert: true })
-            subject = { url: `/api/uploads/${id}`, width: cutout.width, height: cutout.height }
+            subject = { url: `/api/uploads/${id}`, width: cutout.width, height: cutout.height, cropEdges: cutout.cropEdges }
           }
         }
       } catch (error) { failures.set(asset.url, (error as Error).message); console.warn('[subject-assets] keeping original photo:', (error as Error).message) }

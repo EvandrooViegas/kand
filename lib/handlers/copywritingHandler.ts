@@ -1,3 +1,4 @@
+import { budgetedModels, budgetedCompletion, compactBrand, retrySeconds } from '@/lib/services/ai/requestBudget'
 import { cleanCopy } from '@/lib/services/copyText'
 import { NextResponse } from 'next/server'
 import { corsify } from '@/lib/services/middleware'
@@ -89,7 +90,7 @@ FIELD DEFINITIONS:
 
 "hashtags": A small list of relevant hashtags. Approximately 3–8 hashtags. Must be relevant to the company's industry, the topic, and the target audience. Do not use irrelevant trending hashtags.
 
-"visualNotes": Brief notes for the graphic designer explaining important content considerations. NOT a design specification. Only use when something about the content needs special visual treatment. Examples: "The statistic should be visually prominent." / "The three steps should be clearly separated." Do not specify coordinates, colors, fonts or node structures.
+"visualNotes": Brief notes for the graphic designer explaining important content considerations. NOT a design specification. For explanation-heavy slides (about 55 words or more), recommend a text-led slide without imagery: prioritize compact, clearly separated reading blocks. Images are optional and should add information rather than compete with detailed explanations. Examples: "The statistic should be visually prominent." / "The three steps should be clearly separated." Do not specify coordinates, colors, fonts or node structures.
 
 QUALITY CONTROL — before returning verify:
 1. Is the content directly related to the Content Brief?
@@ -154,7 +155,7 @@ Return ONLY valid JSON.`
 
 async function getGroqModel(groq: Groq): Promise<string> {
   try {
-    const models = await groq.models.list()
+    const models = await budgetedModels(groq)
     const preferred = ['groq/compound-mini', 'mixtral-8x7b-32768', 'llama-3-70b-versatile']
     const found = preferred.find(p => models.data.some((m: any) => m.id === p))
     if (found) return found
@@ -176,40 +177,36 @@ export async function handleGenerateCopywriting(body: any) {
       return corsify(NextResponse.json({ error: 'idea (content brief) is required' }, { status: 400 }))
     }
 
-    const apiKey = process.env.GROQ_API_KEY
+    const apiKey = (process.env.GROQ_API_KEY || process.env.GROQ_API_KEY_2)
     if (!apiKey) {
       return corsify(NextResponse.json({ error: 'GROQ_API_KEY is not configured' }, { status: 500 }))
     }
 
-    const groq = new Groq({ apiKey })
+    const groq = new Groq({ apiKey,maxRetries:0 })
     const model = await getGroqModel(groq)
 
-    const brandJson = JSON.stringify(brandContext, (key, value) => key === 'logoVariants' ? undefined : value, 2)
+    const brandJson = JSON.stringify(compactBrand(brandContext))
     const briefJson = JSON.stringify(idea, null, 2)
     const userPrompt = buildUserPrompt(brandJson, briefJson)
 
     // Retry up to 3 times on rate limit (429)
     let raw: string | null = null
-    for (let attempt = 0; attempt < 3; attempt++) {
+    for (let attempt = 0; attempt < 1; attempt++) {
       try {
-        const response = await groq.chat.completions.create({
+        const response = await budgetedCompletion(groq,{
           model,
           messages: [
             { role: 'system', content: SYSTEM_PROMPT },
             { role: 'user', content: userPrompt },
           ],
-          max_tokens: 4000,
+          max_tokens: 2400,
           temperature: 0.7,
         })
         raw = response.choices[0]?.message?.content?.trim() ?? null
         break
       } catch (err: any) {
         const is429 = err?.status === 429 || err?.message?.includes('rate_limit_exceeded')
-        if (is429 && attempt < 2) {
-          console.warn(`Rate limited on copywriting attempt ${attempt + 1}, retrying in 15s…`)
-          await new Promise(r => setTimeout(r, 15000))
-          continue
-        }
+
         throw err
       }
     }
@@ -232,7 +229,7 @@ export async function handleGenerateCopywriting(body: any) {
   } catch (error: any) {
     console.error('Copywriting generation error:', error)
     return corsify(
-      NextResponse.json({ error: error.message || 'Failed to generate copywriting' }, { status: 500 })
+      NextResponse.json({ error: error.status===429?'AI quota reached. Retry in '+retrySeconds(error)+' seconds. Completed steps are saved.':error.message || 'Failed to generate copywriting' }, { status: error.status===429?429:500,headers:error.status===429?{'Retry-After':String(retrySeconds(error))}:{} })
     )
   }
 }

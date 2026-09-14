@@ -60,6 +60,7 @@ export interface ResolvedSlot {
 }
 
 export interface ResolvedAssetPlan {
+  layoutPlan?: any
   designId?: string
   campaign_index?: number
   post_id: string
@@ -257,12 +258,12 @@ function buildGenerationBrief(slot: VisualSlot, nativeTransparency = false): str
     'SLIDE CONTEXT: '+JSON.stringify(slot.slide_context ?? {headline:slot.visual_purpose}),
     'BRAND CONTEXT: '+JSON.stringify(slot.brand_context ?? {}),
     'VISIBLE ACTION AND SUBJECT: '+(slot.subject_description || slot.visual_purpose),
-    " For people-focused campaigns, compose an expressive waist-up person with a believable emotion matching the message and a complete relevant prop. Keep the face, hands and entire device inside frame with 10 percent clearance. For logistics show a person handling a parcel, not an unrelated laptop. Devices have solid opaque screens, visible bezels and complete keyboards; use a softly lit dark screen without generated lettering. Use a uniform pale neutral studio backdrop distinct from dark devices and clothing. Never make screens transparent or match their colour to the backdrop. Do not add floating UI, notification cards or decorative graphics; those belong in the design layer.",
+    " Only when the shot brief calls for a person, compose an expressive person with a believable emotion matching the message and a complete relevant prop. Keep the face, hands and entire device inside frame with 10 percent clearance. Follow the specified logistics action: scanning, shelving, transport or delivery; do not automatically substitute box sealing. Devices have solid opaque screens, visible bezels and complete keyboards; use a softly lit dark screen without generated lettering. Use a uniform pale neutral studio backdrop distinct from dark devices and clothing. Never make screens transparent or match their colour to the backdrop. Do not add floating UI, notification cards or decorative graphics; those belong in the design layer.",
     'SHOT BRIEF: '+(slot.generation_prompt || slot.visual_purpose),
-    'Show only the activity described by this slide. Choose a simple, physically plausible scene: one person and one primary tool. Prefer a medium view including the person, rather than a disembodied hand close-up. Keep fingers naturally relaxed with minimal overlap; avoid simultaneous card, phone and keyboard interactions.',
+    'Show only the activity described by this slide. Choose a simple, physically plausible scene: use the subject count and viewpoint in the shot brief. Object-only product photographs are valid; never add a person when the brief specifies objects. Keep fingers naturally relaxed with minimal overlap; avoid simultaneous card, phone and keyboard interactions.',
     slot.image_style==='drawing' ? 'Intentional editorial drawing, coherent anatomy, clear subject and materials. Follow the illustration medium in the shot brief. No text, watermark or fake logos.' : 'Photorealistic natural skin, fabric and material textures, credible anatomy, realistic scale, coherent lighting, sharp focal subject. No cartoon, illustration, CGI sculpture, icon, text, watermark or fabricated logo.',
     slot.treatment==='isolated_subject'
-      ? nativeTransparency ? 'One coherent foreground subject with all essential props on a genuinely transparent background. Preserve opaque screens, clothing and solid objects. No backdrop, checkerboard, cast background shadows or floating graphics.' : 'One coherent foreground subject with its essential props, fully visible head and hands, clear silhouette, generous edge clearance. Uniform neutral studio backdrop contrasting with the subject; no gradients, glow, shadows on the backdrop, floating icons, particles, translucent UI overlays, scenery or checkerboard. Keep all essential props physically connected to the subject. Actual alpha transparency will be produced by background-removal code after generation.'
+      ? nativeTransparency ? 'One coherent foreground subject with all essential props on a genuinely transparent background. Preserve opaque screens, clothing and solid objects. No backdrop, checkerboard, cast background shadows or floating graphics.' : 'One coherent foreground subject with its essential props, fully visible head and hands, clear silhouette, minimal safe edge clearance and a subject filling 85–92 percent of the frame. Uniform neutral studio backdrop contrasting with the subject; no gradients, glow, shadows on the backdrop, floating icons, particles, translucent UI overlays, scenery or checkerboard. Keep all essential props physically connected to the subject. Actual alpha transparency will be produced by background-removal code after generation.'
       : 'Use a realistic environment relevant to the action. Keep background details understated and the subject prominent. Preserve meaningful workspace, tools and scene context.',
   ].join('\n') + (nativeTransparency && slot.treatment === 'isolated_subject' ? '\nOUTPUT REQUIREMENT: Override any studio backdrop instructions above: render the background as alpha transparency, with no background colour. Keep every solid foreground surface opaque.' : '')
 }
@@ -377,6 +378,10 @@ async function resolveSlot(
   }
 
   const warnings: string[] = []
+  if(slot.preferred_source==='unsplash'&&unsplashKey) {
+    try { const asset=await searchUnsplash(slot,unsplashKey,usedPhotoIds);if(asset)return {...base,resolvedAsset:asset,warning:null} }
+    catch(error){warnings.push('Unsplash unavailable; trying AI background')}
+  }
   if (slot.preferred_source === 'uploaded_asset') {
     const {asset,warning} = await resolveUploadedAsset(db,slot,brand_id)
     if (asset) return {...base,resolvedAsset:asset,warning}
@@ -428,6 +433,7 @@ export async function handleResolveAssets(db: any, body: any) {
     }
     const result: ResolvedAssetPlan = {
       designId:plan.designId,
+      layoutPlan:plan.layoutPlan,
       post_id: plan.post_id,
       format:  plan.format,
       slots,

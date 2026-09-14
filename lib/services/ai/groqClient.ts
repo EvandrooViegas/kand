@@ -1,4 +1,6 @@
 import { GROQ_URL, MODEL_MAIN, MODEL_FAST } from '../constants'
+import Groq from 'groq-sdk'
+import { budgetedCompletion } from './requestBudget'
 
 /**
  * Call Groq API with retry and exponential backoff
@@ -18,7 +20,7 @@ export async function callGroq({
   jsonMode?: boolean
   retries?: number
 }): Promise<string> {
-  const key = process.env.GROQ_API_KEY
+  const key = process.env.GROQ_API_KEY || process.env.GROQ_API_KEY_2
   if (!key) throw new Error('GROQ_API_KEY not set')
 
   let lastError: Error | null = null
@@ -36,32 +38,10 @@ export async function callGroq({
         body.response_format = { type: 'json_object' }
       }
 
-      const res = await fetch(GROQ_URL, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${key}`,
-        },
-        body: JSON.stringify(body),
-      })
-
-      if (!res.ok) {
-        const err = await res.text().catch(() => '')
-        lastError = new Error(`Groq ${res.status}: ${err.slice(0, 200)}`)
-
-        // Retry on rate limit or server error
-        if (res.status === 429 || res.status >= 500) {
-          const delayMs = 900 * (attempt + 1)
-          await new Promise((r) => setTimeout(r, delayMs))
-          continue
-        }
-
-        throw lastError
-      }
-
-      const data = await res.json()
+      const data = await budgetedCompletion(new Groq({apiKey:key,maxRetries:0}),body)
       return data.choices?.[0]?.message?.content?.trim() || ''
     } catch (e) {
+      if ([429,401,403].includes((e as any)?.status)) throw e
       lastError = e instanceof Error ? e : new Error(String(e))
       if (attempt < retries - 1) {
         const delayMs = 500 * (attempt + 1)

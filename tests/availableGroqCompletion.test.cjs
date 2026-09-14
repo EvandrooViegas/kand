@@ -1,8 +1,8 @@
 const {test}=require('node:test')
 const assert=require('node:assert/strict')
 const {stripTypeScriptTypes}=require('node:module')
-const source=require('node:fs').readFileSync('lib/services/ai/availableGroqCompletion.ts','utf8').replace(/export /g,'')
-const run=new Function('process',stripTypeScriptTypes(source)+';return availableGroqCompletion')({env:{}})
+const source=require('node:fs').readFileSync('lib/services/ai/availableGroqCompletion.ts','utf8').replace(/^import .*$/gm,'').replace(/export /g,'')
+const run=new Function('budgetedModels','budgetedCompletion','process',stripTypeScriptTypes(source)+';return availableGroqCompletion')(groq=>groq.models.list(),(groq,request)=>groq.chat.completions.create(request),{env:{}})
 test('uses available chat model instead of unavailable hardcoded model',async()=>{
  let chosen
  const groq={models:{list:async()=>({data:[{id:'openai/gpt-oss-20b'}]})},chat:{completions:{create:async r=>{chosen=r;return 'ok'}}}}

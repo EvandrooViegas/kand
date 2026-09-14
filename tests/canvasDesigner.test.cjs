@@ -6,11 +6,12 @@ const { stripTypeScriptTypes } = require('node:module')
 const source = fs.readFileSync(require('node:path').join(__dirname, '../lib/handlers/canvasDesignerHandler.ts'), 'utf8')
   .replace(/^import .*$/gm, '').replace(/export async function/g, 'async function')
 const copyTools = vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname, '../lib/services/copyText.ts'), 'utf8').replace(/export /g, '')) + '\n({withoutEmoji,cleanCopy})')
-const engine = vm.runInNewContext(stripTypeScriptTypes(source) + '\n({splitDesignSteps,emphasizeHeadline,recoverDesignInput,handleSwitchDesign,validateDesignSpec,renderDesignSpec,fitText,fitTextLayout,normalizeDesignSystem,buildStrategyPalette,ensureContrast,contrastRatio,parseArtDirection,buildSingleCanvas,buildCarouselCanvas,buildPrompt,handleDesignCanvas,designIssues})', {
+const engine = vm.runInNewContext(stripTypeScriptTypes(source) + '\n({assembleSlide,librarySpec,fitResolvedSlide,splitBodyBlocks,splitDesignSteps,emphasizeHeadline,recoverDesignInput,handleSwitchDesign,validateDesignSpec,renderDesignSpec,fitText,fitTextLayout,normalizeDesignSystem,buildStrategyPalette,ensureContrast,contrastRatio,parseArtDirection,buildSingleCanvas,buildCarouselCanvas,buildPrompt,handleDesignCanvas,designIssues})', {
   ...vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname, '../lib/designs/library.ts'),'utf8').replace(/export /g,''))+'\n({DESIGN_LIBRARY,librarySpec,splitBulletItems})'),
   ...vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname,'../lib/designs/palettes.ts'),'utf8').replace(/export /g,''))+'\n({PALETTE_PICKS,paletteColors,choosePalette,constrainBrandPalette})'),
   ...vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname,'../lib/designs/brandBlueprint.ts'),'utf8').replace(/export /g,''))+'\n({blueprintSpec,complementaryAccent})'),
-  canvasBrand: async (db,canvas)=>canvas.designInput?.brandContext||canvas.brandContext||{}, withoutEmoji: copyTools.withoutEmoji, prepareSubjectAssets: async (db, plan) => plan, persistInlineImages: async (db, value) => value, uuidv4: require('node:crypto').randomUUID, console, process: { env: {} },
+  ...vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname,'../lib/designs/postLayout.ts'),'utf8').replace(/^import .*$/gm,'').replace(/export /g,''))+'\n({arrangeReadableBody,fitResolvedSlide,fitPlannedLayout,subjectOverlaps})'),
+  canvasBrand: async (db,canvas)=>canvas.designInput?.brandContext||canvas.brandContext||{}, withoutEmoji: copyTools.withoutEmoji, prepareSubjectAssets: async (db, plan) => plan, hydrateSubjectCrops: async (db, plan) => plan, persistInlineImages: async (db, value) => value, uuidv4: require('node:crypto').randomUUID, console, process: { env: {} },
   NextResponse: { json: (body, options) => ({ body, status: options?.status ?? 200 }) }, corsify: response => response,
 })
 test('global art direction supplies consistent typography, palette, and visual defaults', () => {
@@ -128,9 +129,9 @@ test('image-backed copy gets a contrast surface; decoration cannot hide text', (
   const d = direction({ ...spec, background: { type: 'image' }, elements: [text, { type: 'ring', x: 700, y: 100, width: 100, height: 100, layer: 20 }] }).slides[0]
   const result = engine.renderDesignSpec(d.design, { d, headline: 'Title', body: '', cta: '', eyebrow: '', imageUrl: slot.resolvedAsset.url })
   assert.equal(result.nodes.at(-1).type, 'text')
-  assert.equal(result.nodes.at(-2).type, 'gradient')
-  assert.equal(result.nodes.at(-2).stops[1].alpha, 100)
-  assert.equal(result.nodes.at(-2).stops[2].alpha, 100)
+  assert.equal(result.nodes.at(-2).type, 'shape')
+  assert.equal(result.nodes.at(-2).width, text.width)
+  assert.equal(result.nodes.at(-2).x, text.x)
   assert.equal(result.nodes.find(n => n.shape === 'ellipse').fill, '#00000000')
 })
 test('carousel matches slot IDs even when AI reorders slides', () => {
@@ -386,6 +387,36 @@ test('bulleted benefits become four separate cards without changing their copy',
  assert.equal(result.nodes.some(n=>n.type==='text'&&n.text.includes('•')),false)
  assert.equal(lib.splitBulletItems('A cost-effective option.').length,0)
 })
+test('explanatory paragraphs become separate readable text blocks preserving content',()=>{
+ const body='Without a warehouse, inventory depends on your system. If levels are not updated promptly, unavailable products can be sold, causing cancellations and dissatisfaction. The platform synchronizes stock automatically between your catalogue and fulfilment.'
+ const blocks=engine.splitBodyBlocks(body)
+ assert.equal(blocks.join(' '),body);assert.ok(blocks.length>1)
+ assert.deepEqual(Array.from(engine.splitBodyBlocks('A short explanation.')),[])
+ const system=engine.normalizeDesignSystem({spacing:'compact'})
+ const spec=engine.validateDesignSpec({elements:[{type:'text',role:'headline',x:72,y:100,width:936,height:220},{type:'text',role:'body',x:72,y:400,width:600,height:500,size:30}]},slot,system)
+ const result=engine.renderDesignSpec(spec,{d:{library:true,palette:engine.buildStrategyPalette(['#35724c'],system),logo_placement:'none'},headline:'Keep stock current',body,cta:'',eyebrow:'',slideNumber:1,totalSlides:5})
+ const textNodes=result.nodes.filter(n=>n.type==='text'&&blocks.includes(n.text))
+ assert.equal(textNodes.length,blocks.length)
+ assert.ok(textNodes.every(n=>n.fontSize>=22))
+ for(let i=1;i<textNodes.length;i++){
+  const gap=textNodes[i].y-textNodes[i-1].y-textNodes[i-1].height
+  assert.ok(gap>=12&&gap<=20)
+ }
+})
+test('block presentation varies without changing explanation content',()=>{
+ const body='Inventory must reflect the products available for sale. Outdated stock levels cause cancellations and frustration for customers. Synchronizing the catalogue and fulfilment avoids those problems and keeps the business running smoothly.'
+ const system=engine.normalizeDesignSystem({spacing:'compact'})
+ const spec=engine.validateDesignSpec({elements:[{type:'text',role:'headline',x:72,y:100,width:936,height:220},{type:'text',role:'body',x:72,y:400,width:650,height:500,size:30}]},slot,system)
+ const counts=new Set()
+ for(const block_style of ['markers','icons','cards','plain']) {
+  const result=engine.renderDesignSpec(spec,{d:{library:true,block_style,palette:engine.buildStrategyPalette(['#35724c'],system),logo_placement:'none'},headline:'Stock',body,cta:'',eyebrow:'',slideNumber:1,totalSlides:5})
+  const blocks=engine.splitBodyBlocks(body)
+  assert.equal(result.nodes.filter(n=>n.type==='text'&&blocks.includes(n.text)).map(n=>n.text).join(' '),body)
+  counts.add(result.nodes.filter(n=>n.type==='shape').length)
+  if(block_style==='plain')assert.equal(result.nodes.some(n=>n.type==='shape'),false)
+ }
+ assert.ok(counts.size>=3)
+})
 
 test('saved brand preset applies its family and palette and remains identifiable',async()=>{
  const brand={name:'Test brand',colors:['#35724c'],fonts:['Inter'],designs:[{id:'brand-test',baseId:'editorial',paletteId:'light',name:'Quiet confidence',tags:['calm']}]}
@@ -420,4 +451,163 @@ test('saved identity composes locally and retains layered styling',async()=>{
  assert.equal(headline.textShadow.enabled,true)
  assert.ok(headline.text.includes('backgroundClip=text'))
  assert.equal(result.body.designSelection.id,'brand-authored')
+})
+
+test('resolved portrait and wide assembly receive independent image-led compositions',()=>{
+ const base={background:{type:'solid'},elements:[{type:'text',role:'headline',x:72,y:130,width:420,height:300,size:76},{type:'text',role:'body',x:72,y:470,width:420,height:400,size:30},{type:'image',x:650,y:600,width:250,height:250}]}
+ const content={headline:'Registe-se na plataforma Ikarus Pay',body:'Crie a sua conta em poucos minutos. Insira os seus dados e aceda ao painel de controlo onde pode gerir todo o seu negócio.'}
+ const fitted=[{width:500,height:800},{width:1000,height:650}].map(dimensions=>engine.fitResolvedSlide(base,{slot_id:'a',resolvedAsset:{url:'photo',subject:{url:'subject',...dimensions}}},content,engine.fitTextLayout))
+ const images=fitted.map(s=>s.elements.find(e=>e.type==='image'))
+ assert.notDeepEqual(images[0],images[1])
+ for(let i=0;i<fitted.length;i++){
+  const image=images[i],title=fitted[i].elements.find(e=>e.role==='headline'),body=fitted[i].elements.find(e=>e.role==='body')
+  assert.ok(image.width*image.height>250*250*3)
+  assert.ok(Math.abs(image.y+image.height-1080)<1)
+  assert.ok(body.y-title.y-title.height>=24&&body.y-title.y-title.height<=28)
+  assert.ok(image.y>=0)
+ }
+ assert.equal(base.elements.at(-1).width,250)
+})
+
+test('cutout source side crop aligns with canvas boundary',()=>{
+ const base={background:{type:'solid'},elements:[{type:'text',role:'headline',x:72,y:130,width:936,height:220,size:76},{type:'text',role:'body',x:72,y:400,width:450,height:350,size:30},{type:'image',x:600,y:600,width:240,height:240}]}
+ const result=engine.fitResolvedSlide(base,{slot_id:'a',resolvedAsset:{subject:{url:'cutout',width:480,height:800,cropEdges:{left:true}}}},{headline:'Crie a sua conta',body:'Insira os dados da sua empresa.'},engine.fitTextLayout)
+ const image=result.elements.find(e=>e.type==='image')
+ assert.equal(image.x,0);assert.equal(image.y+image.height,1080)
+})
+
+test('left and right cropped cutouts stay on their canvas corners with closing copy and CTA',()=>{
+ for(const edge of ['left','right']){
+  const asset={url:'photo',subject:{url:'cutout',width:600,height:800,cropEdges:{[edge]:true,bottom:true}}}
+  const slot={slot_id:'a',resolvedAsset:asset}
+  const content={headline:'Expanda o seu negócio em todo o país',body:'Descubra como a Ikarus Pay simplifica a logística e permite que você alcance clientes em qualquer canto de Angola.',cta:'Conheça a plataforma'}
+  const base={background:{type:'solid'},elements:[{type:'text',role:'headline',x:72,y:500,width:936,height:220,size:76},{type:'text',role:'body',x:72,y:750,width:936,height:180,size:30},{type:'text',role:'cta',x:72,y:970,width:680,height:54,size:26},{type:'image',assetId:'a',x:390,y:100,width:300,height:300}]}
+  const fitted=engine.fitResolvedSlide(base,slot,content,engine.fitTextLayout)
+  const image=fitted.elements.find(e=>e.type==='image')
+  assert.ok(edge==='left'?image.x===0:Math.abs(image.x+image.width-1080)<1)
+  assert.ok(Math.abs(image.y+image.height-1080)<1)
+  const system=engine.normalizeDesignSystem({spacing:'compact'})
+  const normalized=engine.validateDesignSpec(fitted,slot,system)
+  const d={...direction().slides[0],design:normalized}
+  const rendered=engine.renderDesignSpec(normalized,{d,...content,eyebrow:'',imageUrl:asset.url,subject:asset.subject,assets:{a:asset}})
+  const node=rendered.nodes.find(n=>n.src==='cutout')
+  assert.ok(edge==='left'?node.x===0:Math.abs(node.x+node.width-1080)<=1)
+ }
+})
+
+test('failed badge/card layout recovers to a large corner cutout rather than legacy blurred card',()=>{
+ for(const edge of ['left','right']){
+  const asset={url:'photo',subject:{url:'cutout',width:600,height:800,cropEdges:{[edge]:true,bottom:true}}},slot={slot_id:'a',resolvedAsset:asset}
+  const content={headline:'Expanda o seu negócio em todo o país',body:'Descubra como a Ikarus Pay simplifica a logística e permite que você alcance clientes em qualquer canto de Angola.',cta:'Conheça a plataforma',eyebrow:''}
+  const system=engine.normalizeDesignSystem({spacing:'compact'})
+  const broken=engine.validateDesignSpec({background:{type:'image'},elements:[{type:'text',role:'headline',x:72,y:500,width:936,height:220,size:76},{type:'text',role:'body',x:72,y:750,width:936,height:180,size:30},{type:'badge',role:'cta',x:72,y:970,width:680,height:30,size:26,minSize:26},{type:'image',assetId:'a',x:390,y:100,width:300,height:300}]},slot,system)
+  const d={...direction().slides[0],composition:'centered_card',library:true,design:broken}
+  const result=engine.assembleSlide({d,...content,imageUrl:asset.url,subject:asset.subject,assets:{a:asset},slideNumber:4,totalSlides:5})
+  const images=result.nodes.filter(n=>n.type==='image')
+  assert.equal(images.length,1)
+  const image=images[0]
+  assert.equal(image.src,'cutout');assert.ok(image.width>=450)
+  assert.ok(edge==='left'?image.x===0:Math.abs(image.x+image.width-1080)<=1)
+  assert.ok(Math.abs(image.y+image.height-1080)<=1)
+ }
+})
+
+test('closing badge is measured with padding and survives final rendering',()=>{
+ const asset={url:'photo',subject:{url:'cutout',width:600,height:800,cropEdges:{left:true,bottom:true}}},slot={slot_id:'a',resolvedAsset:asset}
+ const content={headline:'Expanda o seu negócio em todo o país',body:'Descubra como a Ikarus Pay simplifica a logística e permite alcançar clientes em qualquer canto de Angola.',cta:'Conheça a plataforma',eyebrow:''}
+ const raw={background:{type:'image'},elements:[{type:'text',role:'headline',x:72,y:500,width:936,height:220,size:76},{type:'text',role:'body',x:72,y:750,width:936,height:180,size:30},{type:'badge',role:'cta',x:72,y:970,width:680,height:64,size:26,minSize:24},{type:'image',assetId:'a',x:390,y:100,width:300,height:300}]}
+ const fitted=engine.fitResolvedSlide(raw,slot,content,engine.fitTextLayout)
+ const system=engine.normalizeDesignSystem({spacing:'compact'}),spec=engine.validateDesignSpec(fitted,slot,system)
+ const d={...direction().slides[0],design:spec}
+ const result=engine.renderDesignSpec(spec,{d,...content,imageUrl:asset.url,subject:asset.subject,assets:{a:asset}})
+ assert.ok(result.nodes.some(n=>n.type==='text'&&n.text===content.cta))
+ assert.equal(result.nodes.filter(n=>n.type==='image').length,1)
+ assert.equal(fitted.background.type,'solid')
+})
+
+test('silhouette-aware fitting fills space with larger type, narrower body and corner imagery',()=>{
+ const raw={background:{type:'solid'},elements:[{type:'text',role:'headline',x:72,y:130,width:936,height:100,size:76},{type:'text',role:'body',x:72,y:330,width:460,height:300,size:30},{type:'image',assetId:'a',x:564,y:564,width:516,height:516}]}
+ const content={headline:'Rede de parceiros locais',body:'Colaboramos com transportadoras regionais e agentes de entrega que conhecem o terreno, garantindo cobertura nacional sem burocracia.',cta:'',eyebrow:''}
+ const asset={url:'photo',subject:{url:'cutout',width:800,height:800,cropEdges:{right:true,bottom:true},silhouette:[{top:0,bottom:.4,left:.58,right:1},{top:.4,bottom:.65,left:.35,right:1},{top:.65,bottom:1,left:0,right:1}]}}
+ const slot={slot_id:'a',resolvedAsset:asset}
+ const fitted=engine.fitResolvedSlide(raw,slot,content,engine.fitTextLayout)
+ const image=fitted.elements.find(e=>e.type==='image'),title=fitted.elements.find(e=>e.role==='headline'),body=fitted.elements.find(e=>e.role==='body')
+ assert.ok(image.width>516);assert.ok(title.size>76);assert.ok(body.width<460)
+ assert.ok(Math.abs(image.x+image.width-1080)<1)
+ const system=engine.normalizeDesignSystem({spacing:'compact'}),spec=engine.validateDesignSpec(fitted,slot,system)
+ const d={...direction().slides[0],library:true,design:spec}
+ const result=engine.renderDesignSpec(spec,{d,...content,imageUrl:asset.url,subject:asset.subject,assets:{a:asset}})
+ assert.ok(result.nodes.some(n=>n.src==='cutout'))
+ const withLogo=engine.renderDesignSpec(spec,{d:{...d,logo_url:'brand-logo',logo_placement:'bottom_right',logo_size:96,logo_pill:false},...content,imageUrl:asset.url,subject:asset.subject,assets:{a:asset}})
+ const logo=withLogo.nodes.find(n=>n.src==='brand-logo')
+ assert.ok(logo.x<image.x)
+})
+
+test('text-only slides fill space with larger copy, tight grouping and a corner circle',()=>{
+ const raw={background:{type:'solid'},elements:[{type:'text',role:'headline',x:120,y:240,width:840,height:160,size:76},{type:'text',role:'body',x:120,y:560,width:840,height:200,size:30},{type:'ring',x:480,y:640,width:300,height:300,color:'primary',opacity:12},{type:'line',x:120,y:200,width:840,height:2,color:'primary'}]}
+ const content={headline:'Rastreamento em tempo real',body:'A plataforma mostra a localização exata do pedido, notificações automáticas e previsão de chegada, aumentando a confiança do cliente.',cta:'',eyebrow:''}
+ const result=engine.fitResolvedSlide(raw,{slot_id:'a'},content,engine.fitTextLayout)
+ const title=result.elements.find(e=>e.role==='headline'),body=result.elements.find(e=>e.role==='body'),circle=result.elements.find(e=>e.type==='ring')
+ assert.ok(title.size>76);assert.ok(body.size>30)
+ assert.equal(body.y-title.y-title.height,24)
+ assert.ok(circle.width>300);assert.equal(circle.x+circle.width,1080);assert.equal(circle.y+circle.height,1080)
+ const system=engine.normalizeDesignSystem({spacing:'compact'}),spec=engine.validateDesignSpec(result,{slot_id:'a'},system)
+ const d={...direction().slides[0],design:spec,library:false}
+ const rendered=engine.renderDesignSpec(spec,{d,...content,imageUrl:null})
+ assert.ok(rendered.nodes.some(n=>n.text===content.headline));assert.ok(rendered.nodes.some(n=>n.text===content.body))
+ assert.equal(raw.elements[2].width,300)
+})
+
+test('text-only fitting adapts to longer copy and keeps a closing badge readable',()=>{
+ const base={background:{type:'solid'},elements:[{type:'text',role:'headline',x:72,y:150,width:936,height:200,size:76},{type:'text',role:'body',x:72,y:440,width:936,height:470,size:30},{type:'badge',role:'cta',x:72,y:960,width:680,height:64,size:26},{type:'circle',x:700,y:700,width:250,height:250,color:'primary',opacity:12}]}
+ const common={headline:'Uma plataforma para o seu negócio',cta:'Conheça a plataforma',eyebrow:''}
+ const short={...common,body:'Acompanhe os pedidos e receba notificações automáticas.'}
+ const long={...common,body:'Acompanhe os pedidos e receba notificações automáticas. A equipa mantém os dados atualizados e permite consultar a localização de cada entrega. Consulte os detalhes do pedido e a previsão de chegada para responder aos seus clientes. Tenha uma visão clara da operação e mantenha os clientes informados em cada etapa do processo.'}
+ const fitted=[short,long].map(content=>engine.fitResolvedSlide(base,{slot_id:'a'},content,engine.fitTextLayout))
+ assert.notDeepEqual(fitted[0].elements.find(e=>e.role==='body'),fitted[1].elements.find(e=>e.role==='body'))
+ for(let i=0;i<2;i++){
+  const system=engine.normalizeDesignSystem({spacing:'compact'}),spec=engine.validateDesignSpec(fitted[i],{slot_id:'a'},system)
+  const d={...direction().slides[0],design:spec,library:false}
+  const rendered=engine.renderDesignSpec(spec,{d,...[short,long][i],imageUrl:null})
+  assert.ok(rendered.nodes.some(n=>n.text===common.cta))
+  assert.ok(fitted[i].elements.find(e=>e.role==='cta').y+fitted[i].elements.find(e=>e.role==='cta').height<=1008)
+ }
+})
+
+test('cutouts cropped on both sides fit full width without rejecting the canvas',()=>{
+ for(const bottom of [true,false]){
+  const asset={url:'photo',subject:{url:'cutout',width:600,height:800,cropEdges:{left:true,right:true,bottom}}},slot={slot_id:'a',resolvedAsset:asset}
+  const content={headline:'Expanda o seu negócio',body:'Alcance clientes em todo o país com parceiros locais.',cta:'Conheça a plataforma',eyebrow:''}
+  const raw={background:{type:'solid'},elements:[{type:'text',role:'headline',x:72,y:150,width:936,height:250,size:76},{type:'text',role:'body',x:72,y:430,width:720,height:300,size:30},{type:'text',role:'cta',x:72,y:960,width:720,height:70,size:26},{type:'image',assetId:'a',x:300,y:100,width:300,height:300}]}
+  const fitted=engine.fitResolvedSlide(raw,slot,content,engine.fitTextLayout)
+  assert.equal(fitted.elements.find(e=>e.type==='image').width,1080)
+  const system=engine.normalizeDesignSystem({spacing:'compact'}),spec=engine.validateDesignSpec(fitted,slot,system)
+  const d={...direction().slides[0],library:true,design:spec}
+  const result=engine.assembleSlide({d,...content,imageUrl:asset.url,subject:asset.subject,assets:{a:asset},slideNumber:3,totalSlides:5})
+  const image=result.nodes.find(n=>n.src==='cutout')
+  assert.equal(image.x,0);assert.equal(image.width,1080)
+  assert.ok(image.y>0);assert.ok(image.y+image.height>=1080)
+  assert.ok(result.nodes.some(n=>n.text===content.cta))
+ }
+})
+
+test('occupied image corners use a compact brand plate without failing the slide',()=>{
+ const asset={url:'photo',subject:{url:'cutout',width:1080,height:600,cropEdges:{left:true,right:true,bottom:true}}},slot={slot_id:'a',resolvedAsset:asset}
+ const raw={background:{type:'solid'},elements:[{type:'text',role:'headline',x:48,y:48,width:984,height:220,size:76},{type:'text',role:'body',x:48,y:300,width:984,height:120,size:30},{type:'image',assetId:'a',image_variant:'subject',x:0,y:480,width:1080,height:600}]}
+ const system=engine.normalizeDesignSystem({spacing:'compact'}),spec=engine.validateDesignSpec(raw,slot,system)
+ const d={...direction().slides[0],design:spec,logo_url:'brand-logo',logo_size:96,logo_placement:'bottom_right',logo_pill:false}
+ const result=engine.renderDesignSpec(spec,{d,headline:'Delivery partners',body:'Local partners deliver orders.',cta:'',eyebrow:'',imageUrl:asset.url,subject:asset.subject,assets:{a:asset}})
+ const logo=result.nodes.find(n=>n.src==='brand-logo')
+ assert.ok(logo);assert.ok(logo.width<=64)
+ assert.ok(result.nodes.some(n=>n.type==='shape'&&n.x===logo.x-6&&n.width===logo.width+12))
+ assert.ok(result.nodes.some(n=>n.src==='cutout'))
+})
+
+test('a slide with no safe logo space retains its content instead of throwing',()=>{
+ const system=engine.normalizeDesignSystem({spacing:'compact'})
+ const spec=engine.validateDesignSpec({elements:[{type:'text',role:'headline',x:48,y:48,width:984,height:984,size:76}]},{slot_id:'a'},system)
+ const d={...direction().slides[0],design:spec,logo_url:'brand-logo',logo_size:96,logo_placement:'bottom_right'}
+ const result=engine.renderDesignSpec(spec,{d,headline:'Example',body:'',cta:'',eyebrow:'',imageUrl:null})
+ assert.ok(result.nodes.some(n=>n.text==='Example'))
+ assert.equal(result.nodes.filter(n=>n.src==='brand-logo').length,0)
 })

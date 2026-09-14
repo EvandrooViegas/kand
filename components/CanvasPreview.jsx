@@ -118,7 +118,7 @@ export function CanvasPreview({ canvas, containerWidth, onClick }) {
           return (
             <div key={n.id} style={style}>
               {n.type === 'text' ? <div style={{width:'100%',display:'block'}}>{renderStyledText(parseStyledText(n.text || '',canvas.classes || {}),createElement,{canvasClasses:canvas.classes || {}})}</div> : n.type === 'image' && n.src ? (
-                <img src={n.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', filter: buildFilterCssClient(n.filters) }} />
+                <img src={n.src} alt="" style={{ width: '100%', height: '100%', objectFit: n.objectFit || 'cover', filter: buildFilterCssClient(n.filters) }} />
               ) : null}
             </div>
           )

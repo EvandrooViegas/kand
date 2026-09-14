@@ -1,6 +1,8 @@
+import { budgetedModels, budgetedCompletion, compactBrand, retrySeconds } from '@/lib/services/ai/requestBudget'
 import { NextResponse } from 'next/server'
 import { corsify } from '@/lib/services/middleware'
 import Groq from 'groq-sdk'
+import { randomUUID } from 'node:crypto'
 
 const SYSTEM_PROMPT = `You are an expert Instagram content strategist.
 
@@ -73,7 +75,7 @@ CONTENT QUALITY — before returning each idea verify:
 Return ONLY valid JSON. Do not return Markdown. Do not return explanations. Do not return text outside the JSON object.`
 
 function buildUserPrompt(brandJson: string): string {
-  return `Analyze the following extracted brand information and generate 10 Instagram content ideas.
+  return `Analyze the following extracted brand information and generate exactly ONE Instagram content idea.
 
 BRAND INFORMATION:
 
@@ -123,19 +125,19 @@ export async function handleGenerateContentIdeas(body: any) {
       )
     }
 
-    const apiKey = process.env.GROQ_API_KEY
+    const apiKey = (process.env.GROQ_API_KEY || process.env.GROQ_API_KEY_2)
     if (!apiKey) {
       return corsify(
         NextResponse.json({ error: 'GROQ_API_KEY is not configured' }, { status: 500 })
       )
     }
 
-    const groq = new Groq({ apiKey })
+    const groq = new Groq({ apiKey,maxRetries:0 })
 
     // Use the same model selection strategy as the business info extractor
     let model = 'groq/compound-mini'
     try {
-      const models = await groq.models.list()
+      const models = await budgetedModels(groq)
       const preferred = ['groq/compound-mini', 'mixtral-8x7b-32768', 'llama-3-70b-versatile']
       const found = preferred.find(p => models.data.some((m: any) => m.id === p))
       if (found) model = found
@@ -144,16 +146,17 @@ export async function handleGenerateContentIdeas(body: any) {
       // stick with default
     }
 
-    const brandJson = JSON.stringify(brandContext, (key, value) => key === 'logoVariants' ? undefined : value, 2)
-    const userPrompt = buildUserPrompt(brandJson)
+    const brandJson = JSON.stringify(compactBrand(brandContext))
+    const existingTopics=(Array.isArray(body.existingTopics)?body.existingTopics:[]).filter((t:any)=>typeof t==='string').slice(-30).map((t:string)=>t.slice(0,160))
+    const userPrompt = buildUserPrompt(brandJson)+'\nAvoid repeating these existing topics: '+JSON.stringify(existingTopics)
 
-    const response = await groq.chat.completions.create({
+    const response = await budgetedCompletion(groq,{
       model,
       messages: [
         { role: 'system', content: SYSTEM_PROMPT },
         { role: 'user', content: userPrompt },
       ],
-      max_tokens: 8000,
+      max_tokens: 1800,
       temperature: 0.7,
     })
 
@@ -205,13 +208,15 @@ export async function handleGenerateContentIdeas(body: any) {
       }
     }
 
-    return corsify(NextResponse.json(parsed))
+    const idea=Array.isArray(parsed.ideas)?parsed.ideas.find((i:any)=>i&&typeof i.topic==='string'&&i.topic.trim()):null
+    if(!idea)return corsify(NextResponse.json({error:'No usable idea returned'},{status:502}))
+    return corsify(NextResponse.json({ideas:[{...idea,id:'idea-'+randomUUID()}]}))
   } catch (error: any) {
     console.error('Content ideas generation error:', error)
     return corsify(
       NextResponse.json(
-        { error: error.message || 'Failed to generate content ideas' },
-        { status: 500 }
+        { error: error.status===429?'AI quota reached. Retry in '+retrySeconds(error)+' seconds.':error.message || 'Failed to generate content ideas' },
+        { status: error.status===429?429:500,headers:error.status===429?{'Retry-After':String(retrySeconds(error))}:{} }
       )
     )
   }

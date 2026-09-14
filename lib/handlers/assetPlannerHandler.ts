@@ -1,3 +1,4 @@
+import { localAssetBrief } from '@/lib/designs/localAssetBrief'
 /**
  * Asset Planner handler
  *
@@ -18,6 +19,7 @@
 import { NextResponse } from 'next/server'
 import { corsify } from '@/lib/services/middleware'
 import Groq from 'groq-sdk'
+import { planPostLayout } from '@/lib/designs/postLayout'
 
 // ─── types (exported for Canvas Designer to import) ──────────────────────────
 
@@ -50,6 +52,7 @@ export interface VisualSlot {
 }
 
 export interface AssetPlan {
+  layoutPlan?: any
   designId?: string
   post_id:     string   // mirrors the idea id
   format:      string   // "single" | "carousel"
@@ -88,7 +91,7 @@ For each visual slot return:
 "preferred_source"— one of: "uploaded_asset", "unsplash", "ai_generated", "none"
 "source_reason"   — one sentence explaining why this source is preferred
 
-Source priority: prefer ai_generated for every new visual. Use uploaded_asset when a real brand asset is needed. Unsplash is only a resolver fallback after AI failure; still provide broad search_queries for that fallback. Use none for intentional text-only slides.
+Follow planned frames. Background frames prefer Unsplash stock photography with broad searches; preserve the environment. AI may be used for specific backgrounds without transparency. Foreground subjects prefer ai_generated. Use uploaded_asset when a real brand asset is needed. For foreground subjects Unsplash is a resolver fallback after AI failure; still provide broad search_queries for that fallback. Use none for intentional text-only slides.
 
 Rules for preferred_source:
 - "uploaded_asset": the slot needs a real brand/company image (team photos, product shots, office, events)
@@ -206,62 +209,21 @@ function findCandidates(assets: any[], keywords: string[], topK = 3): AssetCandi
 export async function handlePlanAssets(db: any, body: any) {
   try {
     let { brandContext, copy, idea, brand_id } = body
+    if(!copy||!idea)return corsify(NextResponse.json({error:'copy and idea are required'},{status:400}))
     if (brandContext?.id || brand_id) {
       const flow=await db.collection('flows').findOne({id:brandContext?.id || brand_id})
       if(flow?.brandContext)brandContext=flow.brandContext
     }
     const designs=Array.isArray(brandContext?.designs)?brandContext.designs:[]
-    const selectedDesign=designs.find((d:any)=>d.id===body.designId) || designs[Math.floor(Math.random()*designs.length)]
+    const layoutPlan=body.layoutPlan||planPostLayout(brandContext,copy,idea,body.designId)
+    if(body.phase==='canvas')return corsify(NextResponse.json(layoutPlan))
+    const selectedDesign=designs.find((d:any)=>d.id===layoutPlan.designId)
     const imagery=selectedDesign?.blueprint?.imagery
 
     if (!copy)   return corsify(NextResponse.json({ error: 'copy is required' },   { status: 400 }))
     if (!idea)   return corsify(NextResponse.json({ error: 'idea is required' },   { status: 400 }))
 
-    const apiKey = process.env.GROQ_API_KEY
-    if (!apiKey) return corsify(NextResponse.json({ error: 'GROQ_API_KEY not configured' }, { status: 500 }))
-
-    const groq  = new Groq({ apiKey })
-    const model = await getGroqModel(groq)
-
-    const copyJson  = JSON.stringify(copy,  null, 2)
-    const brandJson = JSON.stringify({...brandContext,selectedVisualDirection:imagery}, (key, value) => key === 'logoVariants' ? undefined : value, 2)
-
-    // Call AI to determine visual slots
-    let raw: string | null = null
-    for (let attempt = 0; attempt < 3; attempt++) {
-      try {
-        const res = await groq.chat.completions.create({
-          model,
-          messages: [
-            { role: 'system', content: SYSTEM_PROMPT },
-            { role: 'user',   content: buildPlannerPrompt(copyJson, brandJson, JSON.stringify(idea)) },
-          ],
-          max_tokens: 4500,
-          temperature: 0.3,
-        })
-        raw = res.choices[0]?.message?.content?.trim() ?? null
-        break
-      } catch (err: any) {
-        const is429 = err?.status === 429 || err?.message?.includes('rate_limit')
-        if (is429 && attempt < 2) {
-          await new Promise(r => setTimeout(r, 15000))
-          continue
-        }
-        throw err
-      }
-    }
-
-    if (!raw) return corsify(NextResponse.json({ error: 'Empty response from AI' }, { status: 500 }))
-
-    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
-    let parsed: any
-    try {
-      parsed = JSON.parse(cleaned)
-    } catch {
-      return corsify(NextResponse.json({ error: 'AI returned invalid JSON', raw: cleaned }, { status: 500 }))
-    }
-
-    const aiSlots: any[] = parsed.slots ?? []
+    const aiSlots=layoutPlan.slots.map((layout:any,index:number)=>localAssetBrief(layout,copy.slides?.[index]||copy,idea))
 
     // Load uploaded assets for this brand (for matching)
     let uploadedAssets: any[] = []
@@ -273,11 +235,12 @@ export async function handlePlanAssets(db: any, body: any) {
     }
 
     // Enrich each slot with ranked candidates from the asset library
-    const slots: VisualSlot[] = aiSlots.map((s: any, index: number) => {
+    const slots: VisualSlot[] = layoutPlan.slots.map((layout:any,index:number) => {
+      const s=aiSlots.find((s:any)=>s.slot_id===layout.slot_id)||aiSlots[index]||{}
       const position = /^slide_\d+$/.test(s.slot_id) ? Number(s.slot_id.split('_')[1])-1 : index
       const slide = copy.slides?.[position] ?? copy
       const bounded = (v: any, limit=1500) => typeof v === 'string' ? v.slice(0,limit) : ''
-      const needsVisual = s.needs_visual === true && ['uploaded_asset', 'unsplash', 'ai_generated'].includes(s.preferred_source)
+      const needsVisual = layout.needs_visual
       const cleanTerms = (value: any): string[] => Array.isArray(value)
         ? Array.from(new Set<string>(value.filter((v: any) => typeof v === 'string').map((v: string) => v.trim().toLowerCase()).filter(Boolean))) : []
       const keywords = needsVisual ? cleanTerms(s.search_keywords).slice(0, 8) : []
@@ -286,19 +249,19 @@ export async function handlePlanAssets(db: any, body: any) {
         : []
 
       return {
-        slot_id:          s.slot_id        ?? 'slot',
+        slot_id:          layout.slot_id,
         slot_label:       s.slot_label     ?? s.slot_id,
         needs_visual:     imagery?.placement==='none'?false:needsVisual,
         image_style: imagery?.style || 'photograph',
-        treatment: imagery ? (imagery.placement==='cutout'?'isolated_subject':'environmental') : s.treatment === 'environmental' ? 'environmental' : 'isolated_subject',
+        treatment: layout.treatment,
         subject_description: typeof s.subject_description === 'string' ? s.subject_description.slice(0, 500) : '',
         slide_context: {headline:bounded(slide.headline),body:bounded(slide.body || slide.supportingText),purpose:bounded(slide.purpose,200),post_topic:bounded(idea.topic || idea.title)},
         brand_context: {name:bounded(brandContext?.name,200),industry:bounded(brandContext?.industry,300),audience:bounded(brandContext?.targetAudience || brandContext?.audience,500),colors:Array.isArray(brandContext?.colors)?brandContext.colors.filter((c:any)=>typeof c==='string').slice(0,8):[]},
-        generation_prompt: (typeof s.generation_prompt === 'string' ? s.generation_prompt.slice(0, 2000) : '') + (imagery ? '\nRequired design art direction: '+JSON.stringify(imagery) : ''),
+        generation_prompt: (typeof s.generation_prompt === 'string' ? s.generation_prompt.slice(0, 2000) : '') + '\n'+layout.brief + (imagery ? '\nRequired design art direction: '+JSON.stringify(imagery) : ''),
         visual_purpose:   s.visual_purpose ?? '',
         search_keywords:  keywords,
         search_queries:   needsVisual ? cleanTerms(s.search_queries).slice(0, 3) : [],
-        preferred_source: needsVisual ? (s.preferred_source === 'unsplash' ? 'ai_generated' : s.preferred_source) : 'none',
+        preferred_source: needsVisual ? (layout.background?'unsplash':s.preferred_source==='uploaded_asset'?'uploaded_asset':'ai_generated') : 'none',
         source_reason:    s.source_reason   ?? '',
         candidates,
         selected:         candidates[0] ?? null,
@@ -306,7 +269,8 @@ export async function handlePlanAssets(db: any, body: any) {
     })
 
     const plan: AssetPlan = {
-      designId:selectedDesign?.id,
+      designId:layoutPlan.designId,
+      layoutPlan,
       post_id: idea.id,
       format:  copy.format ?? idea.format,
       slots,

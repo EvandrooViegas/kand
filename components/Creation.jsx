@@ -63,7 +63,7 @@ function SlideRow({ slide }) {
 
 // ─── Per-post pipeline card ───────────────────────────────────────────────────
 
-const STEP_KEYS = ['copy', 'plan', 'resolve', 'design']
+const STEP_KEYS = ['copy', 'layout', 'plan', 'resolve', 'design']
 
 function PostPipelineCard({
   idea, brandContext, brandId,
@@ -81,6 +81,8 @@ function PostPipelineCard({
   const [planLoading,    setPlanLoading]    = useState(false)
   const [resolveLoading, setResolveLoading] = useState(false)
   const [designLoading,  setDesignLoading]  = useState(false)
+  const [layoutLoading,setLayoutLoading]=useState(false)
+  const layoutPlan=planState?.layoutPlan||planState?.plan?.layoutPlan
 
   const copy     = copyState?.copy        ?? null
   const plan     = planState?.plan        ?? null
@@ -92,13 +94,13 @@ function PostPipelineCard({
   const resolveError = resolveState?.error ?? null
   const designError  = designState?.error  ?? null
 
-  const anyLoading = autoRunning || copyLoading || planLoading || resolveLoading || designLoading
+  const anyLoading = autoRunning || copyLoading || layoutLoading || planLoading || resolveLoading || designLoading
 
   // ── cascade clear downstream steps ───────────────────────────────────────
   // When step N is rerun, steps N+1…4 are invalidated.
 
   const clearFrom = (stepKey) => {
-    const idx = STEP_KEYS.indexOf(stepKey)
+    const idx = ['copy','plan','resolve','design'].indexOf(stepKey==='layout'?'plan':stepKey)
     if (idx <= 0) {
       onCopyDone(idea.id,    { loading: false, error: null, copy: null })
     }
@@ -119,7 +121,7 @@ function PostPipelineCard({
     clearFrom('copy')
     setCopyLoading(true)
     try {
-      for (let attempt = 0; attempt < 3; attempt++) {
+      for (let attempt = 0; attempt < 1; attempt++) {
         try {
           const res = await fetch('/api/generate-copywriting', {
             method: 'POST',
@@ -133,7 +135,7 @@ function PostPipelineCard({
           return data
         } catch (err) {
           const is429 = err?.message?.includes('429') || err?.message?.includes('rate_limit')
-          if (is429 && attempt < 2) { await sleep(15000); continue }
+
           throw err
         }
       }
@@ -145,19 +147,43 @@ function PostPipelineCard({
     }
   }
 
+  const runLayout=async(currentCopy=copy,{keepResults=false}={})=>{
+    if(!currentCopy)return
+    if(!keepResults)clearFrom('layout')
+    setLayoutLoading(true);setActiveView('layout')
+    try {
+      const response=await fetch('/api/plan-assets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phase:'canvas',brandContext,copy:currentCopy,idea,brand_id:brandId,designId:keepResults?(layoutPlan?.designId||canvas?.designSelection?.id||resolved?.designId):undefined})})
+      const result=await response.json();if(!response.ok)throw Error(result.error||'Layout failed')
+      onPlanDone(idea.id,{loading:false,error:null,plan:keepResults&&plan?{...plan,layoutPlan:result,designId:result.designId}:null,layoutPlan:result})
+      if(keepResults&&resolved){
+        const updatedResolved={...resolved,layoutPlan:result,designId:result.designId}
+        onResolveDone(idea.id,{...resolveState,resolved:updatedResolved})
+        if(canvas){
+          const updatedCanvas=await runDesign(updatedResolved,currentCopy,{keepResults:true})
+          if(updatedCanvas)toast.success('Design updated using your existing copy and images.')
+        }else toast.success('Design regenerated. Existing assets and resolved images kept.')
+      }else if(keepResults)toast.success('Design regenerated. Other steps kept.')
+      return result
+    }catch(e){
+      if(keepResults)toast.error(`Design regeneration failed: ${e.message}`)
+      else onPlanDone(idea.id,{loading:false,error:e.message,plan:null})
+    }finally{setLayoutLoading(false)}
+  }
   const runPlan = async (currentCopy = copy) => {
     if (!currentCopy) { toast.error('Write copy first'); return }
+    const currentLayout=layoutPlan||await runLayout(currentCopy)
+    if(!currentLayout)return
     clearFrom('plan')
     setPlanLoading(true)
     try {
       const res = await fetch('/api/plan-assets', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brandContext, copy: currentCopy, idea, brand_id: brandId }),
+        body: JSON.stringify({ brandContext, copy: currentCopy, idea, brand_id: brandId,layoutPlan:currentLayout }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed')
-      onPlanDone(idea.id, { loading: false, error: null, plan: data })
+      onPlanDone(idea.id, { loading: false, error: null, plan: data,layoutPlan:currentLayout })
       setActiveView('plan')
       return data
     } catch (err) {
@@ -191,9 +217,9 @@ function PostPipelineCard({
     }
   }
 
-  const runDesign = async (currentResolved = resolved, currentCopy = copy) => {
+  const runDesign = async (currentResolved = resolved, currentCopy = copy,{keepResults=false}={}) => {
     if (!currentResolved) { toast.error('Resolve assets first'); return }
-    clearFrom('design')
+    if(!keepResults)clearFrom('design')
     setDesignLoading(true)
     try {
       const res = await fetch('/api/design-canvas', {
@@ -210,7 +236,7 @@ function PostPipelineCard({
       setActiveView('design')
       return data
     } catch (err) {
-      onDesignDone(idea.id, { loading: false, error: err.message, canvas: null })
+      onDesignDone(idea.id, { loading: false, error: err.message, canvas:keepResults?canvas:null })
       toast.error(`Canvas design failed: ${err.message}`)
     } finally {
       setDesignLoading(false)
@@ -242,9 +268,10 @@ function PostPipelineCard({
 
   const nextStep = (() => {
     if (!copy    || copyError)     return { key: 'copy',    label: 'Write copy',     Icon: PenLine,   run: runCopy,    loading: copyLoading    }
+    if (!layoutPlan) return {key:'layout',label:'Plan canvas',Icon:Sparkles,run:runLayout,loading:layoutLoading}
     if (!plan    || planError)     return { key: 'plan',    label: 'Plan assets',    Icon: Boxes,     run: runPlan,    loading: planLoading    }
     if (!resolved || resolveError) return { key: 'resolve', label: 'Resolve assets', Icon: ImageIcon, run: runResolve, loading: resolveLoading }
-    if (!canvas  || designError)   return { key: 'design',  label: 'Design canvas',  Icon: Sparkles,  run: runDesign,  loading: designLoading  }
+    if (!canvas  || designError)   return { key: 'design',  label: 'Fit final canvas',  Icon: Sparkles,  run: runDesign,  loading: designLoading  }
     return null
   })()
 
@@ -254,15 +281,17 @@ function PostPipelineCard({
   // Steps meta for the progress strip
   const steps = [
     { key: 'copy',    label: 'Copy',    Icon: PenLine,   done: !!copy,     error: !!copyError,    loading: copyLoading,    canRun: true,       run: runCopy    },
-    { key: 'plan',    label: 'Assets',  Icon: Boxes,     done: !!plan,     error: !!planError,    loading: planLoading,    canRun: !!copy,     run: runPlan    },
+    { key:'layout',label:'Canvas',Icon:Sparkles,done:!!layoutPlan,error:!!planError&&!layoutPlan,loading:layoutLoading,canRun:!!copy,run:runLayout },
+    { key: 'plan',    label: 'Assets',  Icon: Boxes,     done: !!plan,     error: !!planError,    loading: planLoading,    canRun: !!layoutPlan,     run: runPlan    },
     { key: 'resolve', label: 'Resolve', Icon: ImageIcon, done: !!resolved, error: !!resolveError, loading: resolveLoading, canRun: !!plan,     run: runResolve },
-    { key: 'design',  label: 'Canvas',  Icon: Sparkles,  done: !!canvas,   error: !!designError,  loading: designLoading,  canRun: !!resolved, run: runDesign  },
+    { key: 'design',  label: 'Fit',  Icon: Sparkles,  done: !!canvas,   error: !!designError,  loading: designLoading,  canRun: !!resolved, run: runDesign  },
   ]
 
   // Downstream warning: how many steps will be cleared if we regenerate
   const downstreamCount = (stepKey) => {
     const idx = STEP_KEYS.indexOf(stepKey)
     return STEP_KEYS.slice(idx + 1).filter(k => {
+      if (k === 'layout') return !!layoutPlan
       if (k === 'plan')    return !!plan
       if (k === 'resolve') return !!resolved
       if (k === 'design')  return !!canvas
@@ -343,7 +372,7 @@ function PostPipelineCard({
           {autoRunning ? 'Generating post…' : copy ? 'Continue generating post' : 'Generate post'}
         </Button>}
         <span role="status" aria-live="polite" className="text-xs text-slate-500">
-          {autoRunning ? copyLoading ? 'Step 1 of 4 · Writing copy' : planLoading ? 'Step 2 of 4 · Planning visuals' : resolveLoading ? 'Step 3 of 4 · Creating images' : designLoading ? 'Step 4 of 4 · Designing post' : 'Preparing next step…' : ''}
+          {autoRunning ? copyLoading ? 'Step 1 of 5 · Writing copy' : layoutLoading ? 'Step 2 of 5 · Planning canvas' : planLoading ? 'Step 3 of 5 · Planning assets' : resolveLoading ? 'Step 4 of 5 · Creating images' : designLoading ? 'Step 5 of 5 · Fitting final canvas' : 'Preparing next step…' : ''}
         </span>
         {/* Next step button */}
         {nextStep && (
@@ -405,6 +434,18 @@ function PostPipelineCard({
               ))}
             </div>
 
+            <div className="flex items-center gap-2 flex-wrap justify-end">
+            {activeView === 'layout' && layoutPlan && (
+              <button
+                onClick={() => { setConfirmRegen(null); runLayout(copy,{keepResults:true}) }}
+                disabled={anyLoading}
+                title="Regenerate the design and update the finished post using the existing copy, assets, and resolved images."
+                className="flex items-center gap-1.5 text-xs font-semibold text-primary px-2.5 py-1 rounded-md border border-primary/20 hover:bg-primary/5 transition-colors disabled:opacity-40"
+              >
+                <RefreshCw className={`w-3 h-3 ${layoutLoading ? 'animate-spin' : ''}`} />
+                {layoutLoading ? 'Regenerating design…' : 'Regenerate design · keep other steps'}
+              </button>
+            )}
             {/* Regenerate — shows confirmation inline */}
             {confirmRegen === activeView ? (
               <div className="flex items-center gap-2">
@@ -440,6 +481,7 @@ function PostPipelineCard({
                 <RefreshCw className="w-3 h-3" />Regenerate
               </button>
             )}
+            </div>
           </div>
 
           {/* Panel body */}
@@ -487,6 +529,7 @@ function PostPipelineCard({
             )}
 
             {/* ── Asset plan view ── */}
+            {activeView==='layout'&&layoutPlan&&<div className="grid grid-cols-2 gap-4">{layoutPlan.slots.map((s,i)=><div key={s.slot_id} className="rounded-lg border p-3"><p className="text-sm font-medium mb-2">Slide {i+1} · {s.spec.composition||'Layout'}</p><svg viewBox="0 0 1080 1080" className="w-full bg-muted rounded"><rect width="1080" height="1080" fill="#f3f4f6"/>{s.spec.elements.filter(e=>e.role||e.type==='image').map((e,j)=><g key={j}><rect x={e.x} y={e.y} width={e.width} height={e.height} rx="12" fill={e.type==='image'?'#cbd5e1':'#334155'} opacity={e.role==='body'?.55:1}/><text x={e.x+16} y={e.y+36} fill={e.type==='image'?'#334155':'white'} fontSize="26">{e.role||'Image'}</text></g>)}</svg><p className="text-xs mt-2">{s.background?'Background photograph':s.needs_visual?'Subject image':'Typography'}</p></div>)}</div>}
             {activeView === 'plan' && (
               <div className="space-y-2">
                 {planError && <ErrorBlock label="Asset plan error" message={planError} />}
@@ -698,26 +741,22 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
   // ── Step 1: generate ideas ────────────────────────────────────────────────
 
   const generateIdeas = async () => {
+    if(loadingIdeas)return
     if (!hasBrand) { toast.error('Save brand information first'); return }
     setLoadingIdeas(true)
-    setIdeas([])
-    setSelectedIds(new Set())
-    setCopyResults({})
-    setPlanResults({})
-    setResolveResults({})
-    setDesignResults({})
     try {
       const res  = await fetch('/api/generate-content-ideas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brandContext }),
+        body: JSON.stringify({ brandContext,existingTopics:ideas.map(i=>i.topic).slice(-30) }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed')
       if (!Array.isArray(data.ideas) || !data.ideas.length) throw new Error('No ideas returned')
-      setIdeas(data.ideas)
-      await persistToFlow(data.ideas, {}, {}, {}, {})
-      toast.success(`${data.ideas.length} ideas generated`)
+      const next=[...ideas,data.ideas[0]]
+      setIdeas(next)
+      await persistToFlow(next, copyResults, planResults, resolveResults, designResults)
+      toast.success('New idea added')
     } catch (err) {
       toast.error(err.message || 'Something went wrong')
     } finally {
@@ -810,7 +849,7 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
     if (!allHaveCopy)    return { label: 'Write copy',      Icon: PenLine   }
     if (!allHavePlan)    return { label: 'Plan assets',     Icon: Boxes     }
     if (!allHaveResolve) return { label: 'Resolve assets',  Icon: ImageIcon }
-    if (!allHaveCanvas)  return { label: 'Design canvas',   Icon: Sparkles  }
+    if (!allHaveCanvas)  return { label: 'Fit final canvas',   Icon: Sparkles  }
     return { label: 'Re-run pipeline', Icon: RefreshCw }
   })()
 
@@ -822,7 +861,7 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
       let copyData = null
       setCopyResults(prev => ({ ...prev, [idea.id]: { loading: true, error: null, copy: null } }))
       try {
-        for (let attempt = 0; attempt < 3; attempt++) {
+        for (let attempt = 0; attempt < 1; attempt++) {
           try {
             const res = await fetch('/api/generate-copywriting', {
               method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -834,7 +873,7 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
             setCopyResults(prev => ({ ...prev, [idea.id]: { loading: false, error: null, copy: data } }))
             break
           } catch (err) {
-            if (err?.message?.includes('429') && attempt < 2) { await sleep(15000); continue }
+
             throw err
           }
         }
@@ -848,9 +887,13 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
       let planData = null
       setPlanResults(prev => ({ ...prev, [idea.id]: { loading: true, error: null, plan: null } }))
       try {
+        const layoutResponse=await fetch('/api/plan-assets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phase:'canvas',brandContext,copy:copyData,idea,brand_id:brandId})})
+        const batchLayout=await layoutResponse.json()
+        if(!layoutResponse.ok)throw Error(batchLayout.error||'Canvas planning failed')
+        setPlanResults(prev=>({...prev,[idea.id]:{loading:true,error:null,plan:null,layoutPlan:batchLayout}}))
         const res = await fetch('/api/plan-assets', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ brandContext, copy: copyData, idea, brand_id: brandId }),
+          body: JSON.stringify({ brandContext, copy: copyData, idea, brand_id: brandId,layoutPlan:batchLayout }),
         })
         const data = await res.json()
         if (!res.ok) throw new Error(data.error || 'Failed')
@@ -926,7 +969,7 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
             </div>
             <div>
               <CardTitle className="text-base">Content Ideas</CardTitle>
-              <CardDescription className="text-xs">Generate 10 Instagram briefs from your brand</CardDescription>
+              <CardDescription className="text-xs">Create one new Instagram brief per click</CardDescription>
             </div>
           </div>
         </CardHeader>
@@ -944,8 +987,8 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
               {loadingIdeas
                 ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" />Generating…</>
                 : ideas.length > 0
-                  ? <><RefreshCw className="w-4 h-4 mr-2" />Regenerate</>
-                  : <><Sparkles className="w-4 h-4 mr-2" />Generate ideas</>
+                  ? <><Sparkles className="w-4 h-4 mr-2" />Generate another idea</>
+                  : <><Sparkles className="w-4 h-4 mr-2" />Generate idea</>
               }
             </Button>
             {ideas.length > 0 && (

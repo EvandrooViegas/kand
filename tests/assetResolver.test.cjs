@@ -12,6 +12,11 @@ function engine(fetch, generation, env = {}) {
 }
 const photo = id => ({ id, urls: { regular: `https://images.example/${id}` } })
 const slot = { search_queries: ['hands testing soil', 'gardener holding soil'], search_keywords: ['garden'], visual_purpose: 'Check soil' }
+test('background stock preference avoids AI and retains environmental treatment',async()=>{
+ const e=engine(async()=>({ok:true,json:async()=>({results:[photo('background')]})}),async()=>{throw Error('AI should not run')})
+ const result=await e.resolveSlot({}, {...slot,slot_id:'bg',needs_visual:true,preferred_source:'unsplash',treatment:'environmental'},null,'key',null,new Set())
+ assert.equal(result.source,'unsplash');assert.equal(result.treatment,'environmental')
+})
 
 test('concurrent slots reserve distinct photos from overlapping results', async () => {
   const e = engine(async () => ({ ok: true, json: async () => ({ results: [photo('a'), photo('b')] }) }))

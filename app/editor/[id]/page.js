@@ -2183,7 +2183,7 @@ function Editor() {
                      const cL = node.cropLeft || 0, cR = node.cropRight || 0
                      const cT = node.cropTop || 0, cB = node.cropBottom || 0
                      const hasCrop = cL > 0 || cR > 0 || cT > 0 || cB > 0
-                     const imgEl = <img src={node.src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover', filter: buildFilterCss(node.filters) }} draggable={false} />
+                     const imgEl = <img src={node.src} alt="" style={{ width: '100%', height: '100%', objectFit: node.objectFit || 'cover', filter: buildFilterCss(node.filters) }} draggable={false} />
                      // When polygon + crop: nest a crop div inside so both clip-paths apply
                      if (hasPoly && hasCrop) {
                        return (
@@ -2193,7 +2193,7 @@ function Editor() {
                            right: `${cR}%`, bottom: `${cB}%`,
                            overflow: 'hidden',
                          }}>
-                           <img src={node.src} alt="" style={{ position: 'absolute', top: `-${cT / (100 - cT - cB) * 100}%`, left: `-${cL / (100 - cL - cR) * 100}%`, width: `${100 * 100 / (100 - cL - cR)}%`, height: `${100 * 100 / (100 - cT - cB)}%`, objectFit: 'cover', filter: buildFilterCss(node.filters) }} draggable={false} />
+                           <img src={node.src} alt="" style={{ position: 'absolute', top: `-${cT / (100 - cT - cB) * 100}%`, left: `-${cL / (100 - cL - cR) * 100}%`, width: `${100 * 100 / (100 - cL - cR)}%`, height: `${100 * 100 / (100 - cT - cB)}%`, objectFit: node.objectFit || 'cover', filter: buildFilterCss(node.filters) }} draggable={false} />
                          </div>
                        )
                      }
