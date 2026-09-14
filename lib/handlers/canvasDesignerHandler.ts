@@ -1,6 +1,8 @@
+import { canvasBrand } from '@/lib/designs/canvasBrand'
+
 import { blueprintSpec, complementaryAccent } from '@/lib/designs/brandBlueprint'
 import { persistInlineImages } from '@/lib/services/persistInlineImages'
-import { PALETTE_PICKS, paletteColors, choosePalette } from '@/lib/designs/palettes'
+import { PALETTE_PICKS, paletteColors, choosePalette, constrainBrandPalette } from '@/lib/designs/palettes'
 import { DESIGN_LIBRARY, librarySpec, splitBulletItems } from '@/lib/designs/library'
 import { withoutEmoji } from '@/lib/services/copyText'
 import { generateLogoVariants } from '@/lib/services/logoVariants'
@@ -2189,7 +2191,7 @@ export async function handleDesignCanvas(db: any, body: any, persist = true) {
 
     if (brandContext?.id) {
       const flow = await db.collection('flows').findOne({id:brandContext.id})
-      if (flow?.brandContext) brandContext=flow.brandContext
+      if (flow?.brandContext) brandContext={...flow.brandContext,id:flow.id}
     }
     const brandDesigns = (Array.isArray(brandContext?.designs)?brandContext.designs:[]).filter((p:any)=>DESIGN_LIBRARY.some(d=>d.id===p.baseId))
     const requestedDesignId=body.designId || inputPlan?.designId
@@ -2214,7 +2216,7 @@ export async function handleDesignCanvas(db: any, body: any, persist = true) {
     const available = [0,1,2,3,4,5].filter(i => !recentCampaigns.includes(i))
     const campaignIndex = available[Math.floor(Math.random() * available.length)] ?? ((recentCampaigns[0] ?? -1) + 1) % 6
     resolvedPlan = { ...resolvedPlan, campaign_index: campaignIndex }
-    resolvedPlan = await prepareSubjectAssets(db, resolvedPlan)
+    if(persist) resolvedPlan = await prepareSubjectAssets(db, resolvedPlan)
 
     // Log logo status for debugging
     const logoUrl = brandContext?.logo ?? null
@@ -2244,11 +2246,11 @@ export async function handleDesignCanvas(db: any, body: any, persist = true) {
     const fresh = choices.filter(d=>!recentIds.includes(d.id))
     const pool = fresh.length ? fresh : DESIGN_LIBRARY.filter(d=>!recentIds.includes(d.id))
     const selected = DESIGN_LIBRARY.find(d=>d.id===requested) ?? pool[Math.floor(Math.random()*pool.length)] ?? DESIGN_LIBRARY[0]
-    const palettePick = choosePalette(body.paletteId || preset?.paletteId)
+    const palettePick = choosePalette(preset?.paletteId || 'brand')
     if (!palettePick) return corsify(NextResponse.json({error:'Unknown palette'},{status:400}))
     const system = brandDesignSystem(brandContext, {visual_theme:preset?.blueprint?.theme || palettePick.theme || selected.theme,spacing:preset?.blueprint?.spacing || 'compact'})
     const palette = buildStrategyPalette(paletteColors(Array.isArray(brandContext?.colors)?brandContext.colors:[],palettePick.id),system)
-    if (preset?.blueprint?.complementary) palette.accent=complementaryAccent(palette.primary)
+    if (preset?.blueprint) Object.assign(palette,constrainBrandPalette(palette,paletteColors(brandContext?.colors||[],palettePick.id)))
     direction = {...direction, system, slides:direction.slides.map((d,index)=>({...d, library:true, highlight_style:preset?.blueprint ? ({none:-1,underline:0,color:1,background:2,font:3,gradient_text:4,gradient_background:5,boxed_gradient_text:6} as any)[preset.blueprint.highlight] : DESIGN_LIBRARY.findIndex(item=>item.id===selected.id)%4, campaign:system,palette:{...palette},
       heading_font:system.typography.heading,body_font:system.typography.body,
       design:validateDesignSpec(preset?.blueprint ? blueprintSpec(preset.blueprint,resolvedPlan.slots[index],extractSlideText(copy,index,format,resolvedPlan.slots.length),index,resolvedPlan.slots.length) : librarySpec(selected,resolvedPlan.slots[index],extractSlideText(copy,index,format,resolvedPlan.slots.length),index,resolvedPlan.slots.length,preset?.artDirection),resolvedPlan.slots[index],system,resolvedPlan.slots)
@@ -2301,5 +2303,6 @@ export async function handleSwitchDesign(db: any, id: string, body: any) {
   const current = await db.collection('canvases').findOne({id})
   if (!current) return corsify(NextResponse.json({error:'Canvas not found'},{status:404}))
   const input = current.designInput ?? recoverDesignInput(current)
+  input.brandContext={...input.brandContext,...await canvasBrand(db,current)}
   return handleDesignCanvas(db,{...input,canvasName:current.name,designId:body.designId,paletteId:body.paletteId ?? current.designSelection?.paletteId},false)
 }

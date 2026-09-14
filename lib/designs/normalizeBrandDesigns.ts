@@ -3,12 +3,12 @@ import { PALETTE_PICKS } from './palettes'
 
 /** Repair enum drift without throwing away the model's brand-specific content. */
 export function normalizeBrandDesigns(parsed: any) {
-  const candidates = Array.isArray(parsed) ? parsed : parsed?.designs
+  const candidates = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.designs) ? parsed.designs : parsed?.design ? [parsed.design] : parsed?.blueprint ? [parsed] : []
   if (!Array.isArray(candidates)) return []
   const usedFamilies = new Set<string>(), usedCompositions = new Set<string>()
   const clean = (v: any) => typeof v === 'string' ? v.trim() : ''
   const key = (v: any) => clean(v).toLowerCase().replace(/[^a-z0-9]/g,'')
-  return candidates.filter(d=>d && typeof d==='object' && !Array.isArray(d) && (clean(d.name)||clean(d.headline)||clean(d.rationale))).slice(0,3).map((d:any,index:number)=>{
+  return candidates.filter(d=>d && typeof d==='object' && !Array.isArray(d) && (d.blueprint||clean(d.name)||clean(d.headline)||clean(d.rationale))).slice(0,3).map((d:any,index:number)=>{
     const available = DESIGN_LIBRARY.filter(f=>!usedFamilies.has(f.id))
     const family = available.find(f=>key(f.id)===key(d.baseId)||key(f.name)===key(d.baseId)) || available[index % available.length]
     usedFamilies.add(family.id)

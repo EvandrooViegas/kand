@@ -1,12 +1,10 @@
 import { brandDesignRequest } from '@/lib/designs/brandDesignRequest'
-import { normalizeBlueprint, isPlaceholderCopy } from '@/lib/designs/brandBlueprint'
+import { normalizeBlueprint } from '@/lib/designs/brandBlueprint'
 import { normalizeBrandDesigns } from '@/lib/designs/normalizeBrandDesigns'
 import { availableGroqCompletion } from '@/lib/services/ai/availableGroqCompletion'
 import { NextResponse } from 'next/server'
 import { randomUUID } from 'node:crypto'
 import Groq from 'groq-sdk'
-import { DESIGN_LIBRARY } from '@/lib/designs/library'
-import { PALETTE_PICKS } from '@/lib/designs/palettes'
 
 export async function handleBrandDesigns(db: any, body: any) {
   try {
@@ -14,19 +12,21 @@ export async function handleBrandDesigns(db: any, body: any) {
   if (!flow) return NextResponse.json({error:'Save your brand first'},{status:404})
   if (!process.env.GROQ_API_KEY) return NextResponse.json({error:'GROQ_API_KEY is required to generate brand designs'},{status:400})
   const brand = {...flow.brandContext,...body.brandContext,id:flow.id}
-  const priorImages=Object.values(flow.creationState?.resolveResults||{}).flatMap((r:any)=>r?.resolved?.slots||[]).map((slot:any)=>slot.resolvedAsset).filter((asset:any)=>asset?.url && (asset.url.startsWith('/api/uploads/') || asset.url.startsWith('https://')))
-  const previewAsset=priorImages.find((asset:any)=>asset.subject?.url) || priorImages[0] || null
   const groq = new Groq({apiKey:process.env.GROQ_API_KEY,maxRetries:0})
   let parsed:any={}
+  let failure=''
   for(let attempt=0;attempt<2;attempt++) {
-    const response=await availableGroqCompletion(groq,brandDesignRequest(brand,flow.brandContext?.designs||[],attempt>0))
+    const response=await availableGroqCompletion(groq,brandDesignRequest(brand,flow.brandContext?.designs||[],failure||false))
     const content=response.choices[0]?.message.content || '{}'
-    try { parsed=JSON.parse(content.replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'')) } catch { parsed={} }
-    if(normalizeBrandDesigns(parsed).some((d:any)=>!isPlaceholderCopy(d.headline)&&normalizeBlueprint(d.blueprint)))break
-
+    try { parsed=JSON.parse(content.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'')) } catch { parsed={};failure='JSON was incomplete or malformed. Use at most 5 elements per template and omit optional fields to finish within the output budget.' }
+    const issues:string[]=[]
+    const valid=normalizeBrandDesigns(parsed).find((d:any)=>normalizeBlueprint(d.blueprint,issues))
+    if(valid){parsed={designs:[valid]};break}
+    failure=issues[0]||failure||'Return {designs:[{name,blueprint:{templates:{cover,content,closing},imagery}}]} with elements arrays in each template.'
+    console.warn('[brand-designs] Invalid response:',response.choices[0]?.finish_reason,failure)
   }
-  const designs=normalizeBrandDesigns(parsed).slice(0,1).map((d:any)=>({...d,previewAsset,blueprint:normalizeBlueprint(d.blueprint),artDirection:undefined,id:'brand-'+randomUUID(),baseId:d.baseId,paletteId:d.paletteId,name:String(d.name||brand.name+' design').slice(0,80),tags:(Array.isArray(d.tags)?d.tags:[]).slice(0,4).map((x:any)=>String(x).slice(0,30)),rationale:String(d.rationale||'').slice(0,600),headline:String(d.headline||brand.name).slice(0,120),body:String(d.body||brand.about||'').slice(0,180),createdAt:new Date().toISOString()})).filter((d:any)=>d.blueprint&&!isPlaceholderCopy(d.headline))
-  if (!designs.length) return NextResponse.json({error:'The model returned no usable design directions. Please generate again.'},{status:502})
+  const designs=normalizeBrandDesigns(parsed).slice(0,1).map((d:any)=>({...d,blueprint:normalizeBlueprint(d.blueprint),artDirection:undefined,id:'brand-'+randomUUID(),baseId:d.baseId,paletteId:d.paletteId,name:String(d.name||brand.name+' design').slice(0,80),tags:(Array.isArray(d.tags)?d.tags:[]).slice(0,4).map((x:any)=>String(x).slice(0,30)),rationale:String(d.rationale||'').slice(0,600),headline:String(d.headline||brand.name).slice(0,120),body:String(d.body||brand.about||'').slice(0,180),createdAt:new Date().toISOString()})).filter((d:any)=>d.blueprint)
+  if (!designs.length) return NextResponse.json({error:'Could not complete the design: '+failure},{status:502})
   brand.designs=[...(flow.brandContext?.designs||[]),...designs].slice(-24)
   await db.collection('flows').updateOne({id:flow.id},{$set:{brandContext:brand,updatedAt:new Date()}})
   return NextResponse.json({brandContext:brand,notice:null})

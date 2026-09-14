@@ -8,9 +8,9 @@ const source = fs.readFileSync(require('node:path').join(__dirname, '../lib/hand
 const copyTools = vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname, '../lib/services/copyText.ts'), 'utf8').replace(/export /g, '')) + '\n({withoutEmoji,cleanCopy})')
 const engine = vm.runInNewContext(stripTypeScriptTypes(source) + '\n({splitDesignSteps,emphasizeHeadline,recoverDesignInput,handleSwitchDesign,validateDesignSpec,renderDesignSpec,fitText,fitTextLayout,normalizeDesignSystem,buildStrategyPalette,ensureContrast,contrastRatio,parseArtDirection,buildSingleCanvas,buildCarouselCanvas,buildPrompt,handleDesignCanvas,designIssues})', {
   ...vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname, '../lib/designs/library.ts'),'utf8').replace(/export /g,''))+'\n({DESIGN_LIBRARY,librarySpec,splitBulletItems})'),
-  ...vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname,'../lib/designs/palettes.ts'),'utf8').replace(/export /g,''))+'\n({PALETTE_PICKS,paletteColors,choosePalette})'),
+  ...vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname,'../lib/designs/palettes.ts'),'utf8').replace(/export /g,''))+'\n({PALETTE_PICKS,paletteColors,choosePalette,constrainBrandPalette})'),
   ...vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname,'../lib/designs/brandBlueprint.ts'),'utf8').replace(/export /g,''))+'\n({blueprintSpec,complementaryAccent})'),
-  withoutEmoji: copyTools.withoutEmoji, prepareSubjectAssets: async (db, plan) => plan, persistInlineImages: async (db, value) => value, uuidv4: require('node:crypto').randomUUID, console, process: { env: {} },
+  canvasBrand: async (db,canvas)=>canvas.designInput?.brandContext||canvas.brandContext||{}, withoutEmoji: copyTools.withoutEmoji, prepareSubjectAssets: async (db, plan) => plan, persistInlineImages: async (db, value) => value, uuidv4: require('node:crypto').randomUUID, console, process: { env: {} },
   NextResponse: { json: (body, options) => ({ body, status: options?.status ?? 200 }) }, corsify: response => response,
 })
 test('global art direction supplies consistent typography, palette, and visual defaults', () => {
@@ -409,14 +409,14 @@ test('personalized compositions render distinct layouts without obscuring copy',
  assert.equal(positions.size,3)
 })
 
-test('AI-authored blueprint geometry overrides library layouts and renders layered styling',async()=>{
+test('saved identity composes locally and retains layered styling',async()=>{
  const template={background:{type:'gradient',color:'bg',to:'surface',angle:37},elements:[{type:'text',role:'headline',x:92,y:110,width:820,height:250,size:76,shadow:true},{type:'text',role:'body',x:92,y:450,width:600,height:260,size:30},{type:'text',role:'cta',x:92,y:960,width:700,height:64,size:26},{type:'circle',x:820,y:640,width:140,height:140,color:'accent',opacity:45,shadow:true,layer:-1}]}
  const brand={name:'Blueprint test',colors:['#35724c'],fonts:['Inter'],designs:[{id:'brand-authored',baseId:'editorial',paletteId:'light',name:'Original geometry',blueprint:{version:1,theme:'studio',spacing:'compact',highlight:'gradient_text',imagery:{placement:'none',style:'drawing'},templates:{cover:template,content:template,closing:template}}}]}
  const db={collection:()=>({find:()=>({sort:()=>({limit:()=>({toArray:async()=>[]})})})})}
  const result=await engine.handleDesignCanvas(db,{brandContext:brand,copy:{headline:'Make room for more',supportingText:'A fresh perspective.'},resolvedPlan:plan,designId:'brand-authored'},false)
  assert.equal(result.status,200)
  const headline=result.body.nodes.find(n=>n.type==='text'&&n.text.includes('Make room'))
- assert.equal(headline.x,92)
+ assert.equal(headline.x,72)
  assert.equal(headline.textShadow.enabled,true)
  assert.ok(headline.text.includes('backgroundClip=text'))
  assert.equal(result.body.designSelection.id,'brand-authored')

@@ -1,8 +1,11 @@
 'use client'
-import {blueprintSpec,complementaryAccent,isPlaceholderCopy} from '@/lib/designs/brandBlueprint'
+import {MockImage,MockLogo} from '@/components/DesignMockAssets'
+import {blueprintSpec,complementaryAccent} from '@/lib/designs/brandBlueprint'
 import {useState,useId,useEffect} from 'react'
-import {PALETTE_PICKS,paletteColors} from '@/lib/designs/palettes'
-import {Search,Check,ArrowRight,Loader2} from 'lucide-react'
+import {PALETTE_PICKS,paletteColors,constrainBrandPalette} from '@/lib/designs/palettes'
+import {Search,Check,ArrowRight,Loader2,Plus} from 'lucide-react'
+import {generateBrandBatch} from '@/lib/designs/generateBrandBatch'
+import {Tabs,TabsList,TabsTrigger,TabsContent} from '@/components/ui/tabs'
 import {DESIGN_LIBRARY,librarySpec} from '@/lib/designs/library'
 import {Dialog,DialogContent,DialogHeader,DialogTitle,DialogDescription} from '@/components/ui/dialog'
 import {Button} from '@/components/ui/button'
@@ -33,23 +36,15 @@ function samplePalette(canvas, theme, pick = 'brand') {
 // Local sample content: browsing never generates or changes a saved canvas.
 export function Sample({design,chapter=0,canvas,pick='brand'}) {
   const uid=useId().replace(/:/g,'')
-  const light=design.theme==='studio'
-  const palette=samplePalette(canvas,design.blueprint?.theme||design.theme,pick)
+  let palette=samplePalette(canvas,design.blueprint?.theme||design.theme,pick)
   const brand=canvas?.designInput?.brandContext || canvas?.brandContext || {}
   const copy={headline:['Ideas that move you.','Make room for more.','Your next chapter.'][chapter],body:'A fresh perspective. Thoughtful details. Built around your brand.',cta:'Discover more',eyebrow:'STUDIO / 0'+(chapter+1)}
-  copy.headline=(!isPlaceholderCopy(design.headline)?design.headline:null) || (brand.name ? [brand.name, 'Made for you', 'Discover '+brand.name][chapter] : copy.headline)
-  copy.body=(!isPlaceholderCopy(design.body)?design.body:null) || String(brand.about || copy.body).slice(0,150)
-  copy.eyebrow=brand.name || copy.eyebrow
+  copy.headline=['Lorem ipsum dolor sit amet.','Lorem ipsum, consectetur adipiscing.','Lorem ipsum. Your next chapter.'][chapter]
+  copy.body='Lorem ipsum dolor sit amet, consectetur adipiscing elit. Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua.'
+  copy.eyebrow='BRAND / 0'+(chapter+1)
   if(chapter===0) copy.body=''
-  if(design.blueprint?.complementary)palette.accent=complementaryAccent(palette.primary)
+  if(design.blueprint)palette=constrainBrandPalette(palette,paletteColors(brand.colors||[],pick))
   const spec=design.blueprint ? blueprintSpec(design.blueprint,{slot_id:'sample',resolvedAsset:{url:'sample'}},copy,chapter,3) : librarySpec(DESIGN_LIBRARY.find(d=>d.id===(design.baseId||design.id)) || design,{slot_id:'sample',resolvedAsset:{url:'sample'}},copy,chapter,3,design.artDirection)
-  const sampleImage=design.previewAsset?.url
-  const sampleSubject=design.previewAsset?.subject?.url
-  const isPortuguese=/^pt|portugu/i.test(brand.language||'')
-  if(isPortuguese) {
-    copy.cta='Saiba mais'
-    if(isPlaceholderCopy(design.headline))copy.headline=[brand.name,'Conheça '+brand.name,'O próximo passo'][chapter]
-  }
   const highlightText=(text,role)=>{
     const kind=design.blueprint?.highlight
     if(role!=='headline'||!kind||kind==='none'||chapter===1)return text
@@ -58,46 +53,69 @@ export function Sample({design,chapter=0,canvas,pick='brand'}) {
     if(kind==='boxed_gradient_text')return <>{words.join(' ')}{words.length?' ':''}<span style={{background:palette.primary}}><span style={styles.gradient_text}>{phrase}</span></span></>
     return <>{words.join(' ')}{words.length?' ':''}<span style={styles[kind]}>{phrase}</span></>
   }
+  const textStyle=e=>{
+    const heading=e.role==='headline',fonts=brand.fonts||[]
+    const font=fonts[heading?0:1]||fonts[0]
+    const lineHeight=e.lineHeight||(heading?1.08:1.35)
+    let size=e.size||(heading?86:30)
+    const words=String(copy[e.role]||'').split(/\s+/)
+    const availableWidth=e.width-(e.type==='badge'?40:0),availableHeight=e.height-(e.type==='badge'?24:0)
+    // Fit fixed mock copy inside the authored box without altering its geometry.
+    const fits=s=>{let lines=1,line=0;for(const word of words){const width=word.length*s*.56;if(width>availableWidth)return false;if(line&&line+width+s*.28>availableWidth){lines++;line=0}line+=width+s*.28}return lines*s*lineHeight<=availableHeight}
+    while(size>18&&!fits(size))size--
+    return {fontFamily:(typeof font==='string'?font:font?.family||font?.name)||'Arial,sans-serif',fontSize:size,fontWeight:e.weight||(heading?750:400),lineHeight,letterSpacing:e.letterSpacing||0,textShadow:e.shadow?'0 3px 14px #00000040':undefined,color:palette[e.color]||palette.text,textAlign:e.align||'left',padding:e.type==='badge'?'12px 20px':0,background:e.type==='badge'?palette[e.fill]||palette.primary:undefined,borderRadius:e.radius||24,boxSizing:'border-box',opacity:(e.opacity??100)/100}
+  }
   return <svg viewBox="0 0 1080 1080" className="block w-full h-auto" aria-label={design.name+' sample slide '+(chapter+1)} role="img">
-    <defs><linearGradient id={uid+'bg'} x1="0" y1="0" x2="1" y2="1"><stop stopColor={palette[spec.background.color]||palette.bg}/><stop offset="1" stopColor={palette[spec.background.to]||palette.accent}/></linearGradient><radialGradient id={uid+'glow'}><stop stopColor={palette.primary}/><stop offset="1" stopColor={palette.primary} stopOpacity="0"/></radialGradient><linearGradient id={uid+'object'} x2="1" y2="1"><stop stopColor={palette.highlight}/><stop offset=".48" stopColor={palette.accent}/><stop offset="1" stopColor={palette.shade}/></linearGradient></defs>
-    <rect width="1080" height="1080" fill={['gradient','radial'].includes(spec.background.type)?'url(#'+uid+'bg)':palette[spec.background.color]||palette.bg}/>
-    {spec.background.type==='image'&&sampleImage?<image href={sampleImage} width="1080" height="1080" preserveAspectRatio="xMidYMid slice"/>:spec.background.type==='image'&&<g><rect width="1080" height="1080" fill={palette.shade}/><circle cx="780" cy="420" r="310" fill={palette.accent} opacity=".4"/><path d="M0 850 L600 290 L1080 720 V1080 H0Z" fill={palette.primary} opacity=".6"/></g>}
+    <defs><linearGradient id={uid+'bg'} gradientTransform={'rotate('+((spec.background.angle??135)-90)+' .5 .5)'}><stop stopColor={palette[spec.background.color]||palette.bg}/><stop offset="1" stopColor={palette[spec.background.to]||palette.accent}/></linearGradient><radialGradient id={uid+'radial'}><stop stopColor={palette[spec.background.to]||palette.accent}/><stop offset="1" stopColor={palette[spec.background.color]||palette.bg}/></radialGradient></defs>
+    <rect width="1080" height="1080" fill={spec.background.type==='radial'?'url(#'+uid+'radial)':spec.background.type==='gradient'?'url(#'+uid+'bg)':palette[spec.background.color]||palette.bg}/>
+    {spec.background.type==='image'&&<MockImage width={1080} height={1080} palette={palette} uid={uid+'background'}/>}
     {[...spec.elements].sort((a,b)=>((a.type==='text'||a.type==='badge')?100:a.layer||0)-((b.type==='text'||b.type==='badge')?100:b.layer||0)).map((e,i)=>{
-      const fill=palette[e.color]||palette.primary
-      if(e.type==='text'||e.type==='badge') return <foreignObject key={i} x={e.x} y={e.y} width={e.width} height={e.height}><div xmlns="http://www.w3.org/1999/xhtml" style={{fontFamily:(typeof brand.fonts?.[0]==='string'?brand.fonts[0]:brand.fonts?.[0]?.family)||'Arial,sans-serif',fontSize:e.role==='headline'?Math.max(64,e.size||86):e.size||30,fontWeight:e.weight || (e.role==='headline'?750:400),lineHeight:1.08,textShadow:e.shadow?'0 3px 14px #00000040':undefined,color:palette.text,textAlign:e.align||'left',padding:e.type==='badge'?'12px 20px':0,background:e.type==='badge'?palette.primary:undefined,borderRadius:24}}>{highlightText(copy[e.role],e.role)}</div></foreignObject>
-      if(e.type==='image'&&sampleImage&&design.blueprint?.imagery?.style!=='drawing')return <image key={i} href={e.image_variant==='subject'&&sampleSubject?sampleSubject:sampleImage} x={e.x} y={e.y} width={e.width} height={e.height} preserveAspectRatio={e.image_variant==='subject'?'xMidYMax meet':'xMidYMid slice'}/>
-      if(e.type==='image')return <g key={i} transform={'translate('+e.x+' '+e.y+')'}><rect width={e.width} height={e.height} rx="20" fill={palette.surface}/><ellipse cx={e.width*.5} cy={e.height*.8} rx={e.width*.3} ry={e.height*.04} fill="#000" opacity=".12"/><rect x={e.width*.23} y={e.height*.18} width={e.width*.54} height={e.height*.6} rx={Math.min(e.width,e.height)*.16} fill={design.blueprint?.imagery?.style==='drawing'?'none':'url(#'+uid+'object)'} stroke={palette.accent} strokeWidth={design.blueprint?.imagery?.style==='drawing'?8:0} transform={'rotate(-12 '+e.width/2+' '+e.height/2+')'}/><circle cx={e.width*.5} cy={e.height*.44} r={Math.min(e.width,e.height)*.14} fill="none" stroke={palette.highlight} strokeWidth="12" opacity=".8"/></g>
-      if(e.type==='glow'||e.type==='gradient')return <g key={i}><defs><linearGradient id={uid+'layer'+i} gradientTransform={'rotate('+(e.angle||135)+' .5 .5)'}><stop stopColor={fill} stopOpacity={(e.opacity??100)/100}/><stop offset="1" stopColor={palette[e.to]||palette.accent} stopOpacity={(e.endOpacity??100)/100}/></linearGradient></defs><rect key={i} x={e.x} y={e.y} width={e.width} height={e.height} fill={'url(#'+(e.type==='glow'?uid+'glow':uid+'layer'+i)+')'} opacity={e.type==='glow'?(e.opacity||30)/100:1}/></g>
-      if(e.type==='grid')return <g key={i} opacity=".12">{Array.from({length:14},(_,j)=><path key={j} d={'M '+(40+j*76)+' 120 V 920 M 40 '+(120+j*60)+' H 1040'} stroke={fill} strokeWidth="2"/>)}</g>
-      if(e.type==='number')return <text key={i} x={e.x} y={e.y+e.height*.8} fontSize={e.size||240} fill={fill} opacity=".2">0{chapter+1}</text>
-      return <rect key={i} x={e.x} y={e.y} width={e.width} height={e.height} rx={e.type==='ring'||e.type==='circle'?Math.min(e.width,e.height)/2:e.radius||0} fill={e.type==='ring'||e.type==='frame'?'none':fill} stroke={fill} strokeWidth={e.stroke||2} style={{filter:e.shadow?'drop-shadow(0px 12px 20px #00000030)':undefined}} opacity={(e.opacity??25)/100}/>
+      const fill=palette[e.fill||e.color]||palette.primary
+      const stroke=palette[e.color]||fill
+      const opacity=(e.opacity??100)/100
+      if(e.type==='text'||e.type==='badge') return <foreignObject key={i} x={e.x} y={e.y} width={e.width} height={e.height}><div xmlns="http://www.w3.org/1999/xhtml" style={textStyle(e)}>{highlightText(copy[e.role],e.role)}</div></foreignObject>
+      if(e.type==='image')return <g key={i} opacity={opacity}><defs><clipPath id={uid+'clip'+i}>{e.mask==='circle'?<ellipse cx={e.x+e.width/2} cy={e.y+e.height/2} rx={e.width/2} ry={e.height/2}/>:<rect x={e.x} y={e.y} width={e.width} height={e.height} rx={e.mask==='pill'?Math.min(e.width,e.height)/2:e.radius||0}/>}</clipPath></defs><g clipPath={'url(#'+uid+'clip'+i+')'} style={{filter:e.shadow?'drop-shadow(0 12px 20px #00000030)':undefined}}><MockImage x={e.x} y={e.y} width={e.width} height={e.height} palette={palette} cutout={e.image_variant==='subject'||design.blueprint?.imagery?.placement==='cutout'} drawing={design.blueprint?.imagery?.style==='drawing'} uid={uid+'image'+i}/>{e.treatment==='darken'&&<rect x={e.x} y={e.y} width={e.width} height={e.height} fill="#000" opacity=".35"/>}</g></g>
+      if(e.type==='glow'||e.type==='gradient')return <g key={i}><defs>{e.type==='glow'?<radialGradient id={uid+'layer'+i}><stop stopColor={stroke}/><stop offset="1" stopColor={stroke} stopOpacity="0"/></radialGradient>:<linearGradient id={uid+'layer'+i} gradientTransform={'rotate('+((e.angle??135)-90)+' .5 .5)'}><stop stopColor={stroke} stopOpacity={opacity}/><stop offset="1" stopColor={palette[e.to]||palette.accent} stopOpacity={(e.endOpacity??100)/100}/></linearGradient>}</defs><rect x={e.x} y={e.y} width={e.width} height={e.height} fill={'url(#'+uid+'layer'+i+')'} opacity={e.type==='glow'?opacity:1}/></g>
+      if(e.type==='grid')return <g key={i} opacity={opacity}>{Array.from({length:14},(_,j)=><path key={j} d={'M '+(e.x+j*e.width/13)+' '+e.y+' V '+(e.y+e.height)+' M '+e.x+' '+(e.y+j*e.height/13)+' H '+(e.x+e.width)} stroke={stroke} strokeWidth={e.stroke||2}/>)}</g>
+      if(e.type==='dots')return <g key={i} fill={stroke} opacity={opacity}>{Array.from({length:64},(_,j)=><circle key={j} cx={e.x+(j%8+.5)*e.width/8} cy={e.y+(Math.floor(j/8)+.5)*e.height/8} r={e.stroke||3}/>)}</g>
+      if(e.type==='number')return <text key={i} x={e.x} y={e.y+e.height*.8} fontFamily="Arial,sans-serif" fontWeight="800" fontSize={e.size||240} fill={stroke} opacity={opacity}>0{chapter+1}</text>
+      const transform=e.rotation?'rotate('+e.rotation+' '+(e.x+e.width/2)+' '+(e.y+e.height/2)+')':undefined
+      if(e.type==='circle'||e.type==='ring')return <ellipse key={i} cx={e.x+e.width/2} cy={e.y+e.height/2} rx={e.width/2} ry={e.height/2} fill={e.type==='ring'?'none':fill} stroke={stroke} strokeWidth={e.stroke||2} opacity={opacity} transform={transform}/>
+      return <rect key={i} x={e.x} y={e.y} width={e.width} height={e.height} rx={e.type==='pill'?Math.min(e.width,e.height)/2:e.radius||0} fill={e.type==='frame'?'none':fill} stroke={stroke} strokeWidth={e.stroke||0} transform={transform} style={{filter:e.shadow?'drop-shadow(0px 12px 20px #00000030)':undefined}} opacity={opacity}/>
     })}
-    {brand.logo && <image href={brand.logoVariants?.white?.url || brand.logo} x="904" y="972" width="104" height="54" preserveAspectRatio="xMidYMid meet"/>}
+    <g transform="translate(818 986) scale(.8)"><MockLogo palette={palette}/></g>
   </svg>
 }
 
 export default function DesignLibrary({canvas,selected,onSelect,disabled}) {
   const [savedBrand,setSavedBrand]=useState(null)
   const brand=canvas?.designInput?.brandContext || canvas?.brandContext
-  useEffect(()=>{if(!brand?.id)return;let cancelled=false;fetch('/api/flows/'+brand.id).then(r=>r.ok?r.json():null).then(flow=>{if(!cancelled&&flow?.brandContext)setSavedBrand(flow.brandContext)}).catch(()=>{});return()=>{cancelled=true}},[brand?.id])
-  const choices=[...(savedBrand?.designs || brand?.designs || []).map(p=>({...DESIGN_LIBRARY.find(d=>d.id===p.baseId),...p})),...DESIGN_LIBRARY]
+  useEffect(()=>{if(!brand?.id)return;let cancelled=false;fetch('/api/flows/'+brand.id).then(r=>r.ok?r.json():null).then(flow=>{if(!cancelled&&flow?.brandContext)setSavedBrand({...flow.brandContext,id:flow.id})}).catch(()=>{});return()=>{cancelled=true}},[brand?.id])
+  const brandDesigns=(savedBrand?.designs || brand?.designs || []).map(p=>({...DESIGN_LIBRARY.find(d=>d.id===p.baseId),...p}))
+  const choices=[...brandDesigns,...DESIGN_LIBRARY]
   if(savedBrand) canvas={...canvas,designInput:{...canvas?.designInput,brandContext:savedBrand}}
 
   const [open,setOpen]=useState(false),[query,setQuery]=useState(''),[active,setActive]=useState(DESIGN_LIBRARY[0].id)
   const [pick,setPick]=useState(selected?.paletteId||'brand')
   const [busy,setBusy]=useState(false),[error,setError]=useState(''),[chapter,setChapter]=useState(0)
-  const design=choices.find(d=>d.id===active)||DESIGN_LIBRARY[0]
-  const filtered=choices.filter(d=>(d.name+' '+d.tags.join(' ')).toLowerCase().includes(query.toLowerCase()))
-  return <><Button variant="outline" size="sm" disabled={disabled} onClick={()=>{setActive(selected?.id||DESIGN_LIBRARY[0].id);setPick(selected?.paletteId||'brand');setQuery('');setError('');setChapter(0);setOpen(true)}}>Design: {selected?.name||'Custom'}</Button>
-    <Dialog open={open} onOpenChange={v=>{if(!busy)setOpen(v)}}><DialogContent className="w-[calc(100vw-1rem)] max-w-6xl h-[90dvh] max-h-[900px] p-0 flex flex-col gap-0 overflow-hidden">
-      <DialogHeader className="px-6 py-5 border-b text-left shrink-0"><DialogTitle className="text-xl">Find your look</DialogTitle><DialogDescription>Saved brand designs and design families. Your colors, fonts and content.</DialogDescription></DialogHeader>
-      <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[1.1fr_1fr] overflow-y-auto md:overflow-hidden">
+  const [tab,setTab]=useState('premade'),[creating,setCreating]=useState(false),[progress,setProgress]=useState('')
+  const design=choices.find(d=>d.id===active)
+  const filtered=(tab==='brand'?brandDesigns:DESIGN_LIBRARY).filter(d=>(d.name+' '+(d.tags||[]).join(' ')).toLowerCase().includes(query.toLowerCase()))
+  const switchTab=value=>{setTab(value);setQuery('');setError('');const list=value==='brand'?brandDesigns:DESIGN_LIBRARY;if(!list.some(d=>d.id===active)){setActive(list[0]?.id||'');if(list[0]?.paletteId)setPick(list[0].paletteId)}setChapter(0)}
+  return <><Button variant="outline" size="sm" disabled={disabled} onClick={()=>{const chosen=choices.find(d=>d.id===selected?.id);setTab(brandDesigns.some(d=>d.id===selected?.id)||selected?.id?.startsWith('brand-')?'brand':'premade');setActive(chosen?.id||(selected?.id?.startsWith('brand-')?selected.id:DESIGN_LIBRARY[0].id));setPick(selected?.paletteId||'brand');setQuery('');setError('');setChapter(0);setOpen(true)}}>Design: {selected?.name||'Custom'}</Button>
+    <Dialog open={open} onOpenChange={v=>{if(!busy&&!creating)setOpen(v)}}><DialogContent className="w-[calc(100vw-1rem)] max-w-7xl h-[94dvh] max-h-[1040px] p-0 flex flex-col gap-0 overflow-hidden">
+      <DialogHeader className="px-6 py-5 border-b text-left shrink-0"><DialogTitle className="text-xl">Find your look</DialogTitle><DialogDescription>Brand identities and premade designs. Every slide gets its own composition.</DialogDescription></DialogHeader>
+      <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[1fr_1.15fr] overflow-y-auto md:overflow-hidden">
         <div className="min-w-0 p-4 md:p-5 md:overflow-y-auto border-b md:border-b-0 md:border-r"><div className="relative mb-4"><Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground"/><input aria-label="Search designs" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search a name or mood…" className="w-full rounded-lg border bg-background pl-9 pr-3 py-2.5 text-sm"/></div>
-          <div className="grid grid-cols-2 gap-3">{filtered.map(d=><button key={d.id} disabled={busy} aria-pressed={active===d.id} onClick={()=>{setActive(d.id);if(d.paletteId)setPick(d.paletteId);setError('')}} className={'text-left rounded-xl border-2 overflow-hidden transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary '+(active===d.id?'border-primary ring-2 ring-primary/15':'border-transparent bg-muted/40 hover:border-border')}><div className="relative"><Sample design={d} canvas={canvas} pick={pick}/>{selected?.id===d.id&&<span className="absolute top-2 left-2 flex items-center gap-1 rounded-full bg-background px-2 py-1 text-[10px] font-semibold shadow"><Check size={11}/>Current</span>}</div><div className="p-3"><span className="block text-sm font-semibold">{d.name}</span><span className="text-xs text-muted-foreground">{d.tags.slice(0,2).join(' · ')}</span></div></button>)}</div>
-          {!filtered.length&&<p className="py-12 text-center text-sm text-muted-foreground">No designs match “{query}”. Try another mood.</p>}
+          <Tabs value={tab} onValueChange={switchTab}><TabsList className="w-full h-11 mb-3"><TabsTrigger disabled={creating||busy} value="brand" className="flex-1">Brand designs ({brandDesigns.length})</TabsTrigger><TabsTrigger disabled={creating||busy} value="premade" className="flex-1">Premade designs</TabsTrigger></TabsList>
+          <TabsContent value={tab}>
+          {tab==='brand'&&<div className="mb-4"><Button className="w-full" variant="outline" disabled={creating||busy||!brand?.id||!brand?.name} onClick={async()=>{setCreating(true);setError('');try{await generateBrandBatch({flowId:brand.id,brand:savedBrand||brand,onProgress:setProgress,onSaved:next=>{setSavedBrand(next);const newest=next.designs?.at(-1);if(newest){setActive(newest.id);setPick(newest.paletteId||'brand');setQuery('');setChapter(0)}}})}catch(e){setError(e.message||'Could not create design')}finally{setCreating(false);setProgress('')}}}>{creating?<Loader2 className="mr-2 h-4 w-4 animate-spin"/>:<Plus className="mr-2 h-4 w-4"/>}{creating?'Creating design…':'Create a brand design'}</Button>{creating&&<p role="status" className="text-xs mt-2 text-muted-foreground">{progress}</p>}{!brand?.id&&<p className="text-xs mt-2 text-muted-foreground">Save your brand to create a design.</p>}</div>}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">{filtered.map(d=><button key={d.id} disabled={busy||creating} aria-pressed={active===d.id} onClick={()=>{setActive(d.id);if(d.paletteId)setPick(d.paletteId);setChapter(0);setError('')}} className={'text-left rounded-xl border-2 overflow-hidden transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary '+(active===d.id?'border-primary ring-2 ring-primary/15':'border-border bg-background hover:border-primary/50')}><div className="relative"><Sample design={d} canvas={canvas} pick={active===d.id?pick:d.paletteId||'brand'}/>{selected?.id===d.id&&<span className="absolute top-2 left-2 flex items-center gap-1 rounded-full bg-background px-2 py-1 text-[10px] font-semibold shadow"><Check size={11}/>Current</span>}</div><div className="p-3"><span className="block text-sm font-semibold">{d.name}</span><span className="text-xs text-muted-foreground">{(d.tags||[]).slice(0,2).join(' · ')}</span></div></button>)}</div>
+          {!filtered.length&&<p className="py-10 text-center text-sm text-muted-foreground">{query?'No matching designs.':tab==='brand'?'Create your first design using your brand’s colors and fonts.':'No designs available.'}</p>}
+          </TabsContent></Tabs>
         </div>
-        <section aria-label="Sample preview" className="min-w-0 bg-muted/30 p-5 md:overflow-y-auto"><div className="flex justify-between items-center mb-3"><h3 className="font-semibold">{design.name}</h3><span className="text-xs text-muted-foreground">Brand palette · Sample preview</span></div><div className="max-w-[360px] mx-auto rounded-xl overflow-hidden shadow-lg"><Sample design={design} chapter={chapter} canvas={canvas} pick={pick}/></div><div className="flex justify-center gap-1 my-4">{['Cover','Content','Closing'].map((label,i)=><button key={label} onClick={()=>setChapter(i)} aria-pressed={chapter===i} className={'px-3 py-1.5 text-xs rounded-full '+(chapter===i?'bg-foreground text-background':'text-muted-foreground hover:bg-muted')}>{label}</button>)}</div><div className="flex justify-center flex-wrap gap-2">{design.tags.map(tag=><span key={tag} className="text-xs border rounded-full px-2.5 py-1">{tag}</span>)}</div><fieldset className="mt-5"><legend className="text-sm font-semibold mb-2">Palette</legend><div className="flex flex-wrap gap-2">{PALETTE_PICKS.map(option=>{const colors=samplePalette(canvas,design.theme,option.id);return <button key={option.id} type="button" disabled={busy} aria-pressed={pick===option.id} onClick={()=>setPick(option.id)} className={'rounded-lg border-2 px-2 py-2 text-xs '+(pick===option.id?'border-primary':'border-border')}><span className="flex mb-1 overflow-hidden rounded">{[colors.bg,colors.primary,colors.accent,colors.text].map((color,i)=><span key={i} className="w-5 h-4" style={{background:color}}/>)}</span>{option.name}</button>})}</div></fieldset><p className="text-xs text-muted-foreground text-center mt-4">Sample content for instant browsing. Applying uses your post’s saved content and brand.</p></section>
+        {design?<section aria-label="Sample preview" className="min-w-0 bg-muted/30 p-5 md:overflow-y-auto"><div className="flex justify-between items-center mb-3"><h3 className="font-semibold">{design.name}</h3><span className="text-xs text-muted-foreground">Brand palette · Sample preview</span></div><div className="max-w-[520px] w-full mx-auto rounded-xl overflow-hidden shadow-lg ring-1 ring-border"><Sample design={design} chapter={chapter} canvas={canvas} pick={pick}/></div><div className="grid grid-cols-3 gap-3 max-w-[360px] mx-auto my-4">{['Cover','Content','Closing'].map((label,i)=><button key={label} onClick={()=>setChapter(i)} aria-pressed={chapter===i} className={'overflow-hidden rounded-lg border-2 text-xs '+(chapter===i?'border-primary text-foreground':'border-transparent text-muted-foreground hover:border-border')}><Sample design={design} chapter={i} canvas={canvas} pick={pick}/><span className="block py-1.5">{label}</span></button>)}</div><div className="flex justify-center flex-wrap gap-2">{(design.tags||[]).map(tag=><span key={tag} className="text-xs border rounded-full px-2.5 py-1">{tag}</span>)}</div><p className="text-xs text-muted-foreground text-center mt-4">Sample content for instant browsing. Applying uses your post’s saved content and brand.</p></section>:<section className="flex min-h-[360px] items-center justify-center bg-muted/30 p-8 text-center text-muted-foreground"><p>Select or create a brand design to preview its layout here.</p></section>}
       </div>
-      <footer className="shrink-0 border-t p-4 flex items-center justify-between gap-3 bg-background"><div className="min-w-0"><p className="text-sm">Current: <strong>{selected?.name||'Custom design'}</strong></p><p className="text-xs text-muted-foreground">Applies to all slides and replaces manual layout edits.</p>{error&&<p role="alert" className="text-xs text-red-500">{error}</p>}</div><Button disabled={busy} onClick={async()=>{setBusy(true);setError('');try{await onSelect(active,undefined,pick);setOpen(false)}catch(e){setError(e.message||'Could not apply design')}finally{setBusy(false)}}}>{busy?<Loader2 className="mr-2 h-4 w-4 animate-spin"/>:<ArrowRight className="mr-2 h-4 w-4"/>}{busy?'Applying…':'Use '+design.name}</Button></footer>
+      <footer className="shrink-0 border-t p-4 flex items-center justify-between gap-3 bg-background"><div className="min-w-0"><p className="text-sm">Current: <strong>{selected?.name||'Custom design'}</strong></p><p className="text-xs text-muted-foreground">Applies to all slides and replaces manual layout edits.</p>{error&&<p role="alert" className="text-xs text-red-500">{error}</p>}</div><Button disabled={busy||creating||!design} onClick={async()=>{setBusy(true);setError('');try{await onSelect(active);setOpen(false)}catch(e){setError(e.message||'Could not apply design')}finally{setBusy(false)}}}>{busy?<Loader2 className="mr-2 h-4 w-4 animate-spin"/>:<ArrowRight className="mr-2 h-4 w-4"/>}{busy?'Applying…':design?'Use '+design.name:'Select a design'}</Button></footer>
     </DialogContent></Dialog></>
 }

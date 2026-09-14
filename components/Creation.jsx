@@ -636,7 +636,8 @@ function ErrorBlock({ label, message }) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function Creation({ flowId, brandContext }) {
+export default function Creation({ flowId, brandContext: suppliedBrandContext }) {
+  const brandContext = { ...suppliedBrandContext, id: flowId || suppliedBrandContext?.id }
   const [ideas, setIdeas]             = useState([])
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [copyResults, setCopyResults]       = useState({})

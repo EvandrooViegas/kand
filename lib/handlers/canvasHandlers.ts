@@ -1,4 +1,5 @@
 import { persistInlineImages } from '@/lib/services/persistInlineImages'
+import { canvasBrand } from '@/lib/designs/canvasBrand'
 /**
  * Canvas CRUD handlers for API routes
  */
@@ -69,6 +70,12 @@ export async function handleGetCanvas(db: any, id: string) {
   const c = await db.collection('canvases').findOne({ id })
   if (!c) return corsify(NextResponse.json({ error: 'Not found' }, { status: 404 }))
   const { _id, ...rest } = c
+  const brand=await canvasBrand(db,c)
+  if(brand.id) {
+    rest.flowId=brand.id
+    rest.brandContext=brand
+    if(rest.designInput)rest.designInput={...rest.designInput,brandContext:brand}
+  }
   return corsify(NextResponse.json(rest))
 }
 

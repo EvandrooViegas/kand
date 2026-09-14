@@ -15,15 +15,20 @@ test('large brand data and repairs remain bounded without previous layout replay
 })
 test('three requests save sequentially and temporary rate limit waits before retry',async()=>{
  const saved=[],progress=[],waits=[];let calls=0
- await batch({flowId:'f',brand:{designs:[]},onSaved:b=>saved.push(b),onProgress:p=>progress.push(p),wait:async ms=>waits.push(ms),request:async(url,options)=>{
+ await batch({count:3,flowId:'f',brand:{designs:[]},onSaved:b=>saved.push(b),onProgress:p=>progress.push(p),wait:async ms=>waits.push(ms),request:async(url,options)=>{
   calls++;if(calls===2)return new Response(JSON.stringify({error:'limited'}),{status:429,headers:{'retry-after':'2'}})
   const brand=JSON.parse(options.body).brandContext
   return new Response(JSON.stringify({brandContext:{designs:[...brand.designs,{id:String(calls)}]}}))
  }})
  assert.equal(calls,4);assert.equal(saved.length,3);assert.equal(saved[2].designs.length,3);assert.deepEqual(waits,[61000,61000,61000]);assert.ok(progress.some(p=>p.includes('waiting')))
 })
+test('one click defaults to one request and one saved design with no inter-design delay',async()=>{
+ let calls=0,saved=0
+ await batch({flowId:'f',brand:{},onSaved:()=>saved++,onProgress:()=>{},wait:async()=>assert.fail('unexpected wait'),request:async()=>{calls++;return new Response(JSON.stringify({brandContext:{designs:[{id:'one'}]}}))}})
+ assert.equal(calls,1);assert.equal(saved,1)
+})
 test('failure retains completed designs and does not retry permanent 413',async()=>{
  let calls=0,saved=0
- await assert.rejects(batch({flowId:'f',brand:{},onSaved:()=>saved++,onProgress:()=>{},wait:async()=>{},request:async()=>++calls===1?new Response(JSON.stringify({brandContext:{designs:[{id:'one'}]}})):new Response(JSON.stringify({error:'too large'}),{status:413})}),/already saved/)
+ await assert.rejects(batch({count:3,flowId:'f',brand:{},onSaved:()=>saved++,onProgress:()=>{},wait:async()=>{},request:async()=>++calls===1?new Response(JSON.stringify({brandContext:{designs:[{id:'one'}]}})):new Response(JSON.stringify({error:'too large'}),{status:413})}),/already saved/)
  assert.equal(saved,1);assert.equal(calls,2)
 })

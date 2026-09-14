@@ -13,7 +13,7 @@ export default function BrandDesignStudio({flowId,brand,onChange}) {
  const canvas={brandContext:brand}
  const expand=d=>({...DESIGN_LIBRARY.find(x=>x.id===d.baseId),...d})
  return <Card><CardHeader><CardTitle>Your brand designs</CardTitle><CardDescription>Generate reusable directions from your identity. Saved designs appear in the post editor and are used for new posts.</CardDescription></CardHeader><CardContent className="space-y-4">
- <Button disabled={busy||!flowId||!brand.name} onClick={async()=>{setBusy(true);setError('');setNotice('');try{await generateBrandBatch({flowId,brand,onSaved:onChange,onProgress:setProgress});setNotice('3 new designs saved.')}catch(e){setError(e.message)}finally{setBusy(false);setProgress('')}}}>{busy?<Loader2 className="mr-2 h-4 w-4 animate-spin"/>:<Sparkles className="mr-2 h-4 w-4"/>}{busy?'Creating your designs…':'Generate 3 brand designs'}</Button>
+ <Button disabled={busy||!flowId||!brand.name} onClick={async()=>{setBusy(true);setError('');setNotice('');try{await generateBrandBatch({flowId,brand,onSaved:onChange,onProgress:setProgress});setNotice('Your new design is saved.')}catch(e){setError(e.message)}finally{setBusy(false);setProgress('')}}}>{busy?<Loader2 className="mr-2 h-4 w-4 animate-spin"/>:<Sparkles className="mr-2 h-4 w-4"/>}{busy?'Creating your design…':'Generate brand design'}</Button>
  {busy&&<p role="status" aria-live="polite" className="text-sm text-muted-foreground">{progress}</p>}
  {!flowId&&<p className="text-sm">Save your brand before generating designs.</p>}{error&&<p role="alert" className="text-sm text-red-600">{error}</p>}
  {notice&&<p role="status" className="text-sm text-muted-foreground">{notice}</p>}
