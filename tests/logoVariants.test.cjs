@@ -38,12 +38,12 @@ test('rejects empty artwork and invalid images', async () => {
 test('designer selects contrasting saved variants without downloading the original', async () => {
   const code = require('node:fs').readFileSync(require('node:path').join(__dirname, '../lib/handlers/canvasDesignerHandler.ts'), 'utf8').replace(/^import .*$/gm, '').replace(/export /g, '')
   const { softenCanvasLogos } = require('node:vm').runInNewContext(stripTypeScriptTypes(code) + '\n({softenCanvasLogos})', {
-    containPreparedLogo: async logo => logo.src,
+    containPreparedLogo: async () => { throw Error('Saved URL must not be decoded as inline data') },
     prepareLogo: async () => { throw new Error('Unexpected download') },
   })
-  for (const [background, expected] of [['#ffffff', 'black'], ['#000000', 'white']]) {
+  for (const [background, expected] of [['#ffffff', '/api/uploads/black'], ['#000000', '/api/uploads/white']]) {
     const canvas = { background, nodes: [{ type: 'image', src: 'https://example.com/logo.png', x: 0, y: 0, width: 100, height: 40 }] }
-    await softenCanvasLogos(canvas, 'https://example.com/logo.png', { source: 'https://example.com/logo.png', blackTransparent: 'black', whiteTransparent: 'white' })
+    await softenCanvasLogos(canvas, 'https://example.com/logo.png', { source: 'https://example.com/logo.png', blackTransparent: '/api/uploads/black', whiteTransparent: '/api/uploads/white' })
     assert.equal(canvas.nodes.length, 1)
     assert.equal(canvas.nodes[0].src, expected)
     assert.equal(canvas.nodes[0].width, 100)
@@ -73,4 +73,40 @@ test('badge variants retain the lettering instead of a solid circle',async()=>{
  assert.ok(black[ink+3]>220)
  assert.equal(black[ink],0)
  assert.equal(white[ink],255)
+})
+
+test('edge-touching black logo loses its white background',async()=>{
+ const input=await sharp(Buffer.from('<svg width="100" height="50"><rect width="100" height="50" fill="white"/><rect x="30" width="35" height="50" fill="black"/></svg>')).png().toBuffer()
+ const result=await createLogoVariants(input),white=await decode(result.whiteTransparent),black=await decode(result.blackTransparent)
+ assert.equal(white[3],0);assert.equal(black[3],0)
+ assert.equal(white[(25*100+45)*4],255);assert.equal(white[(25*100+45)*4+3],255)
+})
+
+test('almost opaque logo with transparent corners still has its background removed',async()=>{
+ const width=100,height=50,pixels=Buffer.alloc(width*height*4,255)
+ for(const i of [0,width-1,(height-1)*width,width*height-1])pixels[i*4+3]=0
+ for(let y=0;y<height;y++)for(let x=35;x<65;x++){const i=(y*width+x)*4;pixels[i]=pixels[i+1]=pixels[i+2]=0}
+ const png=await sharp(pixels,{raw:{width,height,channels:4}}).png().toBuffer()
+ const variants=await createLogoVariants(png),white=await decode(variants.whiteTransparent)
+ assert.equal(white[(25*width+10)*4+3],0)
+ assert.equal(white[(25*width+50)*4+3],255)
+ assert.equal(white[(25*width+50)*4],255)
+})
+
+test('uploaded photo pixels determine black or white logo independently of page color',async()=>{
+ const vm=require('node:vm'),fs=require('node:fs')
+ const load=path=>stripTypeScriptTypes(fs.readFileSync(path,'utf8').replace(/^import .*$/gm,'').replace(/export /g,''))
+ const {sampleLogoBackdrop}=vm.runInNewContext(load('lib/services/logoBackground.ts')+';({sampleLogoBackdrop})',{sharp,Buffer})
+ const {softenCanvasLogos}=vm.runInNewContext(load('lib/handlers/canvasDesignerHandler.ts')+';({softenCanvasLogos})',{sampleLogoBackdrop})
+ // One image with a bright upper half and dark lower half. Only local logo area matters.
+ const bytes=await sharp(Buffer.from('<svg width="100" height="100"><rect width="100" height="100" fill="white"/><rect y="50" width="100" height="50" fill="black"/></svg>')).png().toBuffer()
+ let reads=0
+ const db={collection:name=>{assert.equal(name,'uploads');return {findOne:async query=>{assert.equal(query.id,'photo');reads++;return {bytes:{buffer:bytes}}}}}}
+ const variants={source:'brand-logo',blackTransparent:'/api/uploads/black',whiteTransparent:'/api/uploads/white'}
+ for(const [y,expected] of [[5,variants.blackTransparent],[75,variants.whiteTransparent]]){
+  const canvas={background:y===5?'#000000':'#ffffff',nodes:[{type:'image',src:'/api/uploads/photo',x:0,y:0,width:100,height:100},{type:'image',src:'brand-logo',x:70,y,width:20,height:15}]}
+  await softenCanvasLogos(canvas,'brand-logo',variants,db)
+  assert.equal(canvas.nodes[1].src,expected)
+ }
+ assert.equal(reads,2)
 })

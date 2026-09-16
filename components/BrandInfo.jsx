@@ -1,5 +1,6 @@
 'use client'
 import BrandDesignStudio from '@/components/BrandDesignStudio'
+import ImageDispositionPicker from '@/components/ImageDispositionPicker'
 
 import ColorPriority, { reorderColors } from '@/components/ColorPriority'
 import { useState, useEffect } from 'react'
@@ -260,6 +261,8 @@ export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSel
             language: extractedData.language,
             colors: extractedData.colors,
             fonts: extractedData.fonts,
+            imageDisposition: extractedData.imageDisposition || 'cutout',
+            designs: extractedData.designs || [],
           },
           // Also update the flow name to the brand name if it looks like a default name
           ...(extractedData.name ? { name: extractedData.name } : {}),
@@ -694,6 +697,7 @@ export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSel
             </CardContent>
           </Card>
 
+          <Card><CardHeader><CardTitle>Default image style</CardTitle><CardDescription>Used for new posts. Every style allows text-only slides; No images excludes all content photos. You can override this for one post in step-by-step mode.</CardDescription></CardHeader><CardContent><ImageDispositionPicker value={extractedData.imageDisposition||'cutout'} onChange={imageDisposition=>setExtractedData(prev=>({...prev,imageDisposition}))}/></CardContent></Card>
           <BrandDesignStudio flowId={flowId} brand={extractedData} onChange={setExtractedData}/>
           {/* Save Button */}
           <div className="sticky bottom-6 z-10">

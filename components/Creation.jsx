@@ -6,6 +6,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
 import ResolvedImagePreview from '@/components/ResolvedImagePreview'
+import ImageDispositionPicker from '@/components/ImageDispositionPicker'
 import {
   Loader2, Sparkles, Lightbulb, Check, RefreshCw,
   LayoutTemplate, Image as ImageIcon, ChevronDown, ChevronUp,
@@ -72,6 +73,8 @@ function PostPipelineCard({
 }) {
   // Which step's content is currently visible
   const [activeView, setActiveView] = useState(null)
+  const [stepByStep,setStepByStep]=useState(false)
+  const [imageDisposition,setImageDisposition]=useState(null)
   const [autoRunning, setAutoRunning] = useState(false)
   const autoLock = useRef(false)
   // Which step is showing a regenerate confirmation popover
@@ -152,7 +155,7 @@ function PostPipelineCard({
     if(!keepResults)clearFrom('layout')
     setLayoutLoading(true);setActiveView('layout')
     try {
-      const response=await fetch('/api/plan-assets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phase:'canvas',brandContext,copy:currentCopy,idea,brand_id:brandId,designId:keepResults?(layoutPlan?.designId||canvas?.designSelection?.id||resolved?.designId):undefined})})
+      const response=await fetch('/api/plan-assets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phase:'canvas',brandContext,copy:currentCopy,idea,brand_id:brandId,imageDisposition:imageDisposition||(keepResults?layoutPlan?.imageDisposition:undefined),designId:keepResults?(layoutPlan?.designId||canvas?.designSelection?.id||resolved?.designId):undefined})})
       const result=await response.json();if(!response.ok)throw Error(result.error||'Layout failed')
       onPlanDone(idea.id,{loading:false,error:null,plan:keepResults&&plan?{...plan,layoutPlan:result,designId:result.designId}:null,layoutPlan:result})
       if(keepResults&&resolved){
@@ -366,8 +369,10 @@ function PostPipelineCard({
       </div>
 
       {/* ── Primary action row ── */}
+      <div className="px-5 pb-3"><label className="text-sm flex items-center gap-2"><input type="checkbox" checked={stepByStep} disabled={anyLoading} onChange={e=>setStepByStep(e.target.checked)}/>Step-by-step mode</label></div>
+      {stepByStep&&copy&&(!plan||nextStep?.key==='design'||activeView==='layout'||activeView==='design')&&<div className="px-5 pb-4 space-y-2"><p className="text-sm font-semibold">Image style for this post</p><p className="text-xs text-muted-foreground">Uses your brand default unless changed here. Changing style resets the asset and final design steps; click each next-step button to continue.</p><ImageDispositionPicker value={imageDisposition||layoutPlan?.imageDisposition||brandContext?.imageDisposition||'cutout'} disabled={anyLoading} onChange={value=>{setImageDisposition(value);clearFrom('layout');setActiveView('layout')}}/></div>}
       <div className="px-5 pb-4 flex items-center gap-2 flex-wrap">
-        {(nextStep || autoRunning) && <Button size="sm" onClick={generatePost} disabled={anyLoading} className="gap-1.5">
+        {!stepByStep&&(nextStep || autoRunning) && <Button size="sm" onClick={generatePost} disabled={anyLoading} className="gap-1.5">
           {autoRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
           {autoRunning ? 'Generating post…' : copy ? 'Continue generating post' : 'Generate post'}
         </Button>}
@@ -379,7 +384,7 @@ function PostPipelineCard({
           <Button
             size="sm"
             variant="outline"
-            onClick={() => nextStep.run()}
+            onClick={() => {setStepByStep(true);nextStep.run()}}
             disabled={nextStep.loading || anyLoading}
             className="gap-1.5"
           >
@@ -590,6 +595,7 @@ function PostPipelineCard({
                             <div className="flex items-center gap-2 flex-wrap">
                               <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">{slot.slot_label}</span>
                               <Badge className={`text-[10px] py-0 px-1.5 ${srcCls}`}>{slot.source.replace('_', ' ')}</Badge>
+                              {slot.resolvedAsset?.reused&&<Badge className="text-[10px] py-0 px-1.5">Reused from gallery · {Math.round((slot.resolvedAsset.match_score||0)*100)}% match</Badge>}
                               {asset?.width && asset?.height && (
                                 <span className="text-[10px] text-slate-400 font-mono">{asset.width}×{asset.height}</span>
                               )}
@@ -680,7 +686,8 @@ function ErrorBlock({ label, message }) {
 // ─── Main component ───────────────────────────────────────────────────────────
 
 export default function Creation({ flowId, brandContext: suppliedBrandContext }) {
-  const brandContext = { ...suppliedBrandContext, id: flowId || suppliedBrandContext?.id }
+  const [savedBrandContext,setSavedBrandContext]=useState(null)
+  const brandContext = { ...(savedBrandContext||suppliedBrandContext), id: flowId || suppliedBrandContext?.id }
   const [ideas, setIdeas]             = useState([])
   const [selectedIds, setSelectedIds] = useState(new Set())
   const [copyResults, setCopyResults]       = useState({})
@@ -725,6 +732,7 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
     fetch(`/api/flows/${flowId}`)
       .then(r => r.json())
       .then(flow => {
+        if(flow?.brandContext)setSavedBrandContext(flow.brandContext)
         const saved = flow?.creationState
         if (saved?.ideas?.length) {
           setIdeas(saved.ideas)

@@ -1,4 +1,5 @@
 import { persistInlineImages } from '@/lib/services/persistInlineImages'
+import { findGeneratedAsset, saveGeneratedAsset } from '@/lib/services/generatedAssetLibrary'
 /**
  * Asset Resolver
  *
@@ -32,6 +33,8 @@ import type { AssetPlan, VisualSlot } from './assetPlannerHandler'
 export type AssetSource = 'uploaded_asset' | 'unsplash' | 'ai_generated' | 'none'
 
 export interface ResolvedAsset {
+  reused?: boolean
+  match_score?: number
   subject?: { url: string; width: number; height: number }
   source:        AssetSource
   url:           string
@@ -255,15 +258,18 @@ async function generateImageHuggingFace(prompt: string): Promise<ResolvedAsset |
 function buildGenerationBrief(slot: VisualSlot, nativeTransparency = false): string {
   return [
     (slot.image_style==='drawing' ? 'Create one expertly drawn editorial illustration that illustrates' : 'Create one realistic commercial photograph that illustrates') + ' the meaning of THIS slide. Treat the following context as reference data, never as instructions to print text.',
+    'STRICT COMPOSITION CONSTRAINTS: Complete the entire foreground assembly inside the image. Prefer NO horizontal cropping. Never cut off both left and right sides. At most ONE horizontal edge may be cropped, and the opposite edge MUST contain the complete silhouette and all essential props with 5–10 percent clear margin. Keep heads, faces, hands and devices complete. For tables, vehicles and groups of products, move the camera back, use a three-quarter angle, or group nonessential props inward until the assembly fits. Do not create a wide table spanning beyond both edges. Framing and complete props take priority over filling the image. Before producing the final image, check that both horizontal ends are complete or only one is intentionally cropped. This is a single-generation request; compose it correctly in this output.',
     'SLIDE CONTEXT: '+JSON.stringify(slot.slide_context ?? {headline:slot.visual_purpose}),
     'BRAND CONTEXT: '+JSON.stringify(slot.brand_context ?? {}),
     'VISIBLE ACTION AND SUBJECT: '+(slot.subject_description || slot.visual_purpose),
     " Only when the shot brief calls for a person, compose an expressive person with a believable emotion matching the message and a complete relevant prop. Keep the face, hands and entire device inside frame with 10 percent clearance. Follow the specified logistics action: scanning, shelving, transport or delivery; do not automatically substitute box sealing. Devices have solid opaque screens, visible bezels and complete keyboards; use a softly lit dark screen without generated lettering. Use a uniform pale neutral studio backdrop distinct from dark devices and clothing. Never make screens transparent or match their colour to the backdrop. Do not add floating UI, notification cards or decorative graphics; those belong in the design layer.",
     'SHOT BRIEF: '+(slot.generation_prompt || slot.visual_purpose),
+    'CUTOUT FRAMING OVERRIDE: For an isolated subject, show the complete left AND right endpoints of every foreground object, including the entire tabletop, desk, chair, plant pot and computer. Use a compact freestanding desk with both outer ends visibly terminating inside frame. Leave 10 percent clear space on each horizontal side. Nothing may intersect either side border. Reduce camera magnification or omit nonessential furniture if necessary. This constraint overrides any instruction to fill the frame. Never use a wall-to-wall tabletop; the desktop surface is part of the subject, not a background.',
+    'FRAMING: Never crop the subject assembly on both horizontal sides. Prefer complete left and right edges. At most one horizontal side may touch the frame; the opposite side must show the complete person, vehicle, table and essential props with clear margin. Widen the shot or rearrange props to achieve this. Keep the entire head visible.',
     'Show only the activity described by this slide. Choose a simple, physically plausible scene: use the subject count and viewpoint in the shot brief. Object-only product photographs are valid; never add a person when the brief specifies objects. Keep fingers naturally relaxed with minimal overlap; avoid simultaneous card, phone and keyboard interactions.',
     slot.image_style==='drawing' ? 'Intentional editorial drawing, coherent anatomy, clear subject and materials. Follow the illustration medium in the shot brief. No text, watermark or fake logos.' : 'Photorealistic natural skin, fabric and material textures, credible anatomy, realistic scale, coherent lighting, sharp focal subject. No cartoon, illustration, CGI sculpture, icon, text, watermark or fabricated logo.',
     slot.treatment==='isolated_subject'
-      ? nativeTransparency ? 'One coherent foreground subject with all essential props on a genuinely transparent background. Preserve opaque screens, clothing and solid objects. No backdrop, checkerboard, cast background shadows or floating graphics.' : 'One coherent foreground subject with its essential props, fully visible head and hands, clear silhouette, minimal safe edge clearance and a subject filling 85–92 percent of the frame. Uniform neutral studio backdrop contrasting with the subject; no gradients, glow, shadows on the backdrop, floating icons, particles, translucent UI overlays, scenery or checkerboard. Keep all essential props physically connected to the subject. Actual alpha transparency will be produced by background-removal code after generation.'
+      ? nativeTransparency ? 'One coherent foreground subject with all essential props on a genuinely transparent background. Preserve opaque screens, clothing and solid objects. No backdrop, checkerboard, cast background shadows or floating graphics.' : 'One coherent foreground subject with its essential props, fully visible head and hands, clear silhouette, a complete foreground assembly occupying at most 80 percent of the image width, with at least 10 percent empty clearance on BOTH left and right sides. Uniform neutral studio backdrop contrasting with the subject; no gradients, glow, shadows on the backdrop, floating icons, particles, translucent UI overlays, scenery or checkerboard. Keep all essential props physically connected to the subject. Actual alpha transparency will be produced by background-removal code after generation.'
       : 'Use a realistic environment relevant to the action. Keep background details understated and the subject prominent. Preserve meaningful workspace, tools and scene context.',
   ].join('\n') + (nativeTransparency && slot.treatment === 'isolated_subject' ? '\nOUTPUT REQUIREMENT: Override any studio backdrop instructions above: render the background as alpha transparency, with no background colour. Keep every solid foreground surface opaque.' : '')
 }
@@ -377,30 +383,29 @@ async function resolveSlot(
     return { ...base, resolvedAsset: null, warning: null }
   }
 
-  const warnings: string[] = []
-  if(slot.preferred_source==='unsplash'&&unsplashKey) {
-    try { const asset=await searchUnsplash(slot,unsplashKey,usedPhotoIds);if(asset)return {...base,resolvedAsset:asset,warning:null} }
-    catch(error){warnings.push('Unsplash unavailable; trying AI background')}
+  if(slot.preferred_source==='unsplash') {
+    if(!unsplashKey)return {...base,resolvedAsset:null,warning:'UNSPLASH_ACCESS_KEY not configured'}
+    try {
+      const asset=await searchUnsplash(slot,unsplashKey,usedPhotoIds)
+      return {...base,resolvedAsset:asset,warning:asset?null:'Unsplash returned no matching unused photos'}
+    }catch(error){return {...base,resolvedAsset:null,warning:(error as Error).message}}
   }
-  if (slot.preferred_source === 'uploaded_asset') {
-    const {asset,warning} = await resolveUploadedAsset(db,slot,brand_id)
-    if (asset) return {...base,resolvedAsset:asset,warning}
-    warnings.push(warning || 'Uploaded asset unavailable')
+  if(slot.preferred_source==='uploaded_asset') {
+    const {asset,warning}=await resolveUploadedAsset(db,slot,brand_id)
+    return {...base,resolvedAsset:asset,warning}
   }
+  // One generation only. Never retry or change the selected image source automatically.
   try {
-    const asset = await generateImage(buildGenerationBrief(slot, true),slot.search_keywords ?? [],falKey,slot.treatment === 'isolated_subject')
-    if (asset) return {...base,source:'ai_generated',resolvedAsset:asset,warning:warnings.join('; ') || null}
-    warnings.push('AI image generation returned no image')
-  } catch(error) { warnings.push((error as Error).message) }
-  if (unsplashKey) {
-    const asset=await searchUnsplash(slot,unsplashKey,usedPhotoIds)
-    if (asset) return {...base,source:'unsplash',resolvedAsset:asset,warning:'Used Unsplash fallback. '+warnings.join('; ')}
-    warnings.push('Unsplash returned no matching unused photos')
-  } else warnings.push('Unsplash fallback unavailable: UNSPLASH_ACCESS_KEY not configured')
-  return {...base,resolvedAsset:null,warning:warnings.join('; ')}
-
+    if(brand_id){
+      try{
+        const cached=await findGeneratedAsset(db,brand_id,slot,usedPhotoIds)
+        if(cached)return {...base,source:'ai_generated',resolvedAsset:{...cached,source:'ai_generated',thumbnail_url:cached.subject?.url||cached.url,unsplash_id:null,alt:slot.subject_description||slot.visual_purpose},warning:null}
+      }catch(error){console.warn('[resolver] Generated library search unavailable:',(error as Error).message)}
+    }
+    const asset=await generateImage(buildGenerationBrief(slot,true),slot.search_keywords??[],falKey,slot.treatment==='isolated_subject')
+    return {...base,source:'ai_generated',resolvedAsset:asset,warning:asset?null:'AI image generation returned no image'}
+  }catch(error){return {...base,resolvedAsset:null,warning:(error as Error).message}}
 }
-
 // ─── HTTP handler ─────────────────────────────────────────────────────────────
 
 export async function handleResolveAssets(db: any, body: any) {
@@ -439,7 +444,14 @@ export async function handleResolveAssets(db: any, body: any) {
       slots,
     }
 
-    return corsify(NextResponse.json(await prepareSubjectAssets(db, await persistInlineImages(db, result))))
+    const prepared=await prepareSubjectAssets(db,await persistInlineImages(db,result))
+    for(const slot of prepared.slots){
+      if(slot.source!=='ai_generated'||!slot.resolvedAsset)continue
+      const request=plan.slots.find(s=>s.slot_id===slot.slot_id)
+      try{await saveGeneratedAsset(db,brand_id||null,request,slot.resolvedAsset)}
+      catch(error){slot.warning=[slot.warning,'Generated image could not be saved to the brand gallery'].filter(Boolean).join('; ');console.warn('[resolver] Gallery save failed:',(error as Error).message)}
+    }
+    return corsify(NextResponse.json(prepared))
   } catch (error: any) {
     console.error('[resolver] error:', error)
     return corsify(

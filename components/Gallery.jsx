@@ -109,6 +109,7 @@ function AssetDetail({ asset, onClose, onDelete }) {
         )}
 
         {/* Tags */}
+        {asset.description&&<div className="px-6 pt-4"><p className="text-xs font-semibold text-slate-500 uppercase mb-2">Description</p><p className="text-sm text-slate-700 dark:text-slate-300">{asset.description}</p>{asset.source==='ai_generated'&&<p className="text-xs text-slate-500 mt-2">AI generated · Reused when the subject match reaches 85%.</p>}</div>}
         {asset.tags?.length > 0 && (
           <div className="px-6 pt-4">
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">
@@ -229,6 +230,7 @@ export default function Gallery({ flowId, brandContext }) {
   const [uploading, setUploading]     = useState(false)
   const [selectedAsset, setSelectedAsset] = useState(null)
   const [search, setSearch]           = useState('')
+  const [assetTab,setAssetTab]=useState('uploaded')
   const [pollingIds, setPollingIds]   = useState(new Set())
 
   // ── load ─────────────────────────────────────────────────────────────────────
@@ -332,6 +334,7 @@ export default function Gallery({ flowId, brandContext }) {
   // ── filter ────────────────────────────────────────────────────────────────────
 
   const filtered = assets.filter(a => {
+    if(assetTab==='generated'?a.source!=='ai_generated':a.source==='ai_generated')return false
     if (!search.trim()) return true
     const q = search.toLowerCase()
     return (
@@ -366,6 +369,11 @@ export default function Gallery({ flowId, brandContext }) {
 
       {/* Upload zone */}
       <UploadZone onFiles={handleFiles} uploading={uploading} />
+      <div className="flex gap-2" role="tablist" aria-label="Image source">
+        {[['uploaded','Uploaded'],['generated','AI generated']].map(([key,label])=>(
+          <button key={key} role="tab" aria-selected={assetTab===key} onClick={()=>setAssetTab(key)} className={`px-4 py-2 rounded-lg text-sm font-semibold ${assetTab===key?'bg-primary text-primary-foreground':'bg-slate-100 dark:bg-slate-800'}`}>{label} ({assets.filter(a=>key==='generated'?a.source==='ai_generated':a.source!=='ai_generated').length})</button>
+        ))}
+      </div>
 
       {/* Toolbar */}
       {assets.length > 0 && (
@@ -411,7 +419,7 @@ export default function Gallery({ flowId, brandContext }) {
             <ImageIcon className="w-8 h-8 text-slate-300" />
           </div>
           <p className="font-semibold text-slate-500">No images yet</p>
-          <p className="text-sm text-slate-400 mt-1">Upload images above to build your brand asset library</p>
+          <p className="text-sm text-slate-400 mt-1">{assetTab==='generated'?'Images generated for this brand will be saved here automatically.':'Upload images above to build your brand asset library'}</p>
         </div>
       )}
 
@@ -434,7 +442,7 @@ export default function Gallery({ flowId, brandContext }) {
       {/* No results */}
       {!loading && assets.length > 0 && filtered.length === 0 && (
         <div className="text-center py-12">
-          <p className="text-slate-500 text-sm">No assets match "<strong>{search}</strong>"</p>
+          <p className="text-slate-500 text-sm">{search?`No images match “${search}” in this tab.`:assetTab==='generated'?'Generated images will appear here with their description and tags.':'No uploaded images yet.'}</p>
           <button onClick={() => setSearch('')} className="text-primary text-sm hover:underline mt-1">Clear search</button>
         </div>
       )}

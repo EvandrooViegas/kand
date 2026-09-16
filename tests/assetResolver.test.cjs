@@ -6,8 +6,9 @@ const { stripTypeScriptTypes } = require('node:module')
 const source = fs.readFileSync(require('node:path').join(__dirname, '../lib/handlers/assetResolverHandler.ts'), 'utf8')
   .replace(/^import .*$/gm, '').replace(/export /g, '')
 function engine(fetch, generation, env = {}) {
+  const library=new Function('createHash',stripTypeScriptTypes(fs.readFileSync('lib/services/generatedAssetLibrary.ts','utf8').replace(/^import .*$/gm,'').replace(/export /g,''))+';return {findGeneratedAsset,saveGeneratedAsset}')(require('node:crypto').createHash)
   return vm.runInNewContext(stripTypeScriptTypes(source) + (generation ? '\ngenerateImage = generation;\n' : '') + '\n({ searchUnsplash, resolveSlot, buildGenerationBrief, generateImageOpenAI })', {
-    fetch, generation, console, Buffer, Uint8Array, AbortSignal, sharp: require('sharp'), process: {env}, Math: Object.assign(Object.create(Math), { random: () => 0 }),
+    ...library,fetch, generation, console, Buffer, Uint8Array, AbortSignal, sharp: require('sharp'), process: {env}, Math: Object.assign(Object.create(Math), { random: () => 0 }),
   })
 }
 const photo = id => ({ id, urls: { regular: `https://images.example/${id}` } })
@@ -73,18 +74,20 @@ test('generation brief includes exact slide context and explicit realism and cut
  assert.ok(!scene.includes('Plain contrasting studio backdrop'))
 })
 
-test('AI failure falls back to Unsplash and reports the actual source',async()=>{
+test('AI failure does not retry or switch to stock',async()=>{
  const order=[]
  const e=engine(async()=>{order.push('stock');return {ok:true,json:async()=>({results:[photo('fallback')]})}},async()=>{order.push('ai');throw Error('Provider unavailable')})
  const result=await e.resolveSlot(null,{...slot,needs_visual:true,preferred_source:'ai_generated'},null,'key',null,new Set())
- assert.deepEqual(order,['ai','stock'])
- assert.equal(result.source,'unsplash')
+ assert.deepEqual(order,['ai'])
+ assert.equal(result.source,'ai_generated')
+ assert.equal(result.resolvedAsset,null)
  assert.match(result.warning,/Provider unavailable/)
 })
-test('successful AI skips stock even for older Unsplash plans',async()=>{
+test('failed stock selection does not automatically generate an AI image',async()=>{
  const e=engine(async()=>{throw Error('Stock must not run')},async()=>({source:'ai_generated',url:'data:image/png;base64,fixture'}))
  const result=await e.resolveSlot(null,{...slot,needs_visual:true,preferred_source:'unsplash'},null,'key',null,new Set())
- assert.equal(result.source,'ai_generated')
+ assert.equal(result.source,'unsplash')
+ assert.equal(result.resolvedAsset,null)
 })
 
 test('GPT Image 2.5 requests native transparent PNG and reads real dimensions', async () => {
@@ -107,4 +110,40 @@ test('drawing design requests illustration instead of photorealistic output',()=
  assert.ok(brief.includes('editorial illustration'))
  assert.ok(brief.includes('Intentional editorial drawing'))
  assert.equal(brief.includes('Photorealistic natural skin'),false)
+})
+
+async function alphaFramingFixture(twoSides){
+ const sharp=require('sharp')
+ const png=await sharp(Buffer.from(`<svg width="100" height="100"><rect x="0" y="10" width="${twoSides?100:60}" height="80" fill="red"/></svg>`)).png().toBuffer()
+ return {url:'data:image/png;base64,'+png.toString('base64'),width:100,height:100}
+}
+
+test('single generation receives strict constraints without automatic crop retries',async()=>{
+ const bad=await alphaFramingFixture(true),good=await alphaFramingFixture(false),prompts=[]
+ const e=engine(async()=>{throw Error('Stock should not run')},async prompt=>{prompts.push(prompt);return prompts.length===1?bad:good})
+ const result=await e.resolveSlot({}, {...slot,slot_id:'a',needs_visual:true,preferred_source:'ai_generated',treatment:'isolated_subject'},null,null,null,new Set())
+ assert.equal(prompts.length,1);assert.match(prompts[0],/STRICT COMPOSITION CONSTRAINTS/)
+ assert.match(prompts[0],/At most ONE horizontal edge/)
+ assert.equal(result.resolvedAsset.url,bad.url);assert.equal(result.source,'ai_generated')
+})
+
+test('crop output never triggers a second generation or stock fallback',async()=>{
+ const bad=await alphaFramingFixture(true);let generations=0
+ const e=engine(async()=>({ok:true,json:async()=>({results:[photo('safe-stock')]})}),async()=>{generations++;return bad})
+ const result=await e.resolveSlot({}, {...slot,slot_id:'a',needs_visual:true,preferred_source:'ai_generated',treatment:'isolated_subject'},null,'stock-key',null,new Set())
+ assert.equal(generations,1);assert.equal(result.source,'ai_generated')
+ assert.equal(result.warning,null)
+ assert.equal(result.resolvedAsset.url,bad.url)
+})
+
+test('brand library match bypasses generation, while a different activity generates once',async()=>{
+ const request={...slot,needs_visual:true,slot_id:'a',preferred_source:'ai_generated',treatment:'isolated_subject',image_style:'photograph',subject_description:'warehouse operator scanning parcel barcode with handheld scanner'}
+ const saved={id:'saved',brand_id:'brand-a',status:'ready',source:'ai_generated',url:'/api/uploads/saved',width:100,height:100,subject_description:request.subject_description,treatment:request.treatment,image_style:'photograph'}
+ let calls=0
+ const db={collection:()=>({find:query=>({toArray:async()=>query.brand_id==='brand-a'?[saved]:[]}),updateOne:async()=>{}})}
+ const e=engine(async()=>{throw Error('No stock')},async()=>{calls++;return {url:'new-image'}})
+ const reused=await e.resolveSlot(db,request,'brand-a',null,null,new Set())
+ assert.equal(calls,0);assert.equal(reused.resolvedAsset.url,saved.url);assert.equal(reused.resolvedAsset.reused,true)
+ const fresh=await e.resolveSlot(db,{...request,subject_description:'customer paying at a contactless payment terminal'},'brand-a',null,null,new Set())
+ assert.equal(calls,1);assert.equal(fresh.resolvedAsset.url,'new-image')
 })

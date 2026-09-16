@@ -211,11 +211,12 @@ export async function handlePlanAssets(db: any, body: any) {
     let { brandContext, copy, idea, brand_id } = body
     if(!copy||!idea)return corsify(NextResponse.json({error:'copy and idea are required'},{status:400}))
     if (brandContext?.id || brand_id) {
-      const flow=await db.collection('flows').findOne({id:brandContext?.id || brand_id})
+      const flowId=brandContext?.id || String(brand_id).replace(/^brand_/,'')
+      const flow=await db.collection('flows').findOne({id:flowId})
       if(flow?.brandContext)brandContext=flow.brandContext
     }
     const designs=Array.isArray(brandContext?.designs)?brandContext.designs:[]
-    const layoutPlan=body.layoutPlan||planPostLayout(brandContext,copy,idea,body.designId)
+    const layoutPlan=body.layoutPlan||planPostLayout(brandContext,copy,idea,body.designId,body.imageDisposition)
     if(body.phase==='canvas')return corsify(NextResponse.json(layoutPlan))
     const selectedDesign=designs.find((d:any)=>d.id===layoutPlan.designId)
     const imagery=selectedDesign?.blueprint?.imagery
@@ -244,14 +245,14 @@ export async function handlePlanAssets(db: any, body: any) {
       const cleanTerms = (value: any): string[] => Array.isArray(value)
         ? Array.from(new Set<string>(value.filter((v: any) => typeof v === 'string').map((v: string) => v.trim().toLowerCase()).filter(Boolean))) : []
       const keywords = needsVisual ? cleanTerms(s.search_keywords).slice(0, 8) : []
-      const candidates = s.needs_visual && s.preferred_source === 'uploaded_asset'
-        ? findCandidates(uploadedAssets, keywords)
+      const candidates = s.needs_visual && (layout.treatment==='environmental' || s.preferred_source === 'uploaded_asset')
+        ? findCandidates(uploadedAssets.filter(a=>a.source!=='ai_generated'), keywords).filter(a=>a.score>=.85)
         : []
 
       return {
         slot_id:          layout.slot_id,
         slot_label:       s.slot_label     ?? s.slot_id,
-        needs_visual:     imagery?.placement==='none'?false:needsVisual,
+        needs_visual:     needsVisual,
         image_style: imagery?.style || 'photograph',
         treatment: layout.treatment,
         subject_description: typeof s.subject_description === 'string' ? s.subject_description.slice(0, 500) : '',
@@ -261,7 +262,7 @@ export async function handlePlanAssets(db: any, body: any) {
         visual_purpose:   s.visual_purpose ?? '',
         search_keywords:  keywords,
         search_queries:   needsVisual ? cleanTerms(s.search_queries).slice(0, 3) : [],
-        preferred_source: needsVisual ? (layout.background?'unsplash':s.preferred_source==='uploaded_asset'?'uploaded_asset':'ai_generated') : 'none',
+        preferred_source: needsVisual ? (candidates.length?'uploaded_asset':layout.treatment==='environmental'?'unsplash':s.preferred_source==='uploaded_asset'?'uploaded_asset':'ai_generated') : 'none',
         source_reason:    s.source_reason   ?? '',
         candidates,
         selected:         candidates[0] ?? null,

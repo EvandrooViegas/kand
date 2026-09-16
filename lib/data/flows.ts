@@ -7,6 +7,7 @@ export interface FlowBrandContext {
   language?: string
   colors?: string[]
   fonts?: string[]
+  imageDisposition?: 'cutout' | 'background' | 'framed' | 'none'
 }
 
 export interface Flow {

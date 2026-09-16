@@ -53,6 +53,23 @@ export async function downloadLogo(src: string, maxBytes = MAX_BYTES, timeoutMs 
 
 export interface PreparedLogo { src: string; foreground: string; removed: boolean }
 
+/** Read the actual photograph under a logo using the same cover crop as the canvas. */
+export async function sampleLogoBackdrop(photo:any,logo:any,db?:any):Promise<string>{
+  const local=photo.src.match(/^\/api\/uploads\/([^/?]+)$/)
+  let input:Buffer
+  if(local){
+    const upload=await db?.collection('uploads').findOne({id:local[1]})
+    if(!upload?.bytes)throw Error('Background photo upload is missing')
+    input=Buffer.isBuffer(upload.bytes)?upload.bytes:Buffer.from(upload.bytes.buffer)
+  }else input=photo.src.startsWith('data:image/')?Buffer.from(photo.src.split(',')[1],'base64'):await downloadLogo(photo.src,8*1024*1024)
+  const width=Math.round(photo.width),height=Math.round(photo.height)
+  const left=Math.max(0,Math.round(logo.x-photo.x)),top=Math.max(0,Math.round(logo.y-photo.y))
+  // Sharp applies only the last resize in a pipeline; materialize the cover crop first.
+  const covered=await sharp(input,{limitInputPixels:20000000}).resize(width,height,{fit:'cover'}).png().toBuffer()
+  const pixels=await sharp(covered).extract({left,top,width:Math.max(1,Math.min(Math.round(logo.width),width-left)),height:Math.max(1,Math.min(Math.round(logo.height),height-top))}).resize(1,1).removeAlpha().raw().toBuffer()
+  return '#'+Array.from(pixels.subarray(0,3)).map(v=>v.toString(16).padStart(2,'0')).join('')
+}
+
 /** Remove only near-white, edge-connected backgrounds. Enclosed white details remain intact. */
 export async function removeFlatLogoBackground(input: Buffer): Promise<PreparedLogo | null> {
   const { data, info } = await sharp(input, { limitInputPixels: 4000000 }).rotate()

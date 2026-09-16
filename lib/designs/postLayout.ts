@@ -1,6 +1,19 @@
 import { blueprintSpec } from './brandBlueprint'
 import { DESIGN_LIBRARY, librarySpec } from './library'
 
+export function parseDesignSequence(text:string):string[]{
+ const numbered=String(text||'').replace(/<br\s*\/?\s*>/gi,'\n').split(/(?:^|\n|\s+(?=\d+[.)]\s+[A-ZÀ-Ý]))\s*\d+[.)]\s+/)
+ if(!numbered[0]?.trim()&&numbered.length>=3&&numbered.length<=9)return numbered.slice(1).map(s=>s.trim()).filter(Boolean)
+ const arrows=String(text||'').split(/\s*(?:→|->|⟶)\s*/)
+ return arrows.length>=2&&arrows.length<=8&&arrows.every(s=>s.trim()&&s.trim().split(/\s+/).length<=24)?arrows.map(s=>s.trim().replace(/^\d+[.)]?\s+/,'')):[]
+}
+
+export function parseDesignBullets(text:string){
+ const parts=String(text||'').split(/(?:^|\n)\s*[-*]\s+|[•●▪]\s*/)
+ const items=parts.slice(1).map(s=>s.trim()).filter(Boolean)
+ return {intro:parts[0].trim(),items:items.length>=2&&items.length<=8?items:[]}
+}
+
 /** Transparent space around a cutout can hold copy without covering the subject. */
 export function subjectOverlaps(subject:any,image:any,rect:any,gap=12){
  const overlaps=(a:any)=>a.x<rect.x+rect.width+gap&&a.x+a.width+gap>rect.x&&a.y<rect.y+rect.height+gap&&a.y+a.height+gap>rect.y
@@ -15,15 +28,33 @@ export function fitTextOnlySlide(spec:any,text:any,measure:any,typography?:any){
  if(!title)return spec
  const candidates:any[]=[]
  const x=Math.max(72,Math.min(120,title.x||72)),y=Math.max(150,Math.min(240,title.y||150))
+ const hasFlow=parseDesignSequence(String(text.body||'')).length>1||parseDesignBullets(text.body).items.length>1
  const fit=(element:any,copy:string,width:number,height:number,size:number)=>{
   const padding=element.type==='badge'?24:0
   const fitted=measure({text:copy,width:width-padding,height:height-padding,preferredSize:size,minSize:element.role==='headline'?48:28,lineHeight:element.role==='headline'?1.08:1.3,minLineHeight:element.role==='headline'?1.08:1.3,spacing:element.letterSpacing||0,font:element.font||(element.role==='headline'?typography?.heading:typography?.body)})
+  const flow=element.role==='body'?parseDesignSequence(copy):[]
+  const bullets=element.role==='body'?parseDesignBullets(copy):{items:[],intro:''}
+  if(bullets.items.length){
+   const fontSize=Math.min(36,size),columns=width>=700?2:1,rows=Math.ceil(bullets.items.length/columns),cardWidth=(width-20*(columns-1))/columns
+   const intro=bullets.intro?measure({text:bullets.intro,width,height,preferredSize:fontSize,minSize:24,font:element.font||typography?.body}):null
+   const cards=bullets.items.map(part=>measure({text:part,width:cardWidth-48,height,preferredSize:fontSize,minSize:24,font:element.font||typography?.body}))
+   const needed=(intro?intro.height+24:0)+Math.max(...cards.map(c=>c.height+60))*rows+20*(rows-1)
+   if(needed>height)throw Error('Bullet cards need more reading space')
+   return {fontSize,height:needed,lineHeight:1.3}
+  }
+  if(flow.length>=2&&flow.length<=8&&flow.every(part=>part.trim()&&part.trim().split(/\s+/).length<=24)){
+   const fontSize=Math.min(36,size)
+   const rows=flow.map(part=>measure({text:part.replace(/^\s*\d+[.)]?\s+/,''),width:width-96,height:height/flow.length,preferredSize:fontSize,minSize:24,font:element.font||typography?.body}))
+   const flowHeight=Math.max(...rows.map(row=>row.height+32))*flow.length+20*(flow.length-1)
+   if(flowHeight>height)throw Error('Flow needs more reading space')
+   return {fontSize,height:flowHeight,lineHeight:1.3}
+  }
   return {...fitted,height:fitted.height+padding+8}
  }
- for(const width of [760,840,1080-x-72])for(const headingSize of [96,112,128])for(const bodySize of [36,42,46])try{
+ for(const width of [760,840,1080-x-72])for(const headingSize of hasFlow?[80,88,96]:[96,112,128])for(const bodySize of hasFlow?[30,32,36]:[36,42,46])try{
   const headingFit=fit(title,text.headline||'',width,body&&text.body?320:650,body&&text.body?headingSize:160)
   const heading={x,y,width,height:headingFit.height,size:headingFit.fontSize,lineHeight:headingFit.lineHeight}
-  const bodyWidth=Math.min(width,String(text.body||'').length>360?1080-x-72:780)
+  const bodyWidth=hasFlow?1080-x-72:Math.min(width,String(text.body||'').length>360?1080-x-72:780)
   const bodyY=y+heading.height+24
   const bodyFit=body&&text.body?fit(body,text.body,bodyWidth,960-bodyY-(cta&&text.cta?120:0),bodySize):null
   const paragraph=bodyFit?{x,y:bodyY,width:bodyWidth,height:bodyFit.height,size:bodyFit.fontSize,lineHeight:bodyFit.lineHeight}:null
@@ -51,13 +82,37 @@ export function fitTextOnlySlide(spec:any,text:any,measure:any,typography?:any){
 }
 
 export function fitResolvedSlide(spec:any,slot:any,text:any,measure:any,typography?:any) {
+ // Older plans omitted the carousel label, which is supplied only at render time.
+ if(text.eyebrow&&!spec.elements.some((e:any)=>e.role==='eyebrow')){
+  spec={...spec,elements:[...spec.elements,{type:'badge',role:'eyebrow',x:72,y:48,width:100,height:56,size:24,minSize:18,color:'text',fill:'bg',radius:12}]}
+ }
  if(!spec.elements.some((e:any)=>e.type==='image')&&spec.background.type!=='image')return fitTextOnlySlide(spec,text,measure,typography)
+ if(slot?.treatment==='environmental'){
+  if(spec.background.type!=='image')return spec
+  const out={...spec,background:{...spec.background},elements:spec.elements.filter((e:any)=>e.role).map((e:any)=>({...e}))}
+  let y=0
+  for(const role of ['headline','body','cta']){
+   const e=out.elements.find((e:any)=>e.role===role)
+   if(!e||!text[role])continue
+   const fitted=measure({text:text[role],width:936,height:role==='headline'?300:role==='body'?300:90,preferredSize:role==='headline'?88:role==='body'?34:28,minSize:role==='headline'?48:24,lineHeight:role==='headline'?1.08:1.3,font:e.font||(role==='headline'?typography?.heading:typography?.body)})
+   Object.assign(e,{x:72,y,width:936,height:fitted.height+4,size:fitted.fontSize,lineHeight:fitted.lineHeight,align:'left'})
+   y+=e.height+(role==='headline'?12:24)
+  }
+  const top=Math.max(140,1008-y)
+  for(const e of out.elements){if(e.role==='eyebrow')Object.assign(e,{x:72,y:48,width:120,height:64,size:24});else e.y+=top}
+  return out
+ }
  const subject=slot?.resolvedAsset?.subject
  if(!subject?.width||!subject?.height)return spec
  const out={...spec,background:{...spec.background},elements:spec.elements.map((e:any)=>({...e}))}
  const image=out.elements.find((e:any)=>e.type==='image'),title=out.elements.find((e:any)=>e.role==='headline'),body=out.elements.find((e:any)=>e.role==='body')
  if(!image||!title)return spec
  const ratio=subject.width/subject.height
+ const edges=subject.cropEdges||{}
+ // When opposite source edges are cropped, a tall assembly cannot retain both edges
+ // at full canvas width without hiding its lower props. Prefer the stronger edge.
+ const edgeExtent=(side:string)=>(subject.silhouette||[]).reduce((n:number,b:any)=>n+((side==='left'?b.left<=.02:b.right>=.98)?b.bottom-b.top:0),0)
+ const primaryEdge=edges.left&&edges.right?(edgeExtent('right')>edgeExtent('left')?'right':'left'):edges.left?'left':edges.right?'right':null
  const fit=(element:any,copy:string,width:number,height:number)=>{
   const padding=element.type==='badge'?24:0
   const result=measure({text:copy,width:width-padding,height:height-padding,preferredSize:element.size|| (element.role==='headline'?76:30),minSize:element.role==='headline'?40:24,lineHeight:element.role==='headline'?1.08:1.3,minLineHeight:element.role==='headline'?1.08:1.3,spacing:element.letterSpacing||0,font:element.font||(element.role==='headline'?typography?.heading:typography?.body)})
@@ -68,7 +123,10 @@ export function fitResolvedSlide(spec:any,slot:any,text:any,measure:any,typograp
  const add=(heading:any,paragraph:any,frame:any)=>{
   const scale=frame.bleedBottom?frame.width/subject.width:Math.min(frame.width/subject.width,frame.height/subject.height)
   const visual={x:frame.x+(frame.width-subject.width*scale)*(frame.anchor==='left'?0:frame.anchor==='right'?1:.5),y:frame.bleedBottom?frame.y:1080-subject.height*scale,width:subject.width*scale,height:subject.height*scale,bleed_bottom:!!frame.bleedBottom}
-  if(subject.cropEdges?.left&&visual.x>1||subject.cropEdges?.right&&visual.x+visual.width<1079)return
+  const visibleHeight=Math.max(0,Math.min(1080,visual.y+visual.height)-Math.max(0,visual.y))
+  const visibleFraction=visibleHeight/visual.height
+  if(visibleFraction<.85)return
+  if(primaryEdge==='left'&&visual.x>1||primaryEdge==='right'&&visual.x+visual.width<1079)return
   if(subjectOverlaps(subject,visual,heading,20)||paragraph&&subjectOverlaps(subject,visual,paragraph,20))return
   const cta=out.elements.find((e:any)=>e.role==='cta')
   let footer
@@ -81,7 +139,7 @@ export function fitResolvedSlide(spec:any,slot:any,text:any,measure:any,typograp
    }catch{return}
   }
   const typeArea=heading.width*heading.height+(paragraph?paragraph.width*paragraph.height:0)
-  candidates.push({heading,paragraph,visual,footer,area:visual.width*visual.height+typeArea*.15})
+  candidates.push({heading,paragraph,visual,footer,area:visual.width*visibleHeight+typeArea*.15-visual.width*visual.height*(1-visibleFraction)*2})
  }
  // Optimize this slide's hierarchy and width, using the real silhouette to reclaim transparent space.
  for(const side of ['left','right'])for(const headingWidth of [720,840,936])for(const bodyWidth of [340,380,420])try{
@@ -89,7 +147,12 @@ export function fitResolvedSlide(spec:any,slot:any,text:any,measure:any,typograp
   const heading={x:side==='right'?72:1080-72-headingWidth,y:130,width:headingWidth,height:headingFit.height,size:headingFit.fontSize,lineHeight:headingFit.lineHeight}
   const paragraphFit=body&&text.body?fit({...body,size:Math.max(30,body.size||30)},text.body,bodyWidth,420):null
   const paragraph=paragraphFit?{x:side==='right'?72:1080-72-bodyWidth,y:heading.y+heading.height+24,width:bodyWidth,height:paragraphFit.height,size:paragraphFit.fontSize,lineHeight:paragraphFit.lineHeight}:null
-  for(const imageWidth of [620,700,780,860])add(heading,paragraph,{x:side==='left'?0:1080-imageWidth,width:imageWidth,height:1080-heading.y-heading.height-24,anchor:side})
+  for(const imageWidth of [620,700,780,860]){
+   const frame={x:side==='left'?0:1080-imageWidth,width:imageWidth,height:1080-heading.y-heading.height-24,anchor:side}
+   add(heading,paragraph,frame)
+   // A little bottom bleed is useful; cap it instead of rewarding oversized hidden imagery.
+   if(edges.bottom)add(heading,paragraph,{...frame,y:Math.max(0,1080-imageWidth/ratio*.9),bleedBottom:true})
+  }
  }catch{}
  // Portraits can lead on either side, with body copy immediately below the headline on the other side.
  for(const side of ['left','right'])try{
@@ -118,7 +181,7 @@ export function fitResolvedSlide(spec:any,slot:any,text:any,measure:any,typograp
  if(!selected)return spec
  Object.assign(title,selected.heading)
  if(body&&selected.paragraph)Object.assign(body,selected.paragraph)
- Object.assign(image,selected.visual,{image_variant:'subject',assetId:slot.slot_id,radius:0,rotation:0,shadow:false})
+ Object.assign(image,selected.visual,{image_variant:'subject',assetId:slot.slot_id,crop_alignment:primaryEdge,radius:0,rotation:0,shadow:false})
  // The foreground owns the image stage; do not repeat its source as a backdrop or thumbnail.
  if(out.background.type==='image')out.background.type='solid'
  out.elements=out.elements.filter((e:any)=>e.type!=='image'||e===image)
@@ -128,6 +191,7 @@ export function fitResolvedSlide(spec:any,slot:any,text:any,measure:any,typograp
 }
 
 export function arrangeReadableBody(spec:any,body:string) {
+ if(spec.elements.some((e:any)=>e.type==='image'&&e.image_variant==='photo'&&e.mask&&e.mask!=='none'))return spec
  const out={...spec,background:{...spec.background},elements:spec.elements.map((e:any)=>({...e}))}
  const paragraph=out.elements.find((e:any)=>e.role==='body'),title=out.elements.find((e:any)=>e.role==='headline')
  if(!title)return out
@@ -168,27 +232,63 @@ export function arrangeReadableBody(spec:any,body:string) {
 }
 
 /** Resolve a post's composition before any asset search or generation. */
-export function planPostLayout(brand:any,copy:any,idea:any,designId?:string) {
+export function planPostLayout(brand:any,copy:any,idea:any,designId?:string,override?:string) {
+ const requested=override||brand?.imageDisposition
+ const disposition=['cutout','background','framed','none'].includes(requested)?requested:null
  const saved=brand?.designs||[]
  const selected=saved.find((d:any)=>d.id===designId)||saved[Math.floor(Math.random()*saved.length)]
  const family=DESIGN_LIBRARY.find(d=>d.id===(selected?.baseId||designId))||DESIGN_LIBRARY[Math.floor(Math.random()*DESIGN_LIBRARY.length)]
  const slides=Array.isArray(copy.slides)&&copy.slides.length?copy.slides:[copy]
  const format=copy.format||idea?.format||'single'
  const slots=slides.map((slide:any,index:number)=>{
-  const text={headline:slide.headline||slide.title||'',body:slide.body||slide.supportingText||'',cta:slide.cta||copy.cta||'',eyebrow:''}
+  const text={headline:slide.headline||slide.title||'',body:slide.body||slide.supportingText||'',cta:slide.cta||copy.cta||'',eyebrow:slides.length>1&&index>0?String(index).padStart(2,'0'):''}
   if(slides.length>1&&index===0)text.body=''
   const slot_id=slides.length>1?'slide_'+(index+1):'single_main'
   const placeholder={slot_id,resolvedAsset:{url:'placeholder'}}
   let spec=selected?.blueprint?blueprintSpec(selected.blueprint,placeholder,text,index,slides.length):librarySpec(family,placeholder,text,index,slides.length,selected?.artDirection)
-  spec=arrangeReadableBody(spec,text.body)
+  if(disposition){
+   const hadVisual=spec.background.type==='image'||spec.elements.some((e:any)=>e.type==='image')
+   spec.background.type=disposition==='background'&&hadVisual?'image':'solid'
+   if(disposition==='none'||disposition==='background')spec.elements=spec.elements.filter((e:any)=>e.type!=='image')
+   else if(hadVisual){
+    if(!spec.elements.some((e:any)=>e.type==='image')){
+     for(const e of spec.elements){if(e.role==='headline')Object.assign(e,{x:72,y:100,width:936,height:240});if(e.role==='body')Object.assign(e,{x:72,y:390,width:420,height:480})}
+     spec.elements.push({type:'image',x:520,y:380,width:560,height:650,assetId:slot_id,layer:1})
+    }
+    for(const e of spec.elements.filter((e:any)=>e.type==='image'))Object.assign(e,{image_variant:disposition==='cutout'?'subject':'photo',mask:disposition==='framed'?'rounded':'none',radius:disposition==='framed'?48:0})
+   }
+  }
+  if(disposition==='framed'&&spec.elements.some((e:any)=>e.type==='image')){
+   // Photography uses a broad editorial frame, never a cutout-shaped side column.
+   const photo=spec.elements.find((e:any)=>e.type==='image')
+   Object.assign(photo,{x:72,y:390,width:936,height:480,mask:'rounded',radius:36})
+   for(const e of spec.elements){
+    if(e.role==='headline')Object.assign(e,{x:72,y:110,width:936,height:240,size:80})
+    if(e.role==='body')Object.assign(e,{x:72,y:390,width:936,height:240,size:34})
+    if(e.role==='cta')Object.assign(e,{x:72,y:970,width:936,height:60,size:26})
+   }
+   if(text.body){Object.assign(photo,{y:670,height:260})}
+  }
+  if(disposition!=='framed')spec=arrangeReadableBody(spec,text.body)
   const image=spec.elements.find((e:any)=>e.type==='image')
   const dense=text.body.trim().split(/\s+/).length>=55||text.body.length>=360
-  const background=!dense&&(spec.background.type==='image'||selected?.blueprint?.imagery?.placement==='background')
+  if(dense&&disposition==='framed'){spec.elements=spec.elements.filter((e:any)=>e.type!=='image');spec=arrangeReadableBody(spec,text.body)}
+  const sceneLed=/antes|depois|before|after|obra|constru|arquitet|architecture|interior|paisagem|landscape|bastidores|behind.the.scenes/i.test(text.headline+' '+text.body)
+  const background=!dense&&(disposition?disposition==='background'&&spec.background.type==='image':selected?.blueprint?.imagery?.placement!=='none'&&(sceneLed||spec.background.type==='image'||selected?.blueprint?.imagery?.placement==='background'))
   if(background){spec.background={...spec.background,type:'image'};spec.elements=spec.elements.filter((e:any)=>e.type!=='image');spec.elements.unshift({type:'gradient',x:0,y:0,width:1080,height:1080,color:'bg',to:'bg',opacity:78,endOpacity:32,angle:90,layer:-10})}
-  const frame=background?{x:0,y:0,width:1080,height:1080}:image?{x:image.x,y:image.y,width:image.width,height:image.height}:null
+  const frame=background?{x:0,y:0,width:1080,height:1080}:image&&!dense?{x:image.x,y:image.y,width:image.width,height:image.height}:null
   return {slot_id,spec,frame,background,needs_visual:!!frame,treatment:background?'environmental':selected?.blueprint?.imagery?.placement==='framed'?'environmental':'isolated_subject',brief:frame?`Image placement: ${background?'full background':'foreground frame'} at x=${frame.x}, y=${frame.y}, width=${frame.width}, height=${frame.height} on a 1080px square. Aspect ratio ${(frame.width/frame.height).toFixed(2)}. Keep the complete subject inside this frame with generous edge clearance. ${background?'Keep the scene and background intact; leave quiet space behind text.':'No cropped heads, hands or essential props.'}`:''}
  })
- return {version:1,designId:selected?.id||family.id,format,slots}
+ for(const slot of slots){if(disposition==='framed')slot.treatment='environmental';if(disposition==='cutout')slot.treatment='isolated_subject'}
+ // Keep one background treatment across the carousel; composition supplies variation.
+ const campaignBackground={...slots[0]?.spec.background,type:'solid',color:slots[0]?.spec.background?.color||'bg'}
+ for(const slot of slots){
+  if(!slot.background)slot.spec.background={...campaignBackground}
+  for(const e of slot.spec.elements){
+   if(['gradient','glow','circle','ring'].includes(e.type)&&!e.role&&e.width>=600){e.opacity=Math.min(e.opacity??12,12);if(e.endOpacity!==undefined)e.endOpacity=Math.min(e.endOpacity,12)}
+  }
+ }
+ return {version:1,designId:selected?.id||family.id,imageDisposition:disposition,format,slots}
 }
 
 /** Fit the resolved asset inside its planned frame; renderer subsequently fits actual copy. */
@@ -196,8 +296,8 @@ export function fitPlannedLayout(layout:any,slot:any) {
  const subject=slot.resolvedAsset?.subject
  const spec={...layout.spec,background:{...layout.spec.background},elements:layout.spec.elements.map((e:any)=>({...e}))}
  if(layout.background&&slot.resolvedAsset?.url) {
-  // Without a verified face/negative-space map, separate copy from the scene.
-  spec.background.type='solid'
+  // Environmental scenes remain full bleed, with a text-aware scrim in the renderer.
+  spec.background.type='image'
   spec.elements=spec.elements.filter((e:any)=>e.role)
   const hasBody=spec.elements.some((e:any)=>e.role==='body')
   for(const e of spec.elements) {
@@ -205,13 +305,12 @@ export function fitPlannedLayout(layout:any,slot:any) {
    if(e.role==='body')Object.assign(e,{x:72,y:814,width:936,height:130})
    if(e.role==='cta')Object.assign(e,{x:72,y:970,width:680,height:54})
   }
-  spec.elements.unshift({type:'image',x:72,y:100,width:936,height:hasBody?480:540,assetId:slot.slot_id,image_variant:'photo',radius:16,layer:1})
  }
  spec.elements=spec.elements.filter((e:any)=>e.type!=='image'||slot.resolvedAsset?.url).map((e:any)=>{
   if(e.type!=='image')return e
   const out={...e,assetId:slot.slot_id,image_variant:slot.treatment==='environmental'?'photo':subject?'subject':'photo'}
   const source=slot.treatment==='environmental'?slot.resolvedAsset:subject||slot.resolvedAsset
-  if(source?.width&&source?.height){const scale=Math.min(e.width/source.width,e.height/source.height);out.width=source.width*scale;out.height=source.height*scale;out.x=e.x+(e.width-out.width)/2;out.y=e.y+(e.height-out.height)*(subject&&slot.treatment!=='environmental'?1:.5)}
+  if(source?.width&&source?.height&&(!e.mask||e.mask==='none')){const scale=Math.min(e.width/source.width,e.height/source.height);out.width=source.width*scale;out.height=source.height*scale;out.x=e.x+(e.width-out.width)/2;out.y=e.y+(e.height-out.height)*(subject&&slot.treatment!=='environmental'?1:.5)}
   return out
  })
  if(layout.background&&!slot.resolvedAsset?.url)spec.background.type='solid'

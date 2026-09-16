@@ -54,9 +54,11 @@ export async function createLogoVariants(input: Buffer) {
   const border: number[] = []
   for (let x = 0; x < width; x++) border.push(x, (height - 1) * width + x)
   for (let y = 1; y < height - 1; y++) border.push(y * width, y * width + width - 1)
-  if (!border.some(i => data[i * 4 + 3] < 250)) {
+  const opaqueCoverage=Array.from({length:count},(_,i)=>data[i*4+3]>=250?1:0).reduce((a,b)=>a+b,0)/count
+  // A few transparent corner pixels do not make an otherwise solid logo transparent.
+  if (!border.some(i => data[i * 4 + 3] < 250) || opaqueCoverage>.94) {
     const distance = (i: number, j: number) => Math.max(...[0, 1, 2].map(c => Math.abs(data[i * 4 + c] - data[j * 4 + c])))
-    const seed = [0, width - 1, (height - 1) * width, count - 1].find(i => border.filter(j => distance(i, j) < 24).length / border.length >= .85)
+    const seed = border.find(i => data[i*4+3]>=250 && border.filter(j => data[j*4+3]>=250&&distance(i, j) < 24).length / border.length >= .55)
     if (seed === undefined) throw new Error('Use a logo with transparency or a uniform background to generate variants.')
     const seen = new Uint8Array(count), queue = new Int32Array(count)
     let head = 0, tail = 0
@@ -71,8 +73,6 @@ export async function createLogoVariants(input: Buffer) {
     }
     for (let i = 0; i < count; i++) if (seen[i]) data[i * 4 + 3] = 0
   }
-  const visible = Array.from({length:count},(_,i)=>data[i*4+3]>220?1:0).reduce((a,b)=>a+b,0)
-  if (visible / count > .94) throw new Error('Logo variant would be an opaque block; use a transparent logo.')
   if (!data.some((v, i) => i % 4 === 3 && v > 0)) throw new Error('No visible logo found.')
   const encode = async (pixels: Buffer, background?: string) => {
     let image = sharp(pixels, { raw: { width, height, channels: 4 } })
@@ -100,6 +100,9 @@ export async function createLogoVariants(input: Buffer) {
       black[i+3]=white[i+3]=Math.round(data[i+3]*ink)
     }
   }
+  // Validate the extracted mark, not the badge before its background is removed.
+  const markCoverage=Array.from({length:count},(_,i)=>black[i*4+3]>220?1:0).reduce((a,b)=>a+b,0)/count
+  if(markCoverage>.94)throw new Error('Logo artwork could not be separated from its background.')
   for (let i = 0; i < data.length; i += 4) for (let c = 0; c < 3; c++) { black[i + c] = 0; white[i + c] = 255 }
   return {
     originalTransparent: await encode(data), blackTransparent: await encode(black), whiteTransparent: await encode(white),

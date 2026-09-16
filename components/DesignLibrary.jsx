@@ -50,7 +50,7 @@ export function Sample({design,chapter=0,canvas,pick='brand'}) {
     if(role!=='headline'||!kind||kind==='none'||chapter===1)return text
     const words=String(text||'').split(' '), phrase=words.splice(-Math.min(2,words.length)).join(' ')
     const styles={underline:{textDecoration:'underline',textDecorationColor:palette.accent},color:{color:palette.accent},background:{background:palette.primary,color:palette.text},font:{fontStyle:'italic'},gradient_text:{backgroundImage:'linear-gradient(110deg, '+palette.accent+', '+palette.primary+')',backgroundClip:'text',color:'transparent'},gradient_background:{backgroundImage:'linear-gradient(110deg, '+palette.primary+', '+palette.accent+')'}}
-    if(kind==='boxed_gradient_text')return <>{words.join(' ')}{words.length?' ':''}<span style={{background:palette.primary}}><span style={styles.gradient_text}>{phrase}</span></span></>
+    if(kind==='boxed_gradient_text')return text
     return <>{words.join(' ')}{words.length?' ':''}<span style={styles[kind]}>{phrase}</span></>
   }
   const textStyle=e=>{

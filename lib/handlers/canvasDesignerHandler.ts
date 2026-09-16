@@ -1,6 +1,6 @@
 import { budgetedModels, budgetedCompletion } from '@/lib/services/ai/requestBudget'
 import { canvasBrand } from '@/lib/designs/canvasBrand'
-import { arrangeReadableBody, fitPlannedLayout, fitResolvedSlide, subjectOverlaps } from '@/lib/designs/postLayout'
+import { arrangeReadableBody, fitPlannedLayout, fitResolvedSlide, subjectOverlaps, parseDesignSequence, parseDesignBullets, planPostLayout } from '@/lib/designs/postLayout'
 
 import { blueprintSpec, complementaryAccent } from '@/lib/designs/brandBlueprint'
 import { persistInlineImages } from '@/lib/services/persistInlineImages'
@@ -8,6 +8,7 @@ import { PALETTE_PICKS, paletteColors, choosePalette, constrainBrandPalette } fr
 import { DESIGN_LIBRARY, librarySpec, splitBulletItems } from '@/lib/designs/library'
 import { withoutEmoji } from '@/lib/services/copyText'
 import { generateLogoVariants } from '@/lib/services/logoVariants'
+import { ensureBrandLogoVariants } from '@/lib/services/brandLogoVariants'
 /**
  * Canvas Designer — Art-Direction Engine
  *
@@ -21,7 +22,7 @@ import { generateLogoVariants } from '@/lib/services/logoVariants'
 import { NextResponse } from 'next/server'
 import { v4 as uuidv4 } from 'uuid'
 import Groq from 'groq-sdk'
-import { containPreparedLogo } from '@/lib/services/logoBackground'
+import { containPreparedLogo, sampleLogoBackdrop } from '@/lib/services/logoBackground'
 import { prepareSubjectAssets, hydrateSubjectCrops } from '@/lib/services/subjectAssets'
 import { corsify } from '@/lib/services/middleware'
 import type { ResolvedAssetPlan, ResolvedSlot } from './assetResolverHandler'
@@ -1401,6 +1402,7 @@ type PaletteRole = keyof SlidePalette
 type TextRole = 'headline' | 'body' | 'eyebrow' | 'cta'
 interface DesignElement {
   imageVariant: 'photo' | 'subject'
+  cropAlignment?: 'left'|'right'
   type: 'text' | 'image' | 'shape' | 'line' | 'circle' | 'ring' | 'pill' | 'frame' | 'gradient' | 'glow' | 'dots' | 'grid' | 'badge' | 'card' | 'number' | 'logo'
   x: number; y: number; width: number; height: number
   role?: TextRole; assetId?: string
@@ -1446,6 +1448,7 @@ function validateDesignSpec(ai: any, slot: ResolvedSlot, system = normalizeDesig
     const y = finite(e.y, margin, margin, H - margin - 20)
     elements.push({
       imageVariant: e.image_variant !== 'photo' && imageAsset?.subject ? 'subject' : 'photo',
+      cropAlignment: ['left','right'].includes(e.crop_alignment)?e.crop_alignment:undefined,
       type: e.type, x: Math.round(x), y: Math.round(y), width: Math.floor(finite(e.width, 100, isCopy || e.type === 'number' ? 20 : e.type === 'image' || e.type === 'logo' ? 10 : 1, W - margin - Math.round(x))), height: Math.ceil(finite(e.height, 100, isCopy || e.type === 'number' ? 20 : e.type === 'image' || e.type === 'logo' ? 10 : 1, e.type==='image'&&e.bleed_bottom&&imageAsset?.subject?8000:H - margin - Math.round(y))),
       role: e.role, assetId: e.assetId, color: paletteRole(e.color, isCopy ? 'text' : 'accent'),
       to: paletteRole(e.to, 'gradTo'), radius: finite(e.radius, ['image','card','frame'].includes(e.type) ? { square: 0, soft: 16, rounded: 36 }[system.radius] : 0, 0, 540), opacity: finite(e.opacity, e.type === 'number' || e.type === 'glow' || e.type === 'dots' ? { none: 0, subtle: 10, moderate: 20, rich: 35 }[system.decoration] : 100, 0, 100),
@@ -1475,7 +1478,7 @@ function validateDesignSpec(ai: any, slot: ResolvedSlot, system = normalizeDesig
 
 /** Conservative font-aware wrapping; no browser or font downloads in the request path. */
 function estimateTextLines(text: string, width: number, size: number, spacing: number, font: string): number {
-  const factor = ['Playfair Display','Dancing Script','Pacifico','Lobster'].includes(font) ? 1.12 : 1
+  const factor = ['Oswald','Bebas Neue','Anton'].includes(font) ? .82 : ['Playfair Display','Dancing Script','Pacifico','Lobster'].includes(font) ? 1.12 : 1
   const measure = (word: string) => Array.from(word).reduce((n, c) => n + size * (/\s/.test(c) ? .34 : /[ilI.,'!:;]/.test(c) ? .32 : /[MW@#%]|[^\u0000-\u024f]/.test(c) ? 1 : .65) * factor + Math.max(0, spacing), 0)
   let lines = 0
   for (const paragraph of text.split('\n')) {
@@ -1564,6 +1567,10 @@ function textColorOverLayers(preferred: string, background: string, layers: any[
 }
 
 function splitDesignSteps(text: string): {number:string;text:string}[] {
+  const sequence=parseDesignSequence(text)
+  if(sequence.length)return sequence.map((text,index)=>({number:String(index+1).padStart(2,'0'),text}))
+  const flow=text.split(/\s*(?:→|->|⟶)\s*/)
+  if(flow.length>=2&&flow.length<=8&&flow.every(part=>part.trim()&&part.trim().split(/\s+/).length<=24))return flow.map((part,index)=>({number:String(index+1).padStart(2,'0'),text:part.replace(/^\s*\d+[.)]?\s+/,'').trim()}))
   const parts = text.split(/(?:^|[→\n])\s*(\d+)[.)]?\s+/)
   if (parts[0]?.trim() || parts.length < 5) return []
   const steps = []
@@ -1576,6 +1583,8 @@ function splitDesignSteps(text: string): {number:string;text:string}[] {
 
 function splitBodyBlocks(text:string):string[] {
   if(typeof text!=='string'||text.trim().length<180||text.includes('<%'))return []
+  // A testimonial is one quotation, not numbered claims attributed to its speaker.
+  if(/^[“”"«]/.test(text.trim()))return []
   const paragraphs=text.trim().split(/\n\s*\n/).filter(Boolean)
   const sentences=paragraphs.length>1?paragraphs:text.trim().split(/(?<=[.!?;])\s+(?=[A-ZÀ-Ý0-9])/u)
   if(sentences.length<2)return []
@@ -1592,13 +1601,19 @@ function splitBodyBlocks(text:string):string[] {
   return blocks.length>1?blocks:[]
 }
 
+function parseTestimonial(text:string):{quote:string;author:string}|null {
+  if(typeof text!=='string'||text.includes('<%'))return null
+  const match=text.trim().match(/^[“"«]([\s\S]+?)[”"»]\s*(?:[–—-]\s*([\s\S]+))?[.!]?$/)
+  return match?{quote:match[1].trim(),author:(match[2]||'').trim()}:null
+}
+
 function shouldHighlightSlide(index = 0, total = 1): boolean {
   // Spread emphasis across the sequence, leaving at least every other slide plain.
   if (total <= 1) return true
   return index % 3 === 0
 }
 
-function emphasizeHeadline(text: string, variant = 0, accent = '#ffffff', background = '#000000', headingFont = 'Inter', secondaryFont?: string): string {
+function emphasizeHeadline(text: string, variant = 0, accent = '#ffffff', background = '#000000', headingFont = 'Inter', secondaryFont?: string, surface=background): string {
   if (variant < 0 || text.includes('<%')) return text
   // Prefer a complete short closing sentence, never span a question boundary.
   const segments = [...text.matchAll(/[^.!?;:]+[.!?;:]*/g)]
@@ -1612,9 +1627,14 @@ function emphasizeHeadline(text: string, variant = 0, accent = '#ffffff', backgr
   const offset = text.lastIndexOf(highlight)
   if (offset < 0) return text
   const font = secondaryFont || (headingFont === 'Playfair Display' ? 'Inter' : 'Playfair Display')
-  if (variant === 6) return text.slice(0,offset)+'<%inline:backgroundColor='+background+':<%inline:backgroundImage=linear-gradient(110deg, '+accent+', '+ensureContrast('#ffffff',background)+')|backgroundClip=text|color=transparent:'+highlight+'%>%>'+text.slice(offset+highlight.length)
-  const style = variant === 4 ? 'backgroundImage=linear-gradient(110deg, '+accent+', '+background+')|backgroundClip=text|color=transparent'
-    : variant === 5 ? 'backgroundImage=linear-gradient(110deg, '+background+', '+accent+')|color='+ensureContrast('#ffffff',background)
+  const readableAccent=ensureContrast(accent,variant===6?background:surface)
+  const rgb=hexToRgb(readableAccent),toward=luminance(variant===6?background:surface)>.5?0:255
+  const tonal=ensureContrast(rgbToHex(...rgb.map(v=>Math.round(v+(toward-v)*.18)) as [number,number,number]),variant===6?background:surface)
+  if (variant === 6) return text
+  const boxText=ensureContrast('#ffffff',background)
+  const boxEnd=ensureContrast(accent,boxText)
+  const style = variant === 4 ? 'backgroundImage=linear-gradient(110deg, '+readableAccent+', '+tonal+')|backgroundClip=text|color=transparent'
+    : variant === 5 ? 'backgroundImage=linear-gradient(110deg, '+background+', '+boxEnd+')|color='+boxText
     : variant % 4 === 1 ? 'color='+accent
     : variant % 4 === 2 ? 'backgroundColor='+background+'|color='+ensureContrast('#ffffff',background)
     : variant % 4 === 3 ? (font===headingFont?'fontStyle=italic':'fontFamily='+font)
@@ -1657,16 +1677,17 @@ function renderDesignSpec(spec: DesignSpec, si: SlideInput): { nodes: object[]; 
         node = img({ x: e.x + (e.width - w) / 2, y: e.y + e.height - h, w, h, src: subject.url, radius: 0, mask: 'none', ...imageFilters(e.treatment) })
         // Apply edge constraints to actual pixel dimensions, after aspect fitting and rounding.
         const edges=(subject as any).cropEdges
-        if(edges?.left)node.x=0
-        else if(edges?.right)node.x=W-w
+        if(e.cropAlignment==='left'||!e.cropAlignment&&edges?.left)node.x=0
+        else if(e.cropAlignment==='right'||edges?.right)node.x=W-w
+        if(e.cropAlignment)node.cropAlignment=e.cropAlignment
         if(edges?.bottom)node.y=Math.max(e.y,H-h)
         subjectNodes.add(node.id)
         subjectMetadata.set(node.id,subject)
       } else {
         const source=selected||si.assets?.[si.d.slot_id]
         let frame=o
-        if(source?.width&&source?.height){const scale=Math.min(e.width/source.width,e.height/source.height);const w=source.width*scale,h=source.height*scale;frame={x:e.x+(e.width-w)/2,y:e.y+(e.height-h)/2,w,h}}
-        node = img({ ...frame, src: imageUrl!, radius: e.radius, mask:'none',objectFit:'contain', ...imageFilters(e.treatment) })
+        if(source?.width&&source?.height&&e.mask==='none'){const scale=Math.min(e.width/source.width,e.height/source.height);const w=source.width*scale,h=source.height*scale;frame={x:e.x+(e.width-w)/2,y:e.y+(e.height-h)/2,w,h}}
+        node = img({ ...frame, src: imageUrl!, radius: e.radius, mask:e.mask,objectFit:e.mask==='none'?'contain':'cover', ...imageFilters(e.treatment) })
       }
       node.filters.opacity = e.opacity
     } else if (e.type === 'gradient' || e.type === 'glow') {
@@ -1685,6 +1706,20 @@ function renderDesignSpec(spec: DesignSpec, si: SlideInput): { nodes: object[]; 
       const fit = fitTextLayout({ text: number, width: e.width, height: e.height, preferredSize: e.size, minSize: 18, font: e.font })
       node = txt({ ...o, text: number, font: e.font, size: fit.fontSize, lineHeight: fit.lineHeight, weight: e.weight, color: withAlpha(color, e.opacity), align: e.align })
     } else {
+      if(['ring','circle'].includes(e.type)&&e.layer<0&&e.width>=300){
+        // Brand-colored abstract rosettes and overlapping lobes made from editable primitives.
+        const seed=Array.from(si.headline+p.primary).reduce((n,c)=>(n*31+c.charCodeAt(0))>>>0,0)
+        const petals=seed%2?4:6,outline=seed%3===0
+        const diameter=Math.min(e.width,e.height),cx=e.x+e.width/2,cy=e.y+e.height/2
+        for(let i=0;i<petals;i++){
+          const angle=i*Math.PI*2/petals,reach=diameter*.22
+          const w=diameter*.38,h=diameter*.58
+          const node=shp({x:cx+Math.cos(angle)*reach-w/2,y:cy+Math.sin(angle)*reach-h/2,w,h,shape:'ellipse',fill:outline?'#00000000':withAlpha(color,Math.min(10,e.opacity)),stroke:withAlpha(color,Math.min(18,e.opacity)),strokeWidth:outline?2:0})
+          node.rotation=i*360/petals+90
+          nodes.push(node)
+        }
+        continue
+      }
       const outline = e.type === 'ring' || e.type === 'frame'
       const fill = e.type === 'card' ? p[e.fill] : color
       node = shp({ ...o, fill: outline ? '#00000000' : e.opacity === 100 ? fill : withAlpha(fill, e.opacity), shape: ['ring','circle'].includes(e.type) ? 'ellipse' : 'rect', radius: e.type === 'pill' ? e.height / 2 : e.radius, stroke: withAlpha(color, e.opacity), strokeWidth: outline ? e.stroke : 0 })
@@ -1698,25 +1733,84 @@ function renderDesignSpec(spec: DesignSpec, si: SlideInput): { nodes: object[]; 
     nodes.push(node)
   }
   const copyNodes: any[] = []
+  const photoBackground=bg.type==='image'&&!!si.imageUrl
+  if(photoBackground&&textElements.length){
+    const readingElements=textElements.filter(e=>e.role!=='eyebrow')
+    const copyTop=Math.min(...(readingElements.length?readingElements:textElements).map(e=>e.y))
+    const top=Math.max(0,copyTop-300)
+    const fade=Math.min(100,(copyTop-top)/(H-top)*100)
+    nodes.push(grad({x:0,y:top,w:W,h:H-top,angle:180,stops:[{color:'#000000',position:0,alpha:0},{color:'#000000',position:fade,alpha:62},{color:'#000000',position:100,alpha:76}]}))
+  }
   for (const e of textElements) {
     const content = si[e.role!]
+    const review=e.role==='body'?parseTestimonial(content):null
+    if(review && e.width>=320 && e.height>=220 && !nodes.some(n=>subjectNodes.has(n.id)&&subjectOverlaps(subjectMetadata.get(n.id),n,e,0))){
+      const inset=28,quoteWidth=e.width-inset*2-24
+      const authorFit=review.author?fitTextLayout({text:review.author,width:quoteWidth,height:Math.max(80,e.height*.3),preferredSize:Math.min(28,e.size),minSize:18,font:e.font}):null
+      const quoteHeight=e.height-64-(authorFit?authorFit.height+28:0)
+      let quoteFit:any=null
+      try{quoteFit=fitTextLayout({text:review.quote,width:quoteWidth,height:quoteHeight,preferredSize:e.size,minSize:22,lineHeight:1.3,font:e.font})}catch{}
+      if(quoteFit){
+        // Stable variation follows the actual quotation and slide, rather than one shared card.
+        const seed=Array.from(review.quote).reduce((n,c)=>(Math.imul(n,31)+c.charCodeAt(0))>>>0,0)
+        const variant=(seed+(si.slideNumber??0))%3
+        const surface=variant===1?background:p.surface
+        const ink=ensureContrast(p.text,surface),accent=ensureContrast(p.primary,surface)
+        const centered=variant===2,copyX=e.x+(centered?40:inset+24)
+        nodes.push(shp({x:e.x,y:e.y,w:e.width,h:e.height,fill:surface,radius:variant===0?24:variant===2?8:0,stroke:variant===2?accent:'#00000000',strokeWidth:variant===2?2:0}))
+        if(variant===0)nodes.push(shp({x:e.x+inset,y:e.y+32,w:4,h:e.height-64,fill:accent,radius:2}))
+        if(variant===1){
+          copyNodes.push(txt({x:e.x,y:e.y+16,w:42,h:64,text:'“',font:e.font,size:64,weight:700,color:accent}))
+          nodes.push(shp({x:copyX,y:e.y+e.height-16,w:Math.min(120,quoteWidth),h:3,fill:accent}))
+        }
+        copyNodes.push(txt({x:copyX,y:e.y+28,w:quoteWidth,h:quoteFit.height,text:review.quote,font:e.font,size:quoteFit.fontSize,weight:400,color:ink,lineHeight:quoteFit.lineHeight,align:centered?'center':'left'}))
+        if(authorFit){
+          const y=e.y+e.height-28-authorFit.height
+          if(centered)nodes.push(shp({x:e.x+e.width/2-24,y:y-14,w:48,h:2,fill:accent}))
+          copyNodes.push(txt({x:copyX,y,w:quoteWidth,h:authorFit.height,text:review.author,font:e.font,size:authorFit.fontSize,weight:700,color:ink,lineHeight:authorFit.lineHeight,align:centered?'center':'left'}))
+        }
+        continue
+      }
+    }
+    const bulletContent=e.role==='body'?parseDesignBullets(content):{intro:'',items:[]}
+    if(bulletContent.items.length){
+      const size=Math.min(36,e.size),columns=e.width>=700?2:1,gap=20
+      const intro=bulletContent.intro?fitTextLayout({text:bulletContent.intro,width:e.width,height:e.height,preferredSize:size,minSize:24,font:e.font}):null
+      const top=e.y+(intro?intro.height+24:0),rows=Math.ceil(bulletContent.items.length/columns)
+      const h=(e.height-(top-e.y)-gap*(rows-1))/rows,w=(e.width-gap*(columns-1))/columns
+      if(intro)copyNodes.push(txt({x:e.x,y:e.y,w:e.width,h:intro.height,text:bulletContent.intro,font:e.font,size:intro.fontSize,lineHeight:intro.lineHeight,color:ensureContrast(p.text,background)}))
+      bulletContent.items.forEach((text,index)=>{
+        const x=e.x+(index%columns)*(w+gap),y=top+Math.floor(index/columns)*(h+gap)
+        const fit=fitTextLayout({text,width:w-48,height:h-56,preferredSize:size,minSize:24,font:e.font})
+        const accent=ensureContrast(p.primary,p.surface)
+        nodes.push(shp({x,y,w,h,fill:p.surface,radius:18}))
+        nodes.push(shp({x:x+24,y:y+20,w:44,h:4,fill:accent,radius:2}))
+        copyNodes.push(txt({x:x+24,y:y+36,w:w-48,h:fit.height,text,font:e.font,size:fit.fontSize,lineHeight:fit.lineHeight,color:ensureContrast(p.text,p.surface)}))
+      })
+      continue
+    }
     const bullets = si.d.library && e.role === 'body' ? splitBulletItems(content) : []
-    const steps = bullets.length ? bullets.map(text=>({number:'',text})) : si.d.library && e.role === 'body' ? splitDesignSteps(content) : []
+    const steps = bullets.length ? bullets.map(text=>({number:'',text})) : e.role === 'body' ? splitDesignSteps(content) : []
     if (steps.length > 1) {
       const blockStyle=si.d.block_style||'cards'
       const columns = bullets.length >= 3 && e.width >= 700 ? 2 : 1
       const gap = 20, rows = Math.ceil(steps.length/columns), rowHeight = (e.height - gap * (rows - 1)) / rows
       const cardWidth = (e.width-gap*(columns-1))/columns
       if (rowHeight >= 50) {
+        if(!bullets.length)nodes.push(shp({x:e.x+39,y:e.y+rowHeight/2,w:2,h:(steps.length-1)*(rowHeight+gap),fill:withAlpha(p.primary,35)}))
         steps.forEach((step, index) => {
           const y = e.y + Math.floor(index/columns) * (rowHeight + gap)
           const x = e.x + (index%columns)*(cardWidth+gap)
           const rowColor = ensureContrast(p.text, p.surface)
           if(blockStyle==='cards')nodes.push(shp({x,y,w:cardWidth,h:rowHeight,fill:p.surface,radius:14}))
-          const fit = fitTextLayout({text:step.text,width:cardWidth-(bullets.length?48:96),height:rowHeight-32,preferredSize:30,minSize:18,font:e.font})
+          const fit = fitTextLayout({text:step.text,width:cardWidth-(bullets.length?48:96),height:rowHeight-32,preferredSize:bullets.length?30:Math.min(36,e.size),minSize:bullets.length?18:24,font:e.font})
           if (bullets.length&&blockStyle!=='plain') nodes.push(shp({x:x+20,y:y+16,w:blockStyle==='icons'?18:40,h:blockStyle==='icons'?18:4,fill:blockStyle==='icons'?'#00000000':p.primary,stroke:p.primary,strokeWidth:blockStyle==='icons'?2:0,radius:2}))
-          if (!bullets.length) copyNodes.push(txt({x:x+16,y:y+8,w:48,h:rowHeight-16,text:step.number,font:e.font,size:28,weight:700,color:ensureContrast(p.primary,p.surface)}))
-          copyNodes.push(txt({x:x+(bullets.length?24:80),y:y+(bullets.length?28:8),w:cardWidth-(bullets.length?48:96),h:fit.height,text:step.text,font:e.font,size:fit.fontSize,weight:e.weight,color:blockStyle==='cards'?rowColor:ensureContrast(p.text,background),lineHeight:fit.lineHeight}))
+          if (!bullets.length){
+            const center=y+rowHeight/2
+            nodes.push(shp({x:x+18,y:center-22,w:44,h:44,shape:'ellipse',fill:p.primary}))
+            copyNodes.push(txt({x:x+20,y:center-16,w:40,h:32,text:step.number,font:e.font,size:22,weight:700,align:'center',color:ensureContrast('#ffffff',p.primary)}))
+          }
+          copyNodes.push(txt({x:x+(bullets.length?24:80),y:bullets.length?y+28:y+(rowHeight-fit.height)/2,w:cardWidth-(bullets.length?48:96),h:fit.height,text:step.text,font:e.font,size:fit.fontSize,weight:e.weight,color:blockStyle==='cards'?rowColor:ensureContrast(p.text,background),lineHeight:fit.lineHeight}))
         })
         continue
       }
@@ -1727,7 +1821,7 @@ function renderDesignSpec(spec: DesignSpec, si: SlideInput): { nodes: object[]; 
       const gutter=style==='icons'?52:style==='plain'?0:24,gap=style==='cards'?20:12
       const inset=style==='cards'?16:0
       let fitted:any[]=[]
-      for(let size=Math.min(e.size,32);size>=22;size--) {
+      for(let size=e.size;size>=22;size--) {
         try {
           fitted=blocks.map(text=>fitTextLayout({text,width:e.width-gutter-inset,height:e.height,preferredSize:size,minSize:size,lineHeight:1.3,font:e.font}))
           if(fitted.reduce((sum,f)=>sum+f.height+inset*2,0)+gap*(blocks.length-1)<=e.height)break
@@ -1775,6 +1869,9 @@ function renderDesignSpec(spec: DesignSpec, si: SlideInput): { nodes: object[]; 
     if (e.type === 'badge') {
       surface = p[e.fill]
       nodes.push(shp({ x: e.x, y: e.y, w: e.width, h: e.height, fill: surface, radius: e.radius || e.height / 2 }))
+    } else if(photoBackground){
+      surface='#616161'
+      resolvedColor='#ffffff'
     } else if (behind.length) {
       const top = behind[behind.length - 1]
       if (top.type === 'shape' && top.shape === 'rect' && !top.rotation && !top.borderRadius && /^#[0-9a-f]{6}$/i.test(top.fill) && top.x <= e.x && top.y <= e.y && top.x + top.width >= e.x + e.width && top.y + top.height >= e.y + e.height) surface = top.fill
@@ -1788,7 +1885,7 @@ function renderDesignSpec(spec: DesignSpec, si: SlideInput): { nodes: object[]; 
         }
       }
     }
-    copyNodes.push(txt({ x: e.x + padding, y: e.y + padding, w: e.width - padding * 2, h: fit.height, text: si.d.library && e.role === 'headline' && shouldHighlightSlide(si.slideNumber, si.totalSlides) ? emphasizeHeadline(content, (si.d.highlight_style ?? 0), resolvedColor ? (textColorOverLayers(p.accent, background, behind) ?? resolvedColor) : ensureContrast(p.accent,surface), p.primary, e.font, spec.system.typography.body) : content, font: e.font, size: fit.fontSize, weight: e.weight, color: resolvedColor ?? ensureContrast(p[e.color], surface), align: e.align, lineHeight: fit.lineHeight, letterSpacing: e.letterSpacing, shadow:e.shadow }))
+    copyNodes.push(txt({ x: e.x + padding, y: e.y + padding, w: e.width - padding * 2, h: fit.height, text: si.d.library && e.role === 'headline' && shouldHighlightSlide(si.slideNumber, si.totalSlides) ? emphasizeHeadline(content, (si.d.highlight_style ?? 0), resolvedColor ? (textColorOverLayers(p.accent, background, behind) ?? resolvedColor) : ensureContrast(p.accent,surface), p.primary, e.font, spec.system.typography.body, surface) : content, font: e.font, size: fit.fontSize, weight: e.weight, color: resolvedColor ?? ensureContrast(p[e.color], surface), align: e.align, lineHeight: fit.lineHeight, letterSpacing: e.letterSpacing, shadow:e.shadow }))
   }
   nodes.push(...copyNodes)
   if (si.d.logo_url && si.d.logo_placement !== 'none') {
@@ -1920,13 +2017,33 @@ function assembleSlide(si: SlideInput): { nodes: object[]; background: string } 
     if(needsCorner){
       const subjectNode=result.nodes.find((n:any)=>n.type==='image'&&n.src===cropped.url) as any
       if(!subjectNode&&(spec.background.type==='image'||spec.elements.some(e=>e.type==='image'&&e.assetId===si.d.slot_id)))throw Error('Cropped foreground was rendered as its source photograph')
-      if(subjectNode&&(edges.left&&subjectNode.x>1||edges.right&&subjectNode.x+subjectNode.width<W-1||edges.bottom&&subjectNode.y+subjectNode.height<H-1))throw Error('Resolved cutout does not meet its cropped canvas edge')
+      const alignment=subjectNode?.cropAlignment
+      if(subjectNode&&((alignment==='left'||!alignment&&edges.left)&&subjectNode.x>1||(alignment==='right'||!alignment&&edges.right)&&subjectNode.x+subjectNode.width<W-1||edges.bottom&&subjectNode.y+subjectNode.height<H-1))throw Error('Resolved cutout does not meet its cropped canvas edge')
+      if(subjectNode){
+        const visibleWidth=Math.max(0,Math.min(W,subjectNode.x+subjectNode.width)-Math.max(0,subjectNode.x))
+        const visibleHeight=Math.max(0,Math.min(H,subjectNode.y+subjectNode.height)-Math.max(0,subjectNode.y))
+        if(visibleWidth*visibleHeight/(subjectNode.width*subjectNode.height)<.84)throw Error('Refit cutout: too much of the resolved image is outside the canvas')
+      }
     }
     return result
   }
   if (si.d.design) {
     try { return renderChecked(si.d.design) }
-    catch (error) { console.warn('[canvas-designer] invalid layout, using fallback:', (error as Error).message) }
+    catch (error) {
+      if(si.d.design.background.type==='image'&&!needsCorner)throw error
+      console.warn('[canvas-designer] invalid layout, using fallback:', (error as Error).message)
+    }
+  }
+  if(!si.imageUrl&&si.d.design){
+    const system=si.d.design.system
+    const slot={slot_id:si.d.slot_id,resolvedAsset:null} as ResolvedSlot
+    const elements:any[]=[{type:'text',role:'headline',x:72,y:150,width:936,height:240,size:80}]
+    if(si.body)elements.push({type:'text',role:'body',x:72,y:420,width:936,height:470,size:36})
+    if(si.cta)elements.push({type:'text',role:'cta',x:72,y:970,width:936,height:60,size:26})
+    if(si.eyebrow)elements.push({type:'text',role:'eyebrow',x:72,y:60,width:936,height:40,size:24})
+    const repaired=fitResolvedSlide({background:{type:'solid',color:si.d.design.background.color},elements},slot,si,fitTextLayout,system.typography)
+    const spec=validateDesignSpec(repaired,slot,system)
+    if(spec)return renderChecked(spec)
   }
   if(needsCorner){
     // A cropped foreground must never fall through to a centered thumbnail or blurred photo card.
@@ -2224,7 +2341,7 @@ function buildSingleCanvas(copy: any, plan: ResolvedAssetPlan, dir: ArtDirection
   const txt_ = extractSlideText(copy, 0, 'single', 1)
   const { nodes, background } = assembleSlide({
     d, headline: txt_.headline, body: txt_.body, cta: txt_.cta, eyebrow: txt_.eyebrow,
-    assets: Object.fromEntries(plan.slots.map(s => [s.slot_id, s.resolvedAsset])), subject: slot?.resolvedAsset?.subject, imageUrl: slot?.resolvedAsset?.url ?? null, slideNumber: 0, totalSlides: 1,
+    assets: Object.fromEntries(plan.slots.map(s => [s.slot_id, s.resolvedAsset])), subject: slot?.treatment==='environmental'?undefined:slot?.resolvedAsset?.subject, imageUrl: slot?.resolvedAsset?.url ?? null, slideNumber: 0, totalSlides: 1,
   })
   return {
     id: uuidv4(), name, type: 'single', width: W, height: H,
@@ -2244,7 +2361,7 @@ function buildCarouselCanvas(copy: any, plan: ResolvedAssetPlan, dir: ArtDirecti
     const pageType = idx === 0 ? 'top_peer' : idx === total - 1 ? 'bottom_peer' : 'content'
     const { nodes, background } = assembleSlide({
       d, headline: txt_.headline, body: txt_.body, cta: txt_.cta, eyebrow: txt_.eyebrow,
-      assets: Object.fromEntries(plan.slots.map(s => [s.slot_id, s.resolvedAsset])), subject: slot.resolvedAsset?.subject, imageUrl: slot.resolvedAsset?.url ?? null, slideNumber: idx, totalSlides: total,
+      assets: Object.fromEntries(plan.slots.map(s => [s.slot_id, s.resolvedAsset])), subject: slot.treatment==='environmental'?undefined:slot.resolvedAsset?.subject, imageUrl: slot.resolvedAsset?.url ?? null, slideNumber: idx, totalSlides: total,
     })
     return {
       id: uuidv4(), type: pageType,
@@ -2263,18 +2380,21 @@ function buildCarouselCanvas(copy: any, plan: ResolvedAssetPlan, dir: ArtDirecti
 
 // ─── HTTP handler ─────────────────────────────────────────────────────────────
 
-async function softenCanvasLogos(canvas: any, logoUrl: string | null, variants?: any): Promise<void> {
+async function softenCanvasLogos(canvas: any, logoUrl: string | null, variants?: any, db?:any): Promise<void> {
   if (!logoUrl) return
   const pages = canvas.type === 'carousel' ? canvas.pages : [canvas]
   if (!pages.some((page: any) => page.nodes.some((n: any) => n.type === 'image' && n.src === logoUrl))) return
   let saved = variants?.source === logoUrl && variants.blackTransparent && variants.whiteTransparent ? variants : null
   if (!saved) {
     try { saved = await generateLogoVariants(logoUrl) }
-    catch (error) { console.warn('[canvas-designer] transparent logo unavailable:', (error as Error).message); return }
+    catch (error) { throw new Error('Unable to prepare transparent brand logo: '+(error as Error).message) }
   }
   const prepared = { src: saved.blackTransparent, foreground: '#000000', removed: true }
 
   for (const page of pages) {
+    const logos=page.nodes.filter((n:any)=>n.type==='image'&&n.src===logoUrl)
+    // Remove compact backing plates added by logo placement, keeping design panels.
+    page.nodes=page.nodes.filter((n:any)=>!(n.type==='shape'&&n.shape==='rect'&&logos.some((logo:any)=>n.x<=logo.x&&n.y<=logo.y&&n.x+n.width>=logo.x+logo.width&&n.y+n.height>=logo.y+logo.height&&n.width<=logo.width+32&&n.height<=logo.height+32)))
     const result: any[] = []
     for (const node of page.nodes) {
       if (node.type !== 'image' || node.src !== logoUrl) { result.push(node); continue }
@@ -2282,14 +2402,25 @@ async function softenCanvasLogos(canvas: any, logoUrl: string | null, variants?:
         const behind = result.filter(n => overlaps(node, rotatedBounds(n)))
         const top = behind.at(-1)
         const solid = top?.type === 'shape' && /^#[0-9a-f]{6}$/i.test(top.fill) && !top.rotation && top.x <= node.x && top.y <= node.y && top.x + top.width >= node.x + node.width && top.y + top.height >= node.y + node.height
-        const bg = solid ? top.fill : page.background ?? canvas.background
+        const photoBehind=behind.findLast(n=>n.type==='image')
+        let bg = solid ? top.fill : page.background ?? canvas.background
+        if(!solid&&photoBehind){
+          bg=await sampleLogoBackdrop(photoBehind,node,db)
+          for(const layer of behind.filter(n=>n.type==='gradient'&&n.angle===180)){
+            const position=Math.max(0,Math.min(100,(node.y+node.height/2-layer.y)/layer.height*100))
+            const stops=layer.stops,hi=stops.findIndex((s:any)=>s.position>=position)
+            const b=stops[hi<0?stops.length-1:hi],a=stops[Math.max(0,hi-1)]
+            const t=b.position===a.position?0:(position-a.position)/(b.position-a.position)
+            const alpha=(a.alpha+(b.alpha-a.alpha)*t)/100
+            if(a.color==='#000000'&&b.color==='#000000')bg='#'+[1,3,5].map(i=>Math.round(parseInt(bg.slice(i,i+2),16)*(1-alpha)).toString(16).padStart(2,'0')).join('')
+          }
+        }
         const selected = contrastRatio('#000000', bg) >= contrastRatio('#ffffff', bg)
           ? { ...prepared, src: saved.blackTransparent, foreground: '#000000' }
           : { ...prepared, src: saved.whiteTransparent, foreground: '#ffffff' }
         const width = node.width, height = node.height
-        const src = await containPreparedLogo(selected, width, height)
-        result.push({ ...node, src, width, height, borderRadius: 0, aspectRatio: width / height })
-      } catch { result.push(node) }
+        result.push({ ...node, src:selected.src, width, height, borderRadius: 0, mask:'none',objectFit:'contain',aspectRatio: width / height })
+      } catch (error) { throw new Error('Unable to place transparent brand logo: '+(error as Error).message) }
     }
     page.nodes = result
   }
@@ -2314,6 +2445,25 @@ export async function handleDesignCanvas(db: any, body: any, persist = true) {
 
     if (!Array.isArray(resolvedPlan.slots) || !resolvedPlan.slots.length) return corsify(NextResponse.json({ error: 'resolvedPlan.slots must not be empty' }, { status: 400 }))
     const format = resolvedPlan.format ?? copy.format ?? 'single'
+    const disposition=resolvedPlan.layoutPlan?.imageDisposition||brandContext?.imageDisposition
+    if(disposition&&!resolvedPlan.layoutPlan){
+      resolvedPlan={...resolvedPlan,layoutPlan:planPostLayout(brandContext,copy,{format},requestedDesignId,disposition)}
+      resolvedPlan.layoutPlan.slots=resolvedPlan.layoutPlan.slots.map((s:any,index:number)=>({...s,slot_id:resolvedPlan.slots[index]?.slot_id||s.slot_id}))
+    }
+    if(resolvedPlan.layoutPlan){
+      if(disposition==='background'||disposition==='none'){
+        resolvedPlan={...resolvedPlan,layoutPlan:{...resolvedPlan.layoutPlan,slots:resolvedPlan.layoutPlan.slots.map((layout:any)=>({...layout,
+          background:disposition==='background'&&layout.needs_visual,
+          needs_visual:disposition==='none'?false:layout.needs_visual,
+          treatment:'environmental',
+          spec:disposition==='none'?{...layout.spec,background:{...layout.spec.background,type:'solid'},elements:layout.spec.elements.filter((e:any)=>e.type!=='image')}:layout.spec
+        }))}}
+      }
+      resolvedPlan={...resolvedPlan,slots:resolvedPlan.slots.map((s:any,index:number)=>{
+        const layout=resolvedPlan.layoutPlan.slots[index]
+        return layout?{...s,treatment:layout.treatment,needs_visual:layout.needs_visual,resolvedAsset:layout.needs_visual?s.resolvedAsset:null}:s
+      })}
+    }
     resolvedPlan.format = format
     const name    = safe(canvasName, `${brandContext?.name ?? 'Post'} — ${copy.headline ?? copy.slides?.[0]?.headline ?? ''}`.slice(0, 80))
 
@@ -2374,7 +2524,8 @@ export async function handleDesignCanvas(db: any, body: any, persist = true) {
       ? buildCarouselCanvas(copy, resolvedPlan, direction, name)
       : buildSingleCanvas(copy, resolvedPlan, direction, name)
 
-    await softenCanvasLogos(canvas, logoUrl, brandContext?.logoVariants)
+    const logoVariants=logoUrl?await ensureBrandLogoVariants(db,brandContext):null
+    await softenCanvasLogos(canvas, logoUrl, logoVariants,db)
 
     // ── Persist ────────────────────────────────────────────────────────────
     const saved = await persistInlineImages(db, { ...canvas, designSelection: {paletteId:palettePick.id,id:preset?.id || selected.id,name:preset?.name || selected.name,tags:preset?.tags || selected.tags}, designInput:{brandContext,copy,resolvedPlan}, designCampaign: { brand: campaignBrand, index: campaignIndex, concept: campaignConcept(resolvedPlan), issues: designIssues(direction, copy, resolvedPlan) } })

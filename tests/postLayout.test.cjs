@@ -37,10 +37,9 @@ test('background layouts retain scene and missing assets leave a usable canvas',
  const plan=planPostLayout(brand,{headline:'Travel'},{}),layout=plan.slots[0]
  assert.equal(layout.treatment,'environmental');assert.equal(layout.frame.width,1080)
  const fitted=fitPlannedLayout(layout,{resolvedAsset:{url:'scene',width:800,height:1200},treatment:'environmental'})
- assert.equal(fitted.background.type,'solid')
- const image=fitted.elements.find(e=>e.type==='image'),title=fitted.elements.find(e=>e.role==='headline')
- assert.equal(image.width/image.height,800/1200)
- assert.ok(image.y+image.height<=title.y)
+ assert.equal(fitted.background.type,'image')
+ assert.equal(fitted.elements.some(e=>e.type==='image'),false)
+ assert.ok(fitted.elements.find(e=>e.role==='headline').y>=620)
  assert.equal(fitPlannedLayout(layout,{}).background.type,'solid')
 })
 test('briefs prioritize each slide action over the shared logistics topic',()=>{
@@ -53,7 +52,7 @@ test('briefs prioritize each slide action over the shared logistics topic',()=>{
  assert.match(briefs[1].subject_description,/photograph|products/)
  assert.match(briefs[2].subject_description,/payment|bank card/)
  assert.match(briefs[3].subject_description,/warehouse|parcel/)
- assert.ok(briefs.every(b=>b.generation_prompt.includes('85–92 percent')))
+ assert.ok(briefs.every(b=>b.generation_prompt.includes('10 percent clear margin on each side')))
 })
 test('short-copy layouts expand foreground imagery instead of leaving thumbnails',()=>{
  const result=arrangeReadableBody({background:{type:'solid'},elements:[{type:'text',role:'headline',x:72,y:100,width:420,height:300},{type:'text',role:'body',x:72,y:470,width:420,height:300},{type:'image',x:650,y:600,width:250,height:250}]},'A concise explanation.')
@@ -61,4 +60,51 @@ test('short-copy layouts expand foreground imagery instead of leaving thumbnails
  assert.equal(image.width,560);assert.equal(image.y+image.height,1080)
  const body=result.elements.find(e=>e.role==='body')
  assert.ok(body.x+body.width<image.x)
+})
+
+test('brand image preference restricts every visual slide and permits dense text-only slides',()=>{
+ const template={background:{type:'image'},elements:[{type:'text',role:'headline',x:72,y:100,width:900,height:250},{type:'text',role:'body',x:72,y:440,width:400,height:470}]}
+ const brand={designs:[{id:'brand',baseId:'editorial',blueprint:{imagery:{placement:'background'},templates:{cover:template,content:template,closing:template}}}]}
+ const copy={slides:[{headline:'Obras antes e depois'},{headline:'Details',body:'Detailed information about our process and delivery. '.repeat(12)}]}
+ for(const imageDisposition of ['cutout','background','framed','none']){
+  const plan=planPostLayout({...brand,imageDisposition},copy,{})
+  assert.equal(plan.imageDisposition,imageDisposition)
+  assert.equal(plan.slots[1].needs_visual,false)
+  const first=plan.slots[0],image=first.spec.elements.find(e=>e.type==='image')
+  if(imageDisposition==='none'){assert.ok(plan.slots.every(s=>!s.needs_visual&&!s.background));assert.equal(image,undefined)}
+  if(imageDisposition==='background'){assert.equal(first.background,true);assert.equal(image,undefined)}
+  if(imageDisposition==='cutout'){assert.equal(first.background,false);assert.equal(image.image_variant,'subject');assert.equal(first.treatment,'isolated_subject')}
+  if(imageDisposition==='framed'){
+   assert.equal(first.background,false);assert.equal(image.mask,'rounded');assert.equal(first.treatment,'environmental')
+   const fitted=fitPlannedLayout(first,{slot_id:first.slot_id,treatment:'environmental',resolvedAsset:{url:'photo',width:1200,height:600}})
+   const photo=fitted.elements.find(e=>e.type==='image');assert.equal(photo.width,image.width);assert.equal(photo.height,image.height)
+  }
+ }
+ const changed=planPostLayout({...brand,imageDisposition:'cutout'},copy,{},undefined,'none')
+ assert.ok(changed.slots.every(s=>!s.needs_visual));assert.equal(changed.imageDisposition,'none')
+ assert.equal(brand.imageDisposition,undefined)
+})
+
+const {localAssetBrief:plannerBrief}=new Function(load('lib/designs/localAssetBrief.ts')+';return {localAssetBrief}')()
+const {handlePlanAssets}=new Function('planPostLayout','localAssetBrief','NextResponse','corsify',load('lib/handlers/assetPlannerHandler.ts')+';return {handlePlanAssets}')(planPostLayout,plannerBrief,{json:body=>body},r=>r)
+test('planner uses saved background preference despite stale client brand, and honors explicit post override',async()=>{
+ const template={background:{type:'image'},elements:[{type:'text',role:'headline',x:72,y:100,width:900,height:250}]}
+ const savedBrand={imageDisposition:'background',designs:[{id:'brand',baseId:'editorial',blueprint:{imagery:{placement:'background'},templates:{cover:template,content:template,closing:template}}}]}
+ const db={collection:name=>name==='flows'?{findOne:async q=>{assert.equal(q.id,'flow-1');return {brandContext:savedBrand}}}:{find:()=>({limit:()=>({toArray:async()=>[]})})}}
+ const request={brandContext:{id:'flow-1',imageDisposition:'cutout'},brand_id:'brand_flow-1',copy:{headline:'Building renovation'},idea:{id:'post'}}
+ const layout=await handlePlanAssets(db,{...request,phase:'canvas'})
+ assert.equal(layout.imageDisposition,'background');assert.equal(layout.slots[0].background,true)
+ const plan=await handlePlanAssets(db,{...request,layoutPlan:layout})
+ assert.equal(plan.slots[0].preferred_source,'unsplash');assert.equal(plan.slots[0].treatment,'environmental')
+ const override=await handlePlanAssets(db,{...request,phase:'canvas',imageDisposition:'none'})
+ assert.equal(override.imageDisposition,'none');assert.ok(override.slots.every(s=>!s.needs_visual))
+ const byBrand=await handlePlanAssets(db,{...request,brandContext:{},phase:'canvas'})
+ assert.equal(byBrand.imageDisposition,'background');assert.equal(savedBrand.imageDisposition,'background')
+})
+
+test('carousel backgrounds retain a shared tone despite contrasting templates',()=>{
+ const elements=[{type:'text',role:'headline',x:72,y:150,width:936,height:240,size:80}]
+ const brand={designs:[{id:'brand',baseId:'editorial',blueprint:{imagery:{placement:'none'},templates:{cover:{background:{type:'solid',color:'bg'},elements},content:{background:{type:'gradient',color:'primary',to:'accent'},elements},closing:{background:{type:'radial',color:'accent'},elements}}}}]}
+ const plan=planPostLayout(brand,{slides:[{headline:'First'},{headline:'Second'},{headline:'Third'}]}, {})
+ assert.equal(new Set(plan.slots.map(s=>JSON.stringify(s.spec.background))).size,1)
 })

@@ -10,7 +10,7 @@ const engine = vm.runInNewContext(stripTypeScriptTypes(source) + '\n({assembleSl
   ...vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname, '../lib/designs/library.ts'),'utf8').replace(/export /g,''))+'\n({DESIGN_LIBRARY,librarySpec,splitBulletItems})'),
   ...vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname,'../lib/designs/palettes.ts'),'utf8').replace(/export /g,''))+'\n({PALETTE_PICKS,paletteColors,choosePalette,constrainBrandPalette})'),
   ...vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname,'../lib/designs/brandBlueprint.ts'),'utf8').replace(/export /g,''))+'\n({blueprintSpec,complementaryAccent})'),
-  ...vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname,'../lib/designs/postLayout.ts'),'utf8').replace(/^import .*$/gm,'').replace(/export /g,''))+'\n({arrangeReadableBody,fitResolvedSlide,fitPlannedLayout,subjectOverlaps})'),
+  ...vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname,'../lib/designs/postLayout.ts'),'utf8').replace(/^import .*$/gm,'').replace(/export /g,''))+'\n({arrangeReadableBody,fitResolvedSlide,fitPlannedLayout,subjectOverlaps,parseDesignSequence,parseDesignBullets,planPostLayout})'),
   canvasBrand: async (db,canvas)=>canvas.designInput?.brandContext||canvas.brandContext||{}, withoutEmoji: copyTools.withoutEmoji, prepareSubjectAssets: async (db, plan) => plan, hydrateSubjectCrops: async (db, plan) => plan, persistInlineImages: async (db, value) => value, uuidv4: require('node:crypto').randomUUID, console, process: { env: {} },
   NextResponse: { json: (body, options) => ({ body, status: options?.status ?? 200 }) }, corsify: response => response,
 })
@@ -125,13 +125,16 @@ test('missing copy and colliding text invalidate the layout', () => {
   const collision = engine.validateDesignSpec({ elements: [text, { ...text, role: 'body' }] }, slot)
   assert.throws(() => engine.renderDesignSpec(collision, input), /collide/)
 })
-test('image-backed copy gets a contrast surface; decoration cannot hide text', () => {
+test('background photo stays full bleed with a dark gradient behind white copy', () => {
   const d = direction({ ...spec, background: { type: 'image' }, elements: [text, { type: 'ring', x: 700, y: 100, width: 100, height: 100, layer: 20 }] }).slides[0]
   const result = engine.renderDesignSpec(d.design, { d, headline: 'Title', body: '', cta: '', eyebrow: '', imageUrl: slot.resolvedAsset.url })
   assert.equal(result.nodes.at(-1).type, 'text')
-  assert.equal(result.nodes.at(-2).type, 'shape')
-  assert.equal(result.nodes.at(-2).width, text.width)
-  assert.equal(result.nodes.at(-2).x, text.x)
+  const scrim=result.nodes.at(-2)
+  assert.equal(scrim.type, 'gradient')
+  assert.equal(scrim.width,1080);assert.equal(scrim.angle,180)
+  assert.equal(result.nodes.at(-1).color,'#ffffff')
+  assert.ok(scrim.stops[1].alpha>=60&&scrim.stops[1].alpha<=65)
+  assert.ok(scrim.y+scrim.height*scrim.stops[1].position/100<=text.y)
   assert.equal(result.nodes.find(n => n.shape === 'ellipse').fill, '#00000000')
 })
 test('carousel matches slot IDs even when AI reorders slides', () => {
@@ -574,19 +577,20 @@ test('text-only fitting adapts to longer copy and keeps a closing badge readable
  }
 })
 
-test('cutouts cropped on both sides fit full width without rejecting the canvas',()=>{
+test('cutouts cropped on both sides prioritize visibility at a primary corner',()=>{
  for(const bottom of [true,false]){
   const asset={url:'photo',subject:{url:'cutout',width:600,height:800,cropEdges:{left:true,right:true,bottom}}},slot={slot_id:'a',resolvedAsset:asset}
   const content={headline:'Expanda o seu negócio',body:'Alcance clientes em todo o país com parceiros locais.',cta:'Conheça a plataforma',eyebrow:''}
   const raw={background:{type:'solid'},elements:[{type:'text',role:'headline',x:72,y:150,width:936,height:250,size:76},{type:'text',role:'body',x:72,y:430,width:720,height:300,size:30},{type:'text',role:'cta',x:72,y:960,width:720,height:70,size:26},{type:'image',assetId:'a',x:300,y:100,width:300,height:300}]}
   const fitted=engine.fitResolvedSlide(raw,slot,content,engine.fitTextLayout)
-  assert.equal(fitted.elements.find(e=>e.type==='image').width,1080)
+  assert.ok(fitted.elements.find(e=>e.type==='image').width>=450)
   const system=engine.normalizeDesignSystem({spacing:'compact'}),spec=engine.validateDesignSpec(fitted,slot,system)
   const d={...direction().slides[0],library:true,design:spec}
   const result=engine.assembleSlide({d,...content,imageUrl:asset.url,subject:asset.subject,assets:{a:asset},slideNumber:3,totalSlides:5})
   const image=result.nodes.find(n=>n.src==='cutout')
-  assert.equal(image.x,0);assert.equal(image.width,1080)
+  assert.equal(image.x,0);assert.ok(image.width>=450)
   assert.ok(image.y>0);assert.ok(image.y+image.height>=1080)
+  assert.ok((1080-image.y)/image.height>=.85)
   assert.ok(result.nodes.some(n=>n.text===content.cta))
  }
 })
@@ -610,4 +614,186 @@ test('a slide with no safe logo space retains its content instead of throwing',(
  const result=engine.renderDesignSpec(spec,{d,headline:'Example',body:'',cta:'',eyebrow:'',imageUrl:null})
  assert.ok(result.nodes.some(n=>n.text==='Example'))
  assert.equal(result.nodes.filter(n=>n.src==='brand-logo').length,0)
+})
+
+test('image assemblies keep their lower props visible instead of rewarding off-canvas size',()=>{
+ const content={headline:'Catálogo atualizado em tempo real',body:'A Ikarus Pay sincroniza automaticamente o inventário virtual com os fornecedores, mostrando ao cliente apenas o stock real.',cta:'',eyebrow:''}
+ const asset={url:'photo',subject:{url:'cutout',width:1000,height:1200,cropEdges:{left:true,right:true,bottom:true},silhouette:[{top:0,bottom:.4,left:.6,right:1},{top:.4,bottom:.7,left:.35,right:1},{top:.7,bottom:1,left:0,right:1}]}}
+ const slot={slot_id:'a',resolvedAsset:asset}
+ const raw={background:{type:'solid'},elements:[{type:'text',role:'headline',x:72,y:130,width:936,height:250,size:76},{type:'text',role:'body',x:72,y:430,width:520,height:300,size:30},{type:'image',assetId:'a',x:0,y:450,width:1080,height:1296,bleed_bottom:true}]}
+ const fitted=engine.fitResolvedSlide(raw,slot,content,engine.fitTextLayout)
+ const image=fitted.elements.find(e=>e.type==='image')
+ assert.ok((Math.min(1080,image.y+image.height)-image.y)/image.height>=.85)
+ assert.equal(image.crop_alignment,'right')
+ const system=engine.normalizeDesignSystem({spacing:'compact'}),spec=engine.validateDesignSpec(fitted,slot,system)
+ const d={...direction().slides[0],library:true,design:spec}
+ const result=engine.assembleSlide({d,...content,imageUrl:asset.url,subject:asset.subject,assets:{a:asset},slideNumber:2,totalSlides:5})
+ const node=result.nodes.find(n=>n.src==='cutout')
+ assert.ok((Math.min(1080,node.y+node.height)-node.y)/node.height>=.84)
+ assert.equal(node.x+node.width,1080)
+ const visibleProps=Math.max(0,Math.min(1080,node.y+node.height)-(node.y+node.height*.7))/(node.height*.3)
+ assert.ok(visibleProps>=.5)
+})
+
+test('unnumbered arrow sequence becomes a connected four-stage flow',()=>{
+ const content={headline:'Como a automação da Ikarus Pay funciona',body:'Registo automático do pedido → Atualização instantânea de stock → Notificação imediata ao cliente → Preparação e envio pelo fulfilment Ikarus',cta:'',eyebrow:''}
+ const steps=engine.splitDesignSteps(content.body)
+ assert.equal(steps.length,4)
+ assert.equal(steps.map(s=>s.text).join(' → '),content.body)
+ const raw={background:{type:'solid'},elements:[{type:'text',role:'headline',x:72,y:150,width:936,height:250,size:76},{type:'text',role:'body',x:72,y:560,width:936,height:200,size:30}]}
+ const fitted=engine.fitResolvedSlide(raw,{slot_id:'a'},content,engine.fitTextLayout)
+ const system=engine.normalizeDesignSystem({spacing:'compact'}),spec=engine.validateDesignSpec(fitted,{slot_id:'a'},system)
+ const d={...direction().slides[0],library:true,block_style:'plain',design:spec}
+ const result=engine.renderDesignSpec(spec,{d,...content,imageUrl:null})
+ assert.equal(result.nodes.filter(n=>n.type==='text'&&steps.some(s=>s.text===n.text)).length,4)
+ assert.equal(result.nodes.filter(n=>n.type==='text'&&['01','02','03','04'].includes(n.text)).length,4)
+ assert.ok(result.nodes.some(n=>n.type==='shape'&&n.width===2&&n.height>100))
+ assert.ok(!result.nodes.some(n=>n.text===content.body))
+})
+
+test('numbered explanations keep internal arrows inside three readable flow stages',()=>{
+ const content={headline:'Como funciona a sincronização',body:'1. Produto adicionado ao catálogo → atualização automática de stock.\n2. Pedido confirmado → informação de entrega enviada ao parceiro logístico.\n3. Logística coleta e entrega → status atualizado em tempo real para o cliente.',cta:'',eyebrow:''}
+ const steps=engine.splitDesignSteps(content.body)
+ assert.equal(steps.length,3);assert.ok(steps.every(s=>s.text.includes('→')))
+ const raw={background:{type:'solid'},elements:[{type:'text',role:'headline',x:120,y:250,width:840,height:200,size:76},{type:'text',role:'body',x:120,y:560,width:840,height:160,size:26}]}
+ const fitted=engine.fitResolvedSlide(raw,{slot_id:'a'},content,engine.fitTextLayout)
+ const system=engine.normalizeDesignSystem({spacing:'compact'}),spec=engine.validateDesignSpec(fitted,{slot_id:'a'},system)
+ const d={...direction().slides[0],library:true,block_style:'cards',design:spec}
+ const result=engine.renderDesignSpec(spec,{d,...content,imageUrl:null})
+ const stages=result.nodes.filter(n=>steps.some(s=>s.text===n.text))
+ assert.equal(stages.length,3);assert.ok(stages.every(n=>n.fontSize>=24))
+ assert.ok(fitted.elements.find(e=>e.role==='body').height>300)
+})
+
+test('testimonial fitting expands type and preserves a single quotation',()=>{
+ const content={headline:'Cliente satisfeito',body:'“Desde que passei a usar a Ikarus Pay, meus carrinhos abandonados reduziram pela metade. O processo está sempre sincronizado e os clientes recebem os produtos rapidamente.” – João, dono da LojaTech.',cta:'',eyebrow:''}
+ assert.equal(engine.splitBodyBlocks(content.body).length,0)
+ const raw={background:{type:'solid'},elements:[{type:'text',role:'headline',x:600,y:160,width:400,height:220,size:76},{type:'text',role:'body',x:600,y:560,width:400,height:260,size:26},{type:'number',x:72,y:400,width:400,height:300}]}
+ const fitted=engine.fitResolvedSlide(raw,{slot_id:'a'},content,engine.fitTextLayout)
+ const body=fitted.elements.find(e=>e.role==='body')
+ assert.ok(body.width>=760);assert.ok(body.size>30)
+ assert.ok(!fitted.elements.some(e=>e.type==='number'))
+})
+
+test('gradient emphasis has two readable tonal stops on the actual surface',()=>{
+ for(const surface of ['#13220c','#f7f8f4']){
+  const marked=engine.emphasizeHeadline('A falta de sincronização afasta clientes?',4,'#9cd475','#294222','Inter','Inter',surface)
+  const stops=marked.match(/linear-gradient\(110deg, (#[0-9a-f]{6}), (#[0-9a-f]{6})\)/i)
+  assert.ok(stops)
+  assert.ok(engine.contrastRatio(stops[1],surface)>=4.5);assert.ok(engine.contrastRatio(stops[2],surface)>=4.5)
+ }
+})
+
+test('large corner decorations become editable brand-colored abstract petals',()=>{
+ const system=engine.normalizeDesignSystem({spacing:'compact'}),slot={slot_id:'a'}
+ const raw={background:{type:'solid'},elements:[{type:'text',role:'headline',x:72,y:150,width:900,height:240,size:76},{type:'ring',x:550,y:550,width:500,height:500,color:'primary',opacity:10,layer:-6}]}
+ const spec=engine.validateDesignSpec(raw,slot,system),d={...direction().slides[0],design:spec}
+ const result=engine.renderDesignSpec(spec,{d,headline:'Brand story',body:'',cta:'',eyebrow:'',imageUrl:null})
+ const petals=result.nodes.filter(n=>n.type==='shape'&&n.shape==='ellipse')
+ assert.ok(petals.length>=4);assert.ok(petals.some(n=>n.rotation>0))
+ assert.ok(petals.every(n=>n.fill.startsWith(d.palette.primary)||n.stroke.startsWith(d.palette.primary)))
+})
+
+test('testimonial renders a readable panel with separate attribution',()=>{
+ const content={headline:'Cliente satisfeito',body:'“Desde que passei a usar a Ikarus Pay, meus carrinhos abandonados reduziram pela metade. O processo está sempre sincronizado e os clientes recebem os produtos rapidamente.” – João, dono da LojaTech.',cta:'',eyebrow:''}
+ const raw={background:{type:'solid'},elements:[{type:'text',role:'headline',x:72,y:150,width:936,height:240,size:90},{type:'text',role:'body',x:72,y:440,width:936,height:470,size:42}]}
+ const system=engine.normalizeDesignSystem({spacing:'compact'}),spec=engine.validateDesignSpec(raw,{slot_id:'a'},system)
+ const d={...direction().slides[0],library:true,design:spec}
+ const result=engine.renderDesignSpec(spec,{d,...content,imageUrl:null})
+ const author=result.nodes.find(n=>n.text==='João, dono da LojaTech.')
+ const quote=result.nodes.find(n=>n.text?.startsWith('Desde que passei'))
+ assert.ok(author);assert.ok(quote);assert.equal(author.fontWeight,700)
+ assert.ok(author.y>=quote.y+quote.height)
+ const panel=result.nodes.find(n=>n.type==='shape'&&n.width===936&&n.height===470)
+ assert.ok(panel);assert.ok(engine.contrastRatio(quote.color,panel.fill)>=4.5)
+ assert.ok(!result.nodes.some(n=>n.text===content.body))
+})
+
+test('reviews vary between accent cards, editorial quotes and centered frames',()=>{
+ const content={headline:'Cliente satisfeito',body:'“O processo está sempre sincronizado e os clientes recebem os produtos rapidamente.” – João',cta:'',eyebrow:''}
+ const spec=engine.validateDesignSpec({background:{type:'solid'},elements:[{type:'text',role:'headline',x:72,y:100,width:936,height:220,size:76},{type:'text',role:'body',x:72,y:400,width:936,height:470,size:42}]},{slot_id:'a'},engine.normalizeDesignSystem({spacing:'compact'}))
+ const d={...direction().slides[0],library:true,design:spec}
+ const outputs=[0,1,2].map(slideNumber=>engine.renderDesignSpec(spec,{d,...content,imageUrl:null,slideNumber}).nodes)
+ assert.equal(outputs.filter(nodes=>nodes.some(n=>n.text==='“')).length,1)
+ assert.equal(outputs.filter(nodes=>nodes.some(n=>n.text==='João'&&n.textAlign==='center')).length,1)
+ for(const nodes of outputs){
+  const quote=nodes.find(n=>n.text?.startsWith('O processo'))
+  const author=nodes.find(n=>n.text==='João')
+  assert.ok(quote&&author);assert.ok(author.y>=quote.y+quote.height)
+ }
+})
+
+test('framed environmental photos preserve their mask and fill the frame',()=>{
+ const asset={url:'scene',width:1400,height:700,subject:{url:'unused-cutout',width:400,height:800}}
+ const slot={slot_id:'a',treatment:'environmental',resolvedAsset:asset}
+ const spec=engine.validateDesignSpec({background:{type:'solid'},elements:[{type:'text',role:'headline',x:72,y:80,width:900,height:220,size:70},{type:'image',assetId:'a',image_variant:'photo',mask:'rounded',radius:48,x:520,y:400,width:480,height:550}]},slot,engine.normalizeDesignSystem({spacing:'compact'}))
+ const d={...direction().slides[0],slot_id:'a',design:spec}
+ const result=engine.renderDesignSpec(spec,{d,headline:'Photo story',body:'',cta:'',eyebrow:'',imageUrl:asset.url,assets:{a:asset}})
+ const image=result.nodes.find(n=>n.src==='scene')
+ assert.ok(image);assert.equal(image.mask,'rounded');assert.equal(image.objectFit,'cover')
+ assert.equal(image.width,480);assert.equal(image.height,550)
+ assert.ok(!result.nodes.some(n=>n.src==='unused-cutout'))
+})
+
+test('inline numbered analysis becomes four flow rows outside library mode',()=>{
+ const body='1. Limpe os dados – elimine duplicados e erros. 2. Segmente por cliente, produto ou canal. 3. Compare métricas ao longo do tempo. 4. Detecte padrões e lacunas.'
+ const content={headline:'Passo a passo da análise',body,cta:'',eyebrow:''}
+ const raw={background:{type:'solid',color:'bg'},elements:[{type:'text',role:'headline',x:72,y:150,width:936,height:220,size:80},{type:'text',role:'body',x:72,y:420,width:936,height:480,size:36}]}
+ const fitted=engine.fitResolvedSlide(raw,{slot_id:'a'},content,engine.fitTextLayout)
+ const spec=engine.validateDesignSpec(fitted,{slot_id:'a'},engine.normalizeDesignSystem({spacing:'compact'}))
+ const d={...direction().slides[0],library:false,design:spec}
+ const result=engine.renderDesignSpec(spec,{d,...content,imageUrl:null})
+ assert.equal(engine.splitDesignSteps(body).length,4)
+ assert.equal(result.nodes.filter(n=>['01','02','03','04'].includes(n.text)).length,4)
+ assert.ok(!result.nodes.some(n=>n.text===body))
+})
+
+test('background photo KPI copy fits together over a full-canvas image',()=>{
+ const content={headline:'CAC – Custo de Aquisição de Cliente',body:'Valor médio gasto para conquistar um novo cliente. Exemplo: soma dos investimentos em campanhas dividido pelo número de clientes adquiridos no mesmo período.',cta:'',eyebrow:''}
+ const raw={background:{type:'image',color:'bg'},elements:[{type:'text',role:'headline',x:72,y:620,width:936,height:170,size:80},{type:'text',role:'body',x:72,y:814,width:936,height:130,size:34}]}
+ const slot={slot_id:'a',treatment:'environmental',resolvedAsset:{url:'office',width:600,height:1200}}
+ const fitted=engine.fitResolvedSlide(raw,slot,content,engine.fitTextLayout)
+ const system=engine.normalizeDesignSystem({spacing:'compact'}),spec=engine.validateDesignSpec(fitted,slot,system)
+ const d={...direction().slides[0],slot_id:'a',library:true,design:spec}
+ const result=engine.assembleSlide({d,...content,imageUrl:'office',assets:{a:slot.resolvedAsset},slideNumber:1,totalSlides:5})
+ const image=result.nodes.find(n=>n.src==='office')
+ assert.equal(image.x,0);assert.equal(image.y,0);assert.equal(image.width,1080);assert.equal(image.height,1080);assert.equal(image.mask,'none')
+ const title=fitted.elements.find(e=>e.role==='headline'),body=fitted.elements.find(e=>e.role==='body')
+ assert.equal(body.y-title.y-title.height,12);assert.ok(body.y+body.height<=1008);assert.ok(body.size>=24)
+ assert.ok(result.nodes.some(n=>n.type==='gradient'&&n.angle===180))
+})
+
+test('older background plans recover the carousel eyebrow before rendering',()=>{
+ const content={headline:'Customer acquisition',body:'Measure the cost of each new customer.',cta:'',eyebrow:'01'}
+ const slot={slot_id:'a',treatment:'environmental',resolvedAsset:{url:'photo'}}
+ const raw={background:{type:'image',color:'bg'},elements:[{type:'text',role:'headline',x:72,y:620,width:936,height:170,size:80},{type:'text',role:'body',x:72,y:814,width:936,height:130,size:34}]}
+ const fitted=engine.fitResolvedSlide(raw,slot,content,engine.fitTextLayout)
+ assert.equal(raw.elements.some(e=>e.role==='eyebrow'),false)
+ const spec=engine.validateDesignSpec(fitted,slot,engine.normalizeDesignSystem({spacing:'compact'}))
+ const d={...direction().slides[0],slot_id:'a',library:true,design:spec}
+ const result=engine.assembleSlide({d,...content,imageUrl:'photo',slideNumber:1,totalSlides:3})
+ assert.equal(result.nodes.filter(n=>n.text==='01').length,1)
+ assert.ok(result.nodes.some(n=>n.src==='photo'&&n.width===1080))
+ const again=engine.fitResolvedSlide(fitted,slot,content,engine.fitTextLayout)
+ assert.equal(again.elements.filter(e=>e.role==='eyebrow').length,1)
+})
+
+test('introductory sentence and bullets become separate introduction and three cards',()=>{
+ const content={headline:'Da análise à estratégia',body:'Transformamos os insights em ações concretas:\n• Estratégia de conteúdo segmentado\n• Otimização de campanhas de mídia\n• Automação de processos de vendas',cta:'',eyebrow:''}
+ const raw={background:{type:'solid',color:'bg'},elements:[{type:'text',role:'headline',x:72,y:150,width:936,height:240,size:96},{type:'text',role:'body',x:72,y:420,width:936,height:470,size:42}]}
+ const slot={slot_id:'a'},fitted=engine.fitResolvedSlide(raw,slot,content,engine.fitTextLayout)
+ const spec=engine.validateDesignSpec(fitted,slot,engine.normalizeDesignSystem({spacing:'compact'}))
+ const d={...direction().slides[0],library:false,design:spec}
+ const result=engine.assembleSlide({d,...content,imageUrl:null})
+ assert.equal(result.nodes.filter(n=>n.text==='Transformamos os insights em ações concretas:').length,1)
+ for(const text of content.body.split('\n').slice(1).map(s=>s.slice(2))){
+  const node=result.nodes.find(n=>n.text===text);assert.ok(node);assert.ok(node.fontSize>=24)
+  assert.ok(result.nodes.some(n=>n.type==='shape'&&n.shape==='rect'&&n.x<node.x&&n.y<node.y&&n.x+n.width>=node.x+node.width&&n.y+n.height>=node.y+node.height))
+ }
+ assert.ok(!result.nodes.some(n=>n.text===content.body))
+})
+
+test('retired boxed gradient text decoration is not rendered',()=>{
+ const text='Transform data into better decisions'
+ assert.equal(engine.emphasizeHeadline(text,6,'#77aa44','#111111'),text)
 })
