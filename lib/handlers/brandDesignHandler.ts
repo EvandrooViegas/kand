@@ -40,7 +40,7 @@ export async function handleBrandDesigns(db: any, body: any) {
 
 export async function handleDeleteBrandDesign(db: any, body: any) {
   if (typeof body.flowId !== 'string' || typeof body.designId !== 'string') return NextResponse.json({error:'Flow and design are required'},{status:400})
-  const result=await db.collection('flows').updateOne({id:body.flowId},{$pull:{'brandContext.designs':{id:body.designId}},$set:{updatedAt:new Date()}})
-  if (!result.matchedCount) return NextResponse.json({error:'Brand not found'},{status:404})
+  const result=await db.collection('flows').updateOne({id:body.flowId,'brandContext.designs.id':body.designId,$expr:{$gt:[{$size:{$ifNull:['$brandContext.designs',[]]}},3]}},{$pull:{'brandContext.designs':{id:body.designId}},$set:{updatedAt:new Date()}})
+  if (!result.matchedCount) return NextResponse.json({error:'Every brand must keep at least 3 designs. Add another design before deleting one.'},{status:409})
   return NextResponse.json({success:true})
 }

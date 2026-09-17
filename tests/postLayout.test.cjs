@@ -108,3 +108,47 @@ test('carousel backgrounds retain a shared tone despite contrasting templates',(
  const plan=planPostLayout(brand,{slides:[{headline:'First'},{headline:'Second'},{headline:'Third'}]}, {})
  assert.equal(new Set(plan.slots.map(s=>JSON.stringify(s.spec.background))).size,1)
 })
+
+test('construction and BIM cutouts choose compact contextual objects instead of workers',()=>{
+ const {localAssetBrief}=new Function(load('lib/designs/localAssetBrief.ts')+';return {localAssetBrief}')()
+ const subjects=[]
+ for(const headline of ['Erros de projeto: com BIM vs sem BIM','Ferramentas para construção','Análise de dados para a estratégia']){
+  const b=localAssetBrief({slot_id:'slide_2',needs_visual:true,treatment:'isolated_subject',brief:''},{headline},{id:'post',topic:'business'})
+  assert.match(b.subject_description,/Object-only:/);assert.match(b.subject_description,/no people/)
+  assert.match(b.generation_prompt,/neither horizontal side may reach/)
+  subjects.push(b.subject_description)
+ }
+ assert.match(subjects[0],/blueprint|building models|architectural/)
+ assert.match(subjects[1],/hammer|trowel|blueprint/)
+ assert.match(subjects[2],/chart|notebook/)
+ assert.equal(new Set(subjects).size,3)
+})
+
+test('subject diversity follows the topic rather than a default person',()=>{
+ const {localAssetBrief}=new Function(load('lib/designs/localAssetBrief.ts')+';return {localAssetBrief}')()
+ const idea={id:'general',topic:'business growth',visualDirection:'Always use a smiling person with a laptop'}
+ const brief=(headline,layout={})=>localAssetBrief({slot_id:'one',needs_visual:true,treatment:'isolated_subject',brief:'',...layout},{headline},idea)
+ assert.match(brief('Farming and wheat harvest').subject_description,/Object-only:.*wheat|Object-only:.*seedling/)
+ assert.match(brief('Improve your running form').subject_description,/runner/)
+ assert.match(brief('Riscos do tabagismo').subject_description,/Object-only:.*cigarette/)
+ assert.match(brief('Energia solar').subject_description,/solar panel/)
+ const unknown=brief('Proteção dos recifes marinhos')
+ assert.match(unknown.subject_description,/Proteção dos recifes marinhos/)
+ assert.ok(!unknown.subject_description.includes('Always use a smiling'))
+ const field=Array.from({length:12},(_,i)=>localAssetBrief({slot_id:String(i),needs_visual:true,treatment:'environmental',background:true,brief:''},{headline:'Farming and wheat harvest'},idea))
+ assert.ok(field.some(b=>b.subject_description.startsWith('Environment-only:')))
+ assert.ok(field.every(b=>!b.subject_description.includes('farmer')))
+})
+
+test('strategic garment cuts select fabric details, never analytics imagery',()=>{
+ const {localAssetBrief}=new Function(load('lib/designs/localAssetBrief.ts')+';return {localAssetBrief}')()
+ const layout={slot_id:'slide_4',needs_visual:true,treatment:'isolated_subject',brief:''}
+ const b=localAssetBrief(layout,{headline:'Design ergonómico e liberdade de movimento',body:'Cortes estratégicos e costuras flexíveis acompanham cada movimento, permitindo maior amplitude sem restrições.'},{id:'apparel',topic:'Estratégia de crescimento'})
+ assert.match(b.subject_description,/garment|fabric/)
+ assert.doesNotMatch(b.subject_description,/chart|magnifying|notebook/)
+ assert.equal(b.search_queries[0],'stretch fabric garment seams')
+ const unrelated=localAssetBrief(layout,{headline:'Movimentos estratégicos',body:'Maior liberdade e conforto.'},{id:'other'})
+ assert.doesNotMatch(unrelated.subject_description,/bar-chart|magnifying/)
+ const analytics=localAssetBrief(layout,{headline:'Análise de dados',body:'Compare métricas de vendas.'},{id:'data'})
+ assert.match(analytics.subject_description,/chart/)
+})

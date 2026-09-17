@@ -1,11 +1,12 @@
 import { persistInlineImages } from '@/lib/services/persistInlineImages'
+import { ensureMinimumBrandDesigns, withMinimumBrandDesigns } from '@/lib/designs/minimumBrandDesigns'
 import { NextResponse } from 'next/server'
 import { v4 as uuidv4 } from 'uuid'
 import { corsify } from '@/lib/services/middleware'
 
 export async function handleGetFlows(db: any) {
   try {
-    const flows = await db.collection('flows').find({}).toArray()
+    const flows = await Promise.all((await db.collection('flows').find({}).toArray()).map((flow:any)=>ensureMinimumBrandDesigns(db,flow)))
     return corsify(NextResponse.json(flows))
   } catch (error: any) {
     return corsify(NextResponse.json({ error: error.message }, { status: 500 }))
@@ -17,7 +18,7 @@ export async function handleCreateFlow(db: any, body: any) {
     const flow = {
       id: uuidv4(),
       name: body.name || 'New Flow',
-      brandContext: {},
+      brandContext: withMinimumBrandDesigns(body.brandContext||{}),
       brandAnswers: {},
       brandQuestions: [],
       extractedContext: '',
@@ -28,7 +29,7 @@ export async function handleCreateFlow(db: any, body: any) {
       updatedAt: new Date(),
     }
     await db.collection('flows').insertOne(flow)
-    return corsify(NextResponse.json(flow))
+    return corsify(NextResponse.json(await ensureMinimumBrandDesigns(db,flow)))
   } catch (error: any) {
     return corsify(NextResponse.json({ error: error.message }, { status: 500 }))
   }
@@ -40,7 +41,7 @@ export async function handleGetFlow(db: any, flowId: string) {
     if (!flow) {
       return corsify(NextResponse.json({ error: 'Flow not found' }, { status: 404 }))
     }
-    return corsify(NextResponse.json(flow))
+    return corsify(NextResponse.json(await ensureMinimumBrandDesigns(db,flow)))
   } catch (error: any) {
     return corsify(NextResponse.json({ error: error.message }, { status: 500 }))
   }
@@ -48,6 +49,13 @@ export async function handleGetFlow(db: any, flowId: string) {
 
 export async function handleUpdateFlow(db: any, flowId: string, body: any) {
   try {
+    if(body.brandContext){
+      const current=await db.collection('flows').findOne({id:flowId})
+      const existing=current?.brandContext?.designs||[]
+      const incoming=body.brandContext.designs||[]
+      const designs=[...existing,...incoming.filter((d:any)=>!existing.some((e:any)=>e.id===d.id))]
+      body={...body,brandContext:withMinimumBrandDesigns({...body.brandContext,designs})}
+    }
     const result = await db.collection('flows').findOneAndUpdate(
       { id: flowId },
       {
@@ -63,7 +71,7 @@ export async function handleUpdateFlow(db: any, flowId: string, body: any) {
     if (!updated) {
       return corsify(NextResponse.json({ error: 'Flow not found' }, { status: 404 }))
     }
-    return corsify(NextResponse.json(updated))
+    return corsify(NextResponse.json(await ensureMinimumBrandDesigns(db,updated)))
   } catch (error: any) {
     return corsify(NextResponse.json({ error: error.message }, { status: 500 }))
   }

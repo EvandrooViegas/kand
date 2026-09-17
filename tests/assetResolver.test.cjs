@@ -123,7 +123,7 @@ test('single generation receives strict constraints without automatic crop retri
  const e=engine(async()=>{throw Error('Stock should not run')},async prompt=>{prompts.push(prompt);return prompts.length===1?bad:good})
  const result=await e.resolveSlot({}, {...slot,slot_id:'a',needs_visual:true,preferred_source:'ai_generated',treatment:'isolated_subject'},null,null,null,new Set())
  assert.equal(prompts.length,1);assert.match(prompts[0],/STRICT COMPOSITION CONSTRAINTS/)
- assert.match(prompts[0],/At most ONE horizontal edge/)
+ assert.match(prompts[0],/NO horizontal cropping/)
  assert.equal(result.resolvedAsset.url,bad.url);assert.equal(result.source,'ai_generated')
 })
 
@@ -146,4 +146,12 @@ test('brand library match bypasses generation, while a different activity genera
  assert.equal(calls,0);assert.equal(reused.resolvedAsset.url,saved.url);assert.equal(reused.resolvedAsset.reused,true)
  const fresh=await e.resolveSlot(db,{...request,subject_description:'customer paying at a contactless payment terminal'},'brand-a',null,null,new Set())
  assert.equal(calls,1);assert.equal(fresh.resolvedAsset.url,'new-image')
+})
+
+test('object-only scene overrides brand requests for people without generating images',()=>{
+ const brief=engine(async()=>{throw Error('No generation expected')}).buildGenerationBrief({...slot,treatment:'isolated_subject',subject_description:'Object-only: a hammer and rolled blueprint, no people',generation_prompt:'Brand usually shows a worker at a desk'},true)
+ assert.match(brief,/MANDATORY OBJECT-ONLY COMPOSITION/)
+ assert.match(brief,/Zero people, faces, hands, workers/)
+ assert.match(brief,/neither|both left and right/i)
+ assert.ok(!brief.includes('Use a compact freestanding desk'))
 })

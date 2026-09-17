@@ -54,8 +54,9 @@ const nextConfig = {
     return config;
   },
   onDemandEntries: {
-    maxInactiveAge: 10000,
-    pagesBufferLength: 2,
+    // Keep the shared API route available while slower pages compile.
+    maxInactiveAge: 5 * 60 * 1000,
+    pagesBufferLength: 20,
   },
   async headers() {
     return [

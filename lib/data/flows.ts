@@ -1,4 +1,5 @@
 import { connectToMongo } from '@/lib/services/db/mongo'
+import { ensureMinimumBrandDesigns } from '@/lib/designs/minimumBrandDesigns'
 
 export interface FlowBrandContext {
   name?: string
@@ -24,7 +25,7 @@ export interface Flow {
  */
 export async function getFlows(): Promise<Flow[]> {
   const db = await connectToMongo()
-  const flows = await db.collection('flows').find({}).toArray()
+  const flows = await Promise.all((await db.collection('flows').find({}).toArray()).map((flow:any)=>ensureMinimumBrandDesigns(db,flow)))
   // Strip non-serialisable _id before passing to client
   return flows.map(({ _id, ...f }: any) => f) as Flow[]
 }
@@ -36,6 +37,6 @@ export async function getFlow(id: string): Promise<Flow | null> {
   const db = await connectToMongo()
   const flow = await db.collection('flows').findOne({ id })
   if (!flow) return null
-  const { _id, ...f } = flow as any
+  const { _id, ...f } = await ensureMinimumBrandDesigns(db,flow) as any
   return f as Flow
 }
