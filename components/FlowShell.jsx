@@ -72,7 +72,7 @@ export default function FlowShell({ flows: initialFlows, currentFlow, children }
     <div className="flex flex-col h-screen bg-background">
 
       {/* ── Top bar ──────────────────────────────────────────────────────────── */}
-      <header className="flex-shrink-0 h-12 border-b bg-white dark:bg-slate-950 flex items-center gap-3 px-4">
+      <header className="flex-shrink-0 border-b bg-white dark:bg-slate-950 flex flex-wrap items-center gap-x-3 px-4 pt-2 md:h-12 md:flex-nowrap md:pt-0">
 
         {/* wordmark */}
         <div className="flex items-center gap-2 pr-3 border-r border-slate-200 dark:border-slate-800">
@@ -84,7 +84,7 @@ export default function FlowShell({ flows: initialFlows, currentFlow, children }
 
         {/* flow selector */}
         <Select value={currentBrandId} onValueChange={handleFlowChange} disabled={isPending}>
-          <SelectTrigger className="w-48 h-8 text-sm border-none shadow-none bg-transparent focus:ring-0 px-2">
+          <SelectTrigger className="w-40 min-w-0 flex-1 sm:w-48 sm:flex-none h-8 text-sm border-none shadow-none bg-transparent focus:ring-0 px-2">
             <SelectValue placeholder="Select a flow…">
               <div className="flex items-center gap-2 min-w-0">
                 {logo
@@ -127,7 +127,7 @@ export default function FlowShell({ flows: initialFlows, currentFlow, children }
         </Button>
 
         {/* tab nav */}
-        <nav className="flex items-center h-full ml-2 border-l border-slate-200 dark:border-slate-800 pl-2">
+        <nav className="order-last flex w-full items-center overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:order-none md:w-auto md:h-full md:ml-2 md:border-l border-slate-200 dark:border-slate-800 md:pl-2">
           {TABS.map(({ slug, label, icon: Icon }) => {
             const active = activeSlug === slug
             return (
@@ -135,7 +135,7 @@ export default function FlowShell({ flows: initialFlows, currentFlow, children }
                 key={slug}
                 href={`/flow/${currentBrandId}/${slug}`}
                 className={`
-                  flex items-center gap-1.5 px-4 h-12 text-sm font-medium
+                  flex shrink-0 items-center gap-1.5 px-3 md:px-4 h-12 md:h-full text-sm font-medium
                   border-b-2 transition-colors whitespace-nowrap
                   ${active
                     ? 'border-primary text-primary'
@@ -149,7 +149,7 @@ export default function FlowShell({ flows: initialFlows, currentFlow, children }
           })}
         </nav>
 
-        <div className="flex-1" />
+        <div className="hidden md:block flex-1" />
       </header>
 
       {/* ── Page content ─────────────────────────────────────────────────────── */}

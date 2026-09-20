@@ -1,36 +1,46 @@
 'use client'
 import BrandDesignStudio from '@/components/BrandDesignStudio'
 import ImageDispositionPicker from '@/components/ImageDispositionPicker'
+import BusinessResearchDetails from '@/components/BusinessResearchDetails'
+import { loadEnglishProfile } from '@/lib/client/englishProfile'
 
 import ColorPriority, { reorderColors } from '@/components/ColorPriority'
 import { useState, useEffect } from 'react'
 import LogoVariants from '@/components/LogoVariants'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { Textarea } from '@/components/ui/textarea'
-import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
-import { Loader2, Sparkles, Globe, Palette, Type, Image as ImageIcon, Save, Plus, X, Check, Copy } from 'lucide-react'
+import { Loader2, Globe, Image as ImageIcon, Save, Plus, X, Copy } from 'lucide-react'
 
 export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSelect }) {
   const [url, setUrl] = useState('')
+  const [activeTab, setActiveTab] = useState('business')
+  const [translating, setTranslating] = useState(false)
+  const [translationError, setTranslationError] = useState('')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
   const [extractedData, setExtractedData] = useState(null)
   const [loadedFonts, setLoadedFonts] = useState(new Set())
   const [fontLoadingErrors, setFontLoadingErrors] = useState(new Set())
-  const [extractionProgress, setExtractionProgress] = useState([])
-  const [currentStep, setCurrentStep] = useState('')
 
   // Load persisted brand context whenever the selected flow changes
   useEffect(() => {
     if (!flowId) return
+    let active = true
+    setExtractedData(null)
+    setTranslationError('')
+    setTranslating(false)
     fetch(`/api/flows/${flowId}`)
       .then(r => r.json())
-      .then(flow => {
-        const bc = flow?.brandContext
+      .then(async flow => {
+        if (!active) return
+        let bc = flow?.brandContext
+        if (bc?.about && bc.profileLanguage !== 'en') {
+          setTranslating(true)
+          try { bc = await loadEnglishProfile(flowId, bc) } catch (error) { if (active) setTranslationError(error.message) }
+          finally { if (active) setTranslating(false) }
+        }
+        if (!active) return
         if (bc && (bc.name || bc.about || bc.colors?.length || bc.fonts?.length)) {
           setExtractedData({
             ...bc,
@@ -45,6 +55,7 @@ export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSel
         }
       })
       .catch(() => {})
+    return () => { active = false }
   }, [flowId])
 
   // Function to normalize font names (remove -Bold, -Regular, etc.)
@@ -106,31 +117,11 @@ export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSel
     }
 
     setLoading(true)
-    setExtractionProgress([])
-    setCurrentStep('')
-    
-    // Simulate progress steps
-    const progressSteps = [
-      { step: 'Fetching website...', delay: 300 },
-      { step: 'Extracting business information...', delay: 800 },
-      { step: 'Analyzing colors...', delay: 1200 },
-      { step: 'Detecting fonts...', delay: 1600 },
-      { step: 'Processing design system...', delay: 2000 },
-    ]
-
-    // Show progress animation
-    progressSteps.forEach(({ step, delay }) => {
-      setTimeout(() => {
-        setCurrentStep(step)
-        setExtractionProgress(prev => [...prev, { step, completed: false }])
-      }, delay)
-    })
-
     try {
       const response = await fetch('/api/extract-business-info', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url.trim() }),
+        body: JSON.stringify({ url: url.trim(), flowId }),
       })
 
       if (!response.ok) {
@@ -141,12 +132,8 @@ export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSel
       const data = await response.json()
       if (data.logoVariantsError) toast.warning(data.logoVariantsError)
       
-      // Mark all steps as completed
-      setExtractionProgress(prev => prev.map(p => ({ ...p, completed: true })))
-      setCurrentStep('Extraction complete!')
-      
-      setTimeout(() => {
         setExtractedData({
+          ...data.flow?.brandContext,
           name: data.name || '',
           about: data.about || '',
           language: data.language || 'unknown',
@@ -155,19 +142,15 @@ export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSel
           colors: data.designSystem?.colors || [],
           fonts: data.designSystem?.fonts || [],
         })
-        toast.success('Business information extracted successfully')
-      }, 500)
+        onFlowCreated?.(data.flow)
+        toast.success(`Brand saved from ${data.pagesAnalyzed} pages. ${data.imageImport?.imported || 0} images added to the gallery.`)
+        if (data.imageImport?.skipped) toast.warning(`${data.imageImport.skipped} website images could not be imported or were too small.`)
+
     } catch (error) {
       console.error('Extraction error:', error)
       toast.error(error.message || 'Failed to extract business information')
-      setExtractionProgress([])
-      setCurrentStep('')
     } finally {
-      setTimeout(() => {
-        setLoading(false)
-        setExtractionProgress([])
-        setCurrentStep('')
-      }, 1000)
+      setLoading(false)
     }
   }
 
@@ -254,6 +237,7 @@ export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSel
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           brandContext: {
+            ...extractedData,
             name: extractedData.name,
             about: extractedData.about,
             logo: extractedData.logo,
@@ -289,439 +273,34 @@ export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSel
   }
 
   return (
-    <div className="space-y-8">
-      {/* URL Input Section */}
-      <Card className="border-2 border-dashed border-primary/20 bg-gradient-to-br from-primary/5 to-transparent overflow-hidden">
-        <CardHeader>
-          <div className="flex items-center gap-2">
-            <div className="p-2 rounded-lg bg-primary/10">
-              <Globe className="w-5 h-5 text-primary" />
-            </div>
-            <div>
-              <CardTitle className="text-lg">Extract Brand Personalization</CardTitle>
-              <CardDescription>Enter a website URL to automatically extract brand details</CardDescription>
-            </div>
-          </div>
-        </CardHeader>
-        <CardContent>
-          <div className="flex gap-3">
-            <Input
-              id="url"
-              type="url"
-              placeholder="https://example.com"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && !loading && handleExtract()}
-              disabled={loading}
-              className="flex-1 h-12 text-base"
-            />
-            <Button
-              onClick={handleExtract}
-              disabled={loading}
-              size="lg"
-              className="min-w-[140px]"
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                  Extracting...
-                </>
-              ) : (
-                <>
-                  <Sparkles className="w-4 h-4 mr-2" />
-                  Extract
-                </>
-              )}
-            </Button>
-          </div>
-          
-          {/* Progress Indicator */}
-          {loading && extractionProgress.length > 0 && (
-            <div className="mt-6 p-4 bg-white dark:bg-slate-900 rounded-lg border-2">
-              <div className="space-y-3">
-                {extractionProgress.map((progress, index) => (
-                  <div 
-                    key={index} 
-                    className="flex items-center gap-3 animate-in fade-in slide-in-from-left-2"
-                    style={{ animationDelay: `${index * 100}ms` }}
-                  >
-                    {progress.completed ? (
-                      <Check className="w-5 h-5 text-green-500 flex-shrink-0" />
-                    ) : (
-                      <Loader2 className="w-5 h-5 text-primary animate-spin flex-shrink-0" />
-                    )}
-                    <span className={`text-sm ${progress.completed ? 'text-green-600 dark:text-green-400' : 'text-slate-700 dark:text-slate-300'}`}>
-                      {progress.step}
-                    </span>
-                  </div>
-                ))}
-              </div>
-              
-              {/* Progress Bar */}
-              <div className="mt-4 h-2 bg-slate-200 dark:bg-slate-700 rounded-full overflow-hidden">
-                <div 
-                  className="h-full bg-gradient-to-r from-primary to-primary/60 transition-all duration-500 ease-out"
-                  style={{ 
-                    width: `${(extractionProgress.filter(p => p.completed).length / extractionProgress.length) * 100}%` 
-                  }}
-                />
-              </div>
-            </div>
-          )}
-        </CardContent>
-      </Card>
+    <div className="space-y-6 pb-6">
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div><p className="mb-2 text-[11px] font-medium uppercase tracking-[0.16em] text-slate-400">Brand workspace</p><h1 className="text-2xl font-semibold tracking-tight text-slate-950 dark:text-slate-50">Brand personalization</h1><p className="mt-2 text-sm text-slate-500">Your business, your voice, your visual identity.</p></div>
+        {extractedData && <Button onClick={handleSave} disabled={saving || loading || translating} className="bg-slate-900 text-white hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900">{saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}Save changes</Button>}
+      </header>
 
-      {/* Extracted Data Section */}
-      {extractedData && (
-        <>
-          {/* Brand Overview - Hero Section */}
-          <Card className="overflow-hidden border-2">
-            <div className="bg-gradient-to-br from-primary/10 via-primary/5 to-transparent p-8">
-              <div className="flex items-start gap-6">
-                {/* Logo */}
-                <div className="flex-shrink-0">
-                  <div className="w-32 h-32 rounded-2xl bg-white dark:bg-slate-900 shadow-lg border-2 border-primary/20 flex items-center justify-center p-4 overflow-hidden">
-                    {extractedData.logo ? (
-                      <img
-                        src={extractedData.logo}
-                        alt="Brand logo"
-                        className="max-w-full max-h-full object-contain"
-                      />
-                    ) : (
-                      <ImageIcon className="w-12 h-12 text-slate-300" />
-                    )}
-                  </div>
-                </div>
+      <details open={!extractedData} className="rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
+        <summary className="cursor-pointer px-5 py-4 text-sm font-medium text-slate-700 dark:text-slate-200">Import from your website<span className="ml-2 text-xs font-normal text-slate-400">Up to 5 pages</span></summary>
+        <div className="border-t border-slate-100 p-5 dark:border-slate-800"><p className="mb-4 text-sm leading-6 text-slate-500">Bring in your services, projects and business details. Useful photos are added to your gallery.</p><div className="flex flex-col gap-3 sm:flex-row"><Input aria-label="Business website URL" type="url" placeholder="https://your-business.com" value={url} onChange={e => setUrl(e.target.value)} onKeyDown={e => e.key === 'Enter' && !loading && !translating && handleExtract()} disabled={loading || translating} className="h-11 flex-1" /><Button onClick={handleExtract} disabled={loading || translating} className="h-11 bg-slate-900 text-white hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900">{loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Globe className="mr-2 h-4 w-4" />}{loading ? 'Reading website…' : 'Import website'}</Button></div>{loading && <p role="status" className="mt-4 text-xs text-slate-500">Reading relevant pages and preparing your brand profile. This can take a moment.</p>}</div>
+      </details>
+      {translating && <div role="status" className="flex items-center gap-3 rounded-xl border p-5 text-sm text-slate-500"><Loader2 size={16} className="animate-spin" />Preparing your English business profile…</div>}
+      {translationError && <p role="alert" className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900">{translationError}</p>}
 
-                {/* Business Name and Details */}
-                <div className="flex-1">
-                  <div className="flex items-start justify-between mb-3">
-                    <div>
-                      <h2 className="text-3xl font-bold mb-2">
-                        {extractedData.name || 'Untitled Business'}
-                      </h2>
-                      <div className="flex items-center gap-2">
-                        <Badge variant="secondary" className="text-xs">
-                          <Globe className="w-3 h-3 mr-1" />
-                          {extractedData.language?.toUpperCase() || 'Unknown'}
-                        </Badge>
-                        <Badge variant="outline" className="text-xs">
-                          <Check className="w-3 h-3 mr-1" />
-                          Extracted
-                        </Badge>
-                      </div>
-                    </div>
-                  </div>
-                  
-                  <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
-                    {extractedData.about || 'No description available'}
-                  </p>
-                </div>
-              </div>
-            </div>
+      {extractedData && <>
+        <div className="flex items-center gap-4 py-2"><div className="flex h-14 w-14 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-white p-2">{extractedData.logo ? <img src={(extractedData.logoVariants?.source === extractedData.logo && extractedData.logoVariants?.blackTransparent) || extractedData.logo} alt={`${extractedData.name} logo`} className="max-h-full max-w-full object-contain" /> : <ImageIcon className="h-6 w-6 text-slate-300" />}</div><div className="min-w-0"><h2 className="break-words text-lg font-semibold tracking-tight">{extractedData.name || 'Your business'}</h2><div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-slate-500">{extractedData.profileLanguage === 'en' && <span>English profile</span>}{extractedData.researchSources?.length > 0 && <span>{extractedData.researchSources.length} source {extractedData.researchSources.length === 1 ? 'page' : 'pages'}</span>}<span>Post language: {extractedData.language || 'Not set'}</span></div></div></div>
+        <div role="tablist" aria-label="Brand settings" className="flex gap-5 overflow-x-auto border-b border-slate-200 dark:border-slate-800">{[['business', 'Business profile'], ['identity', 'Visual identity'], ['design', 'Post design']].map(([id, label]) => <button type="button" key={id} role="tab" aria-selected={activeTab === id} aria-controls={`brand-panel-${id}`} id={`brand-tab-${id}`} onClick={() => setActiveTab(id)} className={`shrink-0 border-b-2 px-1 pb-3 pt-1 text-sm font-medium transition-colors ${activeTab === id ? 'border-slate-900 text-slate-900 dark:border-white dark:text-white' : 'border-transparent text-slate-400 hover:text-slate-700 dark:hover:text-slate-200'}`}>{label}</button>)}</div>
 
-            {/* Editable Fields */}
-            <CardContent className="pt-6 space-y-4">
-              <div>
-                <Label htmlFor="name" className="text-sm font-medium mb-2 flex items-center gap-2">
-                  <Sparkles className="w-4 h-4 text-primary" />
-                  Business Name
-                </Label>
-                <Input
-                  id="name"
-                  type="text"
-                  value={extractedData.name}
-                  onChange={(e) => handleFieldChange('name', e.target.value)}
-                  placeholder="Enter business name"
-                  className="h-11"
-                />
-              </div>
-
-              <div>
-                <Label htmlFor="about" className="text-sm font-medium mb-2 block">
-                  About
-                </Label>
-                <Textarea
-                  id="about"
-                  value={extractedData.about}
-                  onChange={(e) => handleFieldChange('about', e.target.value)}
-                  placeholder="Describe your business..."
-                  rows={4}
-                  className="resize-none"
-                />
-              </div>
-
-              <LogoVariants key={String(flowId) + extractedData.logo} logo={extractedData.logo} variants={extractedData.logoVariants} onChange={variants => setExtractedData(prev => prev.logo === variants.source ? { ...prev, logoVariants: variants } : prev)} />
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <Label htmlFor="logo" className="text-sm font-medium mb-2 block">
-                    Logo URL
-                  </Label>
-                  <Input
-                    id="logo"
-                    type="url"
-                    value={extractedData.logo}
-                    onChange={(e) => handleFieldChange('logo', e.target.value)}
-                    placeholder="https://example.com/logo.png"
-                  />
-                </div>
-                <div>
-                  <Label htmlFor="language" className="text-sm font-medium mb-2 block">
-                    Language
-                  </Label>
-                  <Input
-                    id="language"
-                    type="text"
-                    value={extractedData.language}
-                    onChange={(e) => handleFieldChange('language', e.target.value)}
-                    placeholder="en, pt, fr, etc."
-                  />
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Brand Colors - Visual Display */}
-          <Card className="border-2">
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="p-2 rounded-lg bg-gradient-to-br from-pink-500/10 to-purple-500/10">
-                    <Palette className="w-5 h-5 text-purple-600 dark:text-purple-400" />
-                  </div>
-                  <div>
-                    <CardTitle>Brand Colors</CardTitle>
-                    <CardDescription>Your color palette ({extractedData.colors.length} colors)</CardDescription>
-                  </div>
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={addColor}
-                >
-                  <Plus className="w-4 h-4 mr-2" />
-                  Add Color
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {extractedData.colors.length === 0 ? (
-                <div className="text-center py-12 px-4 border-2 border-dashed rounded-lg">
-                  <Palette className="w-12 h-12 mx-auto text-slate-300 mb-3" />
-                  <p className="text-slate-500 text-sm mb-4">No colors detected</p>
-                  <Button size="sm" variant="outline" onClick={addColor}>
-                    <Plus className="w-4 h-4 mr-2" />
-                    Add Your First Color
-                  </Button>
-                </div>
-              ) : (
-                <>
-                  {/* Color Preview Grid */}
-                  <div className="grid grid-cols-6 gap-3 mb-6">
-                    {extractedData.colors.map((color, index) => (
-                      <div
-                        key={index}
-                        className="group relative aspect-square rounded-xl overflow-hidden shadow-md hover:shadow-lg transition-all cursor-pointer border-2 border-slate-200 dark:border-slate-700"
-                        style={{ backgroundColor: color }}
-                        onClick={() => copyColorToClipboard(color)}
-                      >
-                        <div className="absolute inset-0 bg-black/0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
-                          <Copy className="w-5 h-5 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
-                        </div>
-                        <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-xs p-1.5 text-center font-mono opacity-0 group-hover:opacity-100 transition-opacity">
-                          {color}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  {/* Color Editors */}
-                      <p className="text-xs text-muted-foreground mb-2">Order by importance: primary first, secondary next. Use the arrows, then save the brand.</p>
-                  <div className="space-y-3">
-                    {extractedData.colors.map((color, index) => (
-                      <div key={index} className="flex gap-3 items-center p-3 rounded-lg bg-slate-50 dark:bg-slate-900/50 border">
-                          <ColorPriority index={index} count={extractedData.colors.length} onMove={(from,to)=>setExtractedData(prev=>({...prev,colors:reorderColors(prev.colors,from,to)}))} />
-                        <input
-                          type="color"
-                          value={color}
-                          onChange={(e) => handleColorChange(index, e.target.value)}
-                          className="h-12 w-12 border-2 rounded-lg cursor-pointer"
-                        />
-                        <Input
-                          type="text"
-                          value={color}
-                          onChange={(e) => handleColorChange(index, e.target.value)}
-                          placeholder="#000000"
-                          className="flex-1 font-mono"
-                        />
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => copyColorToClipboard(color)}
-                          className="hover:bg-primary/10"
-                        >
-                          <Copy className="w-4 h-4" />
-                        </Button>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => removeColor(index)}
-                          className="hover:bg-destructive/10 hover:text-destructive"
-                        >
-                          <X className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    ))}
-                  </div>
-                </>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Brand Fonts */}
-          <Card className="border-2">
-            <CardHeader>
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <div className="p-2 rounded-lg bg-gradient-to-br from-blue-500/10 to-cyan-500/10">
-                    <Type className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-                  </div>
-                  <div>
-                    <CardTitle>Brand Fonts</CardTitle>
-                    <CardDescription>Typography system ({extractedData.fonts.length} fonts)</CardDescription>
-                  </div>
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={addFont}
-                >
-                  <Plus className="w-4 h-4 mr-2" />
-                  Add Font
-                </Button>
-              </div>
-            </CardHeader>
-            <CardContent>
-              {extractedData.fonts.length === 0 ? (
-                <div className="text-center py-12 px-4 border-2 border-dashed rounded-lg">
-                  <Type className="w-12 h-12 mx-auto text-slate-300 mb-3" />
-                  <p className="text-slate-500 text-sm mb-4">No fonts detected</p>
-                  <Button size="sm" variant="outline" onClick={addFont}>
-                    <Plus className="w-4 h-4 mr-2" />
-                    Add Your First Font
-                  </Button>
-                </div>
-              ) : (
-                <div className="space-y-3">
-                  {extractedData.fonts.map((font, index) => {
-                    const normalizedFont = normalizeFontName(font)
-                    const isFontLoaded = loadedFonts.has(normalizedFont)
-                    const hasFontError = fontLoadingErrors.has(normalizedFont)
-                    
-                    return (
-                      <div key={index} className="flex gap-3 items-start p-4 rounded-lg bg-slate-50 dark:bg-slate-900/50 border">
-                        <div className="flex-1 space-y-3">
-                          <div className="flex items-center gap-2">
-                            <Input
-                              type="text"
-                              value={font}
-                              onChange={(e) => handleFontChange(index, e.target.value)}
-                              placeholder="Font name (e.g., Inter, Roboto)"
-                              className="flex-1"
-                            />
-                            {font && normalizedFont && (
-                              <Badge 
-                                variant={hasFontError ? "destructive" : isFontLoaded ? "default" : "secondary"} 
-                                className="text-xs"
-                              >
-                                {hasFontError ? "Not Found" : isFontLoaded ? "✓ Loaded" : "Loading..."}
-                              </Badge>
-                            )}
-                          </div>
-                          
-                          {/* Font Preview */}
-                          <div className="bg-white dark:bg-slate-800 rounded-lg border-2 p-4 space-y-2">
-                            <div 
-                              className="text-3xl font-semibold"
-                              style={{ 
-                                fontFamily: normalizedFont ? `"${normalizedFont}", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif` : 'inherit',
-                                fontWeight: font.toLowerCase().includes('bold') ? 'bold' : font.toLowerCase().includes('light') ? '300' : 'normal'
-                              }}
-                            >
-                              {normalizedFont || 'Font Name'}
-                            </div>
-                            <div 
-                              className="text-base text-slate-600 dark:text-slate-400"
-                              style={{ 
-                                fontFamily: normalizedFont ? `"${normalizedFont}", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif` : 'inherit' 
-                              }}
-                            >
-                              The quick brown fox jumps over the lazy dog
-                            </div>
-                            <div 
-                              className="text-sm text-slate-500"
-                              style={{ 
-                                fontFamily: normalizedFont ? `"${normalizedFont}", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif` : 'inherit' 
-                              }}
-                            >
-                              ABCDEFGHIJKLMNOPQRSTUVWXYZ 0123456789
-                            </div>
-                          </div>
-                          
-                          {/* Original Font Name Display */}
-                          {font !== normalizedFont && (
-                            <div className="text-xs text-slate-500 flex items-center gap-2 flex-wrap">
-                              <span className="font-mono bg-slate-200 dark:bg-slate-700 px-2 py-1 rounded">
-                                Original: {font}
-                              </span>
-                              <span>→</span>
-                              <span className="font-mono bg-slate-200 dark:bg-slate-700 px-2 py-1 rounded">
-                                Normalized: {normalizedFont}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                        <Button
-                          size="icon"
-                          variant="ghost"
-                          onClick={() => removeFont(index)}
-                          className="hover:bg-destructive/10 hover:text-destructive flex-shrink-0"
-                        >
-                          <X className="w-4 h-4" />
-                        </Button>
-                      </div>
-                    )
-                  })}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card><CardHeader><CardTitle>Default image style</CardTitle><CardDescription>Used for new posts. Every style allows text-only slides; No images excludes all content photos. You can override this for one post in step-by-step mode.</CardDescription></CardHeader><CardContent><ImageDispositionPicker value={extractedData.imageDisposition||'cutout'} onChange={imageDisposition=>setExtractedData(prev=>({...prev,imageDisposition}))}/></CardContent></Card>
-          <BrandDesignStudio flowId={flowId} brand={extractedData} onChange={setExtractedData}/>
-          {/* Save Button */}
-          <div className="sticky bottom-6 z-10">
-            <Button
-              onClick={handleSave}
-              disabled={saving}
-              size="lg"
-              className="w-full shadow-lg h-14 text-base"
-            >
-              {saving ? (
-                <>
-                  <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                  Saving...
-                </>
-              ) : (
-                <>
-                  <Save className="w-5 h-5 mr-2" />
-                  Save Brand Personalization
-                </>
-              )}
-            </Button>
-          </div>
-        </>
-      )}
+        <div role="tabpanel" id={`brand-panel-${activeTab}`} aria-labelledby={`brand-tab-${activeTab}`}>
+          {activeTab === 'business' && <BusinessResearchDetails data={extractedData} onChange={handleFieldChange} showOverview />}
+          {activeTab === 'identity' && <div className="space-y-5">
+            <section className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-950"><h3 className="text-base font-semibold">Brand logo</h3><p className="mb-5 mt-1 text-xs text-slate-500">Your original logo and transparent variants.</p><LogoVariants key={String(flowId) + extractedData.logo} logo={extractedData.logo} variants={extractedData.logoVariants} onChange={variants => setExtractedData(prev => prev.logo === variants.source ? { ...prev, logoVariants: variants } : prev)} /><label className="mt-5 block text-xs font-medium text-slate-500">Original logo URL<Input type="url" value={extractedData.logo} onChange={e => handleFieldChange('logo', e.target.value)} className="mt-2" /></label></section>
+            <section className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-950"><div className="mb-5 flex items-start justify-between gap-3"><div><h3 className="text-base font-semibold">Color palette</h3><p className="mt-1 text-xs text-slate-500">Primary first. Reorder colors by importance.</p></div><Button variant="outline" size="sm" onClick={addColor}><Plus size={14} className="mr-1" />Add color</Button></div><div className="space-y-3">{extractedData.colors.map((color, index) => <div key={index} className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-100 p-3 dark:border-slate-800"><ColorPriority index={index} count={extractedData.colors.length} onMove={(from, to) => setExtractedData(prev => ({ ...prev, colors: reorderColors(prev.colors, from, to) }))} /><input aria-label={`Color ${index + 1}`} type="color" value={color} onChange={e => handleColorChange(index, e.target.value)} className="h-9 w-9 cursor-pointer rounded border-0 bg-transparent" /><Input aria-label={`Color ${index + 1} hex value`} value={color} onChange={e => handleColorChange(index, e.target.value)} className="min-w-0 flex-1 font-mono text-xs" /><button aria-label={`Copy color ${index + 1}`} onClick={() => copyColorToClipboard(color)} className="p-1 text-slate-400"><Copy size={15} /></button><button aria-label={`Remove color ${index + 1}`} onClick={() => removeColor(index)} className="p-1 text-slate-400 hover:text-red-600"><X size={15} /></button></div>)}{!extractedData.colors.length && <p className="text-sm text-slate-400">Add your first brand color.</p>}</div></section>
+            <section className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-950"><div className="mb-5 flex items-start justify-between gap-3"><div><h3 className="text-base font-semibold">Typography</h3><p className="mt-1 text-xs text-slate-500">The typefaces used across your posts.</p></div><Button variant="outline" size="sm" onClick={addFont}><Plus size={14} className="mr-1" />Add font</Button></div><div className="divide-y divide-slate-100 dark:divide-slate-800">{extractedData.fonts.map((font, index) => <div key={index} className="space-y-4 py-5 first:pt-0 last:pb-0"><div className="flex gap-3"><Input aria-label={`Font ${index + 1}`} value={font} onChange={e => handleFontChange(index, e.target.value)} /><button aria-label={`Remove font ${index + 1}`} onClick={() => removeFont(index)} className="px-1 text-slate-400 hover:text-red-600"><X size={16} /></button></div><div style={{ fontFamily: `"${normalizeFontName(font)}", sans-serif` }}><p className="break-words text-2xl">{normalizeFontName(font) || 'Your typeface'}</p><p className="mt-2 text-sm text-slate-500">The quick brown fox jumps over the lazy dog.</p></div></div>)}</div></section>
+          </div>}
+          {activeTab === 'design' && <div className="space-y-5"><section className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-950"><label className="text-sm font-semibold">Post language<Input value={extractedData.language} onChange={e => handleFieldChange('language', e.target.value)} className="mt-3 max-w-sm" /></label><p className="mt-2 text-xs text-slate-500">Your profile is in English. Posts follow this language setting.</p></section><section className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-950"><h3 className="text-base font-semibold">Default image style</h3><p className="mb-5 mt-1 text-xs leading-5 text-slate-500">Choose the starting style for new posts. You can change it for an individual post in step-by-step mode.</p><ImageDispositionPicker value={extractedData.imageDisposition || 'cutout'} onChange={imageDisposition => setExtractedData(prev => ({ ...prev, imageDisposition }))} /></section><BrandDesignStudio flowId={flowId} brand={extractedData} onChange={setExtractedData} /></div>}
+        </div>
+        <footer className="sticky bottom-0 z-10 flex items-center justify-between gap-4 border-t border-slate-200 bg-white/95 px-1 py-4 backdrop-blur dark:border-slate-800 dark:bg-slate-950/95"><p className="text-xs text-slate-400">Used to shape your future posts.</p><Button onClick={handleSave} disabled={saving || loading || translating} className="bg-slate-900 text-white hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900">{saving && <Loader2 size={14} className="mr-2 animate-spin" />}{saving ? 'Saving…' : 'Save changes'}</Button></footer>
+      </>}
     </div>
   )
 }

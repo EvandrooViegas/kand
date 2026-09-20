@@ -8,6 +8,7 @@ import { handleUploadImage, handleGetUpload } from '@/lib/handlers/uploadHandler
 import { handleRender, handleGetRendered, handleGetRenders, handleApproveRender, handleDeleteRender } from '@/lib/handlers/renderHandlers'
 import { handleGetFlows, handleCreateFlow, handleGetFlow, handleUpdateFlow, handleDeleteFlow } from '@/lib/handlers/flowHandlers'
 import { handleExtractBusinessInfo } from '@/lib/handlers/businessInfoHandler'
+import { ensureEnglishBusinessProfile } from '@/lib/services/englishBusinessProfile'
 import { handleGenerateContentIdeas } from '@/lib/handlers/contentIdeasHandler'
 import { handleGenerateCopywriting } from '@/lib/handlers/copywritingHandler'
 import { handleUploadAsset, handleListAssets, handleGetAsset, handleDeleteAsset, handleUpdateAsset } from '@/lib/handlers/assetHandlers'
@@ -40,8 +41,13 @@ async function handleRoute(request, { params }) {
     }
 
     // Extract business info endpoint
+    if (route === '/translate-business-profile' && method === 'POST') {
+      const body = await request.json()
+      if (typeof body.flowId !== 'string' || !body.flowId) return corsify(NextResponse.json({ error: 'Brand ID is required' }, { status: 400 }))
+      return corsify(NextResponse.json({ brandContext: await ensureEnglishBusinessProfile(db, body.flowId) }))
+    }
     if (route === '/extract-business-info' && method === 'POST') {
-      return await handleExtractBusinessInfo(await request.json())
+      return await handleExtractBusinessInfo(await request.json(), db, request)
     }
 
     // Content ideas generation endpoint

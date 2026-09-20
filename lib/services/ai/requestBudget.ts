@@ -47,9 +47,10 @@ export async function budgetedCompletion(groq:any,request:any,backups?:any[],ope
 export function budgetedModels(groq:any) {return budgetedCompletion(groq,null,undefined,'models')}
 export function compactBrand(brand:any) {
  const out:any={}
- for(const key of ['name','about','description','industry','services','products','audience','targetAudience','values','tone','language','positioning','differentiators']) {
+ const limits:Record<string,number>={about:6500,description:1200,services:3500,projects:5000,targetAudience:1800,tone:1000,suggestedCtas:1500,differentiators:1800,contentTopics:2000}
+ for(const key of ['name','about','description','industry','services','products','projects','audience','targetAudience','values','tone','language','positioning','differentiators','suggestedCtas','contentTopics']) {
   const value=brand?.[key]
-  if(value!=null)out[key]=(typeof value==='string'?value:JSON.stringify(value)).slice(0,key==='about'||key==='description'?900:450)
+  if(value!=null)out[key]=(typeof value==='string'?value:JSON.stringify(value)).slice(0,limits[key]||450)
  }
  return out
 }

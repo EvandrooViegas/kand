@@ -121,6 +121,7 @@ function AssetDetail({ asset, onClose, onDelete, onSaved }) {
           </div>
         )}
 
+        {asset.source_page && <div className="px-6 pt-4 text-sm"><a href={asset.source_page} target="_blank" rel="noreferrer" className="underline">View original website page</a></div>}
         {/* Tags */}
         <div className="px-6 pt-4"><label htmlFor="asset-description" className="text-sm font-semibold">Image description</label><textarea id="asset-description" value={description} onChange={e=>setDescription(e.target.value)} maxLength={2000} rows={4} className="w-full border rounded-lg p-3 mt-2 bg-transparent" placeholder="Describe the subject, activity and setting in any language."/><p className="text-xs text-muted-foreground mb-2">Used to match this image to relevant background-photo slides. Your original language is preserved.</p><Button size="sm" disabled={savingDescription||description===(asset.description||'')} onClick={saveDescription}>{savingDescription?'Saving…':'Save description'}</Button></div>
         {asset.tags?.length > 0 && (
@@ -388,7 +389,7 @@ export default function Gallery({ flowId, brandContext }) {
       <UploadZone onFiles={files=>{setPendingFiles(Array.from(files));setUploadDescriptions({})}} uploading={uploading} />
       {pendingFiles.length>0&&<div className="border rounded-xl p-4 space-y-3"><p className="font-semibold">Describe your images (optional)</p>{pendingFiles.map((file,index)=><label key={file.name+index} className="block text-sm">{file.name}<textarea rows={3} maxLength={2000} disabled={uploading} value={uploadDescriptions[uploadKey(file)]||''} onChange={e=>setUploadDescriptions(prev=>({...prev,[uploadKey(file)]:e.target.value}))} placeholder="What does this image show? Any language is welcome." className="block w-full border rounded-lg p-2 mt-1 bg-transparent"/></label>)}<Button disabled={uploading} onClick={()=>handleFiles([...pendingFiles])}>{uploading?'Uploading…':'Upload images'}</Button><Button variant="ghost" disabled={uploading} onClick={()=>setPendingFiles([])}>Cancel</Button></div>}
       <div className="flex gap-2" role="tablist" aria-label="Image source">
-        {[['uploaded','Uploaded'],['generated','AI generated']].map(([key,label])=>(
+        {[['uploaded','Brand images'],['generated','AI generated']].map(([key,label])=>(
           <button key={key} role="tab" aria-selected={assetTab===key} onClick={()=>setAssetTab(key)} className={`px-4 py-2 rounded-lg text-sm font-semibold ${assetTab===key?'bg-primary text-primary-foreground':'bg-slate-100 dark:bg-slate-800'}`}>{label} ({assets.filter(a=>key==='generated'?a.source==='ai_generated':a.source!=='ai_generated').length})</button>
         ))}
       </div>

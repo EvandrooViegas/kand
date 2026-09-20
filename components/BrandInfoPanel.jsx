@@ -3,6 +3,8 @@
 import ColorPriority, { reorderColors } from '@/components/ColorPriority'
 import { useState, useEffect } from 'react'
 import LogoVariants from '@/components/LogoVariants'
+import BusinessResearchDetails from '@/components/BusinessResearchDetails'
+import { loadEnglishProfile } from '@/lib/client/englishProfile'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -56,10 +58,17 @@ export default function BrandInfoPanel({ flowId, flows = [], onFlowCreated }) {
   // ── load persisted brand context when the selected flow changes ────────────
   useEffect(() => {
     if (!flowId) { setData(null); return }
+    let active = true
+    setData(null)
     fetch(`/api/flows/${flowId}`)
       .then(r => r.json())
-      .then(flow => {
-        const bc = flow?.brandContext
+      .then(async flow => {
+        if (!active) return
+        let bc = flow?.brandContext
+        if (bc?.about && bc.profileLanguage !== 'en') {
+          try { bc = await loadEnglishProfile(flowId, bc) } catch (error) { if (active) toast.error(error.message) }
+        }
+        if (!active) return
         if (bc && (bc.name || bc.about)) {
           setData({
             ...bc,
@@ -76,6 +85,7 @@ export default function BrandInfoPanel({ flowId, flows = [], onFlowCreated }) {
         }
       })
       .catch(() => {})
+    return () => { active = false }
   }, [flowId])
 
   // ── load Google fonts when font list changes ───────────────────────────────
@@ -103,7 +113,7 @@ export default function BrandInfoPanel({ flowId, flows = [], onFlowCreated }) {
       const res = await fetch('/api/extract-business-info', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: url.trim() }),
+        body: JSON.stringify({ url: url.trim(), flowId }),
       })
       if (!res.ok) {
         const e = await res.json()
@@ -112,6 +122,7 @@ export default function BrandInfoPanel({ flowId, flows = [], onFlowCreated }) {
       const d = await res.json()
       if (d.logoVariantsError) toast.warning(d.logoVariantsError)
       setData({
+        ...d.flow?.brandContext,
         name:     d.name                  || '',
         about:    d.about                 || '',
         logo:     d.logo                  || '',
@@ -120,7 +131,9 @@ export default function BrandInfoPanel({ flowId, flows = [], onFlowCreated }) {
         colors:   d.designSystem?.colors  || [],
         fonts:    d.designSystem?.fonts   || [],
       })
-      toast.success('Brand extracted — review and save')
+      onFlowCreated?.(d.flow)
+      toast.success(`Brand saved from ${d.pagesAnalyzed} pages. ${d.imageImport?.imported || 0} images added to the gallery.`)
+      if (d.imageImport?.skipped) toast.warning(`${d.imageImport.skipped} website images could not be imported or were too small.`)
     } catch (err) {
       toast.error(err.message || 'Extraction failed')
     } finally {
@@ -323,6 +336,7 @@ export default function BrandInfoPanel({ flowId, flows = [], onFlowCreated }) {
             )}
 
             {/* ── Colors ── */}
+            <BusinessResearchDetails data={data} onChange={set} />
             <div>
               <button
                 onClick={() => setShowColors(v => !v)}

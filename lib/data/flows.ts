@@ -9,6 +9,16 @@ export interface FlowBrandContext {
   colors?: string[]
   fonts?: string[]
   imageDisposition?: 'cutout' | 'background' | 'framed' | 'none'
+  services?: string[]
+  projects?: { name: string; description: string; sourceUrl: string }[]
+  targetAudience?: string
+  tone?: string
+  suggestedCtas?: string[]
+  differentiators?: string[]
+  contentTopics?: string[]
+  website?: string
+  profileLanguage?: 'en'
+  researchSources?: { url: string; title: string; category: string }[]
 }
 
 export interface Flow {
