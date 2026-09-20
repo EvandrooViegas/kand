@@ -296,8 +296,8 @@ async function resolveUploadedAsset(
 ): Promise<{ asset: ResolvedAsset | null; warning: string | null }> {
   // Primary: use the asset the planner already selected
   if (slot.selected?.asset_id) {
-    const doc = await db.collection('assets').findOne({ id: slot.selected.asset_id })
-    if (doc && doc.status === 'ready') {
+    const doc = await db.collection('assets').findOne({ id: slot.selected.asset_id, brand_id })
+    if (doc && (doc.status === 'ready' || doc.description_tags?.length > 0)) {
       return {
         asset: {
           source:        'uploaded_asset',
@@ -307,7 +307,7 @@ async function resolveUploadedAsset(
           height:        doc.height ?? 0,
           asset_id:      doc.id,
           unsplash_id:   null,
-          alt:           doc.filename,
+          alt:           doc.description || doc.filename,
         },
         warning: null,
       }

@@ -174,22 +174,18 @@ Return ONLY the JSON.`
 // similarity between slot.search_keywords vector and asset.embedding.
 
 function scoreAsset(asset: any, keywords: string[]): number {
-  if (!Array.isArray(asset.tags) || asset.tags.length === 0) return 0
-  const kw = new Set(keywords.map(k => k.toLowerCase()))
-  const assetTags = asset.tags.map((t: string) => t.toLowerCase())
-  let hits = 0
-  for (const tag of assetTags) {
-    for (const k of kw) {
-      // partial match — "football" matches keyword "sport" via tag "sport" etc.
-      if (tag.includes(k) || k.includes(tag)) { hits++; break }
-    }
-  }
-  return hits / Math.max(kw.size, 1)
+  const words=(value:string)=>value.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().match(/[\p{L}\p{N}]+/gu)||[]
+  const kw=[...new Set(keywords.flatMap(words))]
+  // User-supplied descriptions take precedence over coarse automatic image tags.
+  const tags=asset.description?.trim()?asset.description_tags||[]:asset.tags||[]
+  const terms=new Set<string>(tags.flatMap((tag:string)=>words(tag)))
+  if(!kw.length)return 0
+  return kw.filter(k=>terms.has(k)).length/kw.length
 }
 
 function findCandidates(assets: any[], keywords: string[], topK = 3): AssetCandidate[] {
   return assets
-    .filter(a => a.status === 'ready')
+    .filter(a => a.status === 'ready' || a.description_tags?.length > 0)
     .map(a => ({ asset: a, score: scoreAsset(a, keywords) }))
     .filter(({ score }) => score > 0)
     .sort((a, b) => b.score - a.score)
@@ -232,7 +228,7 @@ export async function handlePlanAssets(db: any, body: any) {
     let uploadedAssets: any[] = []
     if (brand_id) {
       uploadedAssets = await db.collection('assets')
-        .find({ brand_id, status: 'ready' })
+        .find({ brand_id, $or: [{ status: 'ready' }, { 'description_tags.0': { $exists: true } }] })
         .limit(500)
         .toArray()
     }

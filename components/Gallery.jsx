@@ -13,6 +13,8 @@ import {
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
+const uploadKey = file => JSON.stringify([file.name, file.size, file.lastModified])
+
 function fileToDataUrl(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -49,7 +51,18 @@ function StatusBadge({ status }) {
 
 // ─── AssetDetail ─────────────────────────────────────────────────────────────
 
-function AssetDetail({ asset, onClose, onDelete }) {
+function AssetDetail({ asset, onClose, onDelete, onSaved }) {
+  const [description,setDescription]=useState(asset.description||'')
+  const [savingDescription,setSavingDescription]=useState(false)
+  async function saveDescription(){
+    setSavingDescription(true)
+    try{
+      const response=await fetch(`/api/assets/${asset.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({brand_id:asset.brand_id,description})})
+      const data=await response.json()
+      if(!response.ok)throw Error(data.error||'Could not save description')
+      onSaved(data);toast.success('Description saved')
+    }catch(error){toast.error(error.message)}finally{setSavingDescription(false)}
+  }
   const [deleting, setDeleting] = useState(false)
 
   const handleDelete = async () => {
@@ -109,7 +122,7 @@ function AssetDetail({ asset, onClose, onDelete }) {
         )}
 
         {/* Tags */}
-        {asset.description&&<div className="px-6 pt-4"><p className="text-xs font-semibold text-slate-500 uppercase mb-2">Description</p><p className="text-sm text-slate-700 dark:text-slate-300">{asset.description}</p>{asset.source==='ai_generated'&&<p className="text-xs text-slate-500 mt-2">AI generated · Reused when the subject match reaches 85%.</p>}</div>}
+        <div className="px-6 pt-4"><label htmlFor="asset-description" className="text-sm font-semibold">Image description</label><textarea id="asset-description" value={description} onChange={e=>setDescription(e.target.value)} maxLength={2000} rows={4} className="w-full border rounded-lg p-3 mt-2 bg-transparent" placeholder="Describe the subject, activity and setting in any language."/><p className="text-xs text-muted-foreground mb-2">Used to match this image to relevant background-photo slides. Your original language is preserved.</p><Button size="sm" disabled={savingDescription||description===(asset.description||'')} onClick={saveDescription}>{savingDescription?'Saving…':'Save description'}</Button></div>
         {asset.tags?.length > 0 && (
           <div className="px-6 pt-4">
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">
@@ -231,6 +244,8 @@ export default function Gallery({ flowId, brandContext }) {
   const [selectedAsset, setSelectedAsset] = useState(null)
   const [search, setSearch]           = useState('')
   const [assetTab,setAssetTab]=useState('uploaded')
+  const [pendingFiles,setPendingFiles]=useState([])
+  const [uploadDescriptions,setUploadDescriptions]=useState({})
   const [pollingIds, setPollingIds]   = useState(new Set())
 
   // ── load ─────────────────────────────────────────────────────────────────────
@@ -302,11 +317,13 @@ export default function Gallery({ flowId, brandContext }) {
             data: dataUrl,
             filename: file.name,
             brand_id: brandId,
+            description: uploadDescriptions[uploadKey(file)]||'',
           }),
         })
         const asset = await res.json()
         if (!res.ok) throw new Error(asset.error || 'Upload failed')
         setAssets(prev => [asset, ...prev])
+        setPendingFiles(prev=>prev.filter(item=>item!==file))
         successCount++
       } catch (err) {
         toast.error(`${file.name}: ${err.message}`)
@@ -368,7 +385,8 @@ export default function Gallery({ flowId, brandContext }) {
     <div className="space-y-6">
 
       {/* Upload zone */}
-      <UploadZone onFiles={handleFiles} uploading={uploading} />
+      <UploadZone onFiles={files=>{setPendingFiles(Array.from(files));setUploadDescriptions({})}} uploading={uploading} />
+      {pendingFiles.length>0&&<div className="border rounded-xl p-4 space-y-3"><p className="font-semibold">Describe your images (optional)</p>{pendingFiles.map((file,index)=><label key={file.name+index} className="block text-sm">{file.name}<textarea rows={3} maxLength={2000} disabled={uploading} value={uploadDescriptions[uploadKey(file)]||''} onChange={e=>setUploadDescriptions(prev=>({...prev,[uploadKey(file)]:e.target.value}))} placeholder="What does this image show? Any language is welcome." className="block w-full border rounded-lg p-2 mt-1 bg-transparent"/></label>)}<Button disabled={uploading} onClick={()=>handleFiles([...pendingFiles])}>{uploading?'Uploading…':'Upload images'}</Button><Button variant="ghost" disabled={uploading} onClick={()=>setPendingFiles([])}>Cancel</Button></div>}
       <div className="flex gap-2" role="tablist" aria-label="Image source">
         {[['uploaded','Uploaded'],['generated','AI generated']].map(([key,label])=>(
           <button key={key} role="tab" aria-selected={assetTab===key} onClick={()=>setAssetTab(key)} className={`px-4 py-2 rounded-lg text-sm font-semibold ${assetTab===key?'bg-primary text-primary-foreground':'bg-slate-100 dark:bg-slate-800'}`}>{label} ({assets.filter(a=>key==='generated'?a.source==='ai_generated':a.source!=='ai_generated').length})</button>
@@ -450,7 +468,9 @@ export default function Gallery({ flowId, brandContext }) {
       {/* Detail modal */}
       {selectedAsset && (
         <AssetDetail
+          key={selectedAsset.id}
           asset={selectedAsset}
+          onSaved={asset=>{setAssets(prev=>prev.map(a=>a.id===asset.id?asset:a));setSelectedAsset(asset)}}
           onClose={() => setSelectedAsset(null)}
           onDelete={handleDelete}
         />

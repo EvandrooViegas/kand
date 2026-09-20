@@ -13,6 +13,17 @@ function engine(fetch, generation, env = {}) {
 }
 const photo = id => ({ id, urls: { regular: `https://images.example/${id}` } })
 const slot = { search_queries: ['hands testing soil', 'gardener holding soil'], search_keywords: ['garden'], visual_purpose: 'Check soil' }
+test('described background upload resolves before automatic tagging without stock or generation calls', async () => {
+ const e=engine(async()=>{throw Error('No network expected')},async()=>{throw Error('No generation expected')})
+ const db={collection:()=>({findOne:async query=>{
+  assert.equal(query.brand_id,'brand-a');assert.equal(query.id,'upload')
+  return {id:'upload',status:'processing',description:'Campo de trigo',description_tags:['wheat','field'],url:'saved-photo',width:1200,height:800}
+ }})}
+ const result=await e.resolveSlot(db,{slot_id:'bg',needs_visual:true,preferred_source:'uploaded_asset',treatment:'environmental',selected:{asset_id:'upload'}},'brand-a',null,null,new Set())
+ assert.equal(result.resolvedAsset.url,'saved-photo')
+ assert.equal(result.resolvedAsset.alt,'Campo de trigo')
+ assert.equal(result.warning,null)
+})
 test('background stock preference avoids AI and retains environmental treatment',async()=>{
  const e=engine(async()=>({ok:true,json:async()=>({results:[photo('background')]})}),async()=>{throw Error('AI should not run')})
  const result=await e.resolveSlot({}, {...slot,slot_id:'bg',needs_visual:true,preferred_source:'unsplash',treatment:'environmental'},null,'key',null,new Set())

@@ -756,12 +756,12 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
       const res  = await fetch('/api/generate-content-ideas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brandContext,existingTopics:ideas.map(i=>i.topic).slice(-30) }),
+        body: JSON.stringify({ brandContext,existingTopics:ideas.slice(0,30).map(i=>i.topic) }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed')
       if (!Array.isArray(data.ideas) || !data.ideas.length) throw new Error('No ideas returned')
-      const next=[...ideas,data.ideas[0]]
+      const next=[data.ideas[0],...ideas]
       setIdeas(next)
       await persistToFlow(next, copyResults, planResults, resolveResults, designResults)
       toast.success('New idea added')

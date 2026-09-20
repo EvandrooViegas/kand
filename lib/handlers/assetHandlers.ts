@@ -8,6 +8,7 @@ import { v4 as uuidv4 } from 'uuid'
 import sharp from 'sharp'
 import { corsify, getBaseUrl } from '@/lib/services/middleware'
 import { analyseImageBuffer } from '@/lib/services/visionAnalysis'
+import { indexAssetDescription } from '@/lib/services/assetDescription'
 
 // ─── thumbnail ────────────────────────────────────────────────────────────────
 
@@ -34,6 +35,9 @@ export async function handleUploadAsset(db: any, body: any, request: Request) {
   }
   if (!brand_id) {
     return corsify(NextResponse.json({ error: 'brand_id is required' }, { status: 400 }))
+  }
+  if (body.description != null && (typeof body.description !== 'string' || body.description.length > 2000)) {
+    return corsify(NextResponse.json({ error: 'Description must be text with at most 2000 characters' }, { status: 400 }))
   }
 
   // Parse data URL without regex (regex on multi-MB strings blows the call stack)
@@ -65,6 +69,7 @@ export async function handleUploadAsset(db: any, body: any, request: Request) {
   }
 
   const baseUrl     = getBaseUrl(request)
+  const descriptionData=await indexAssetDescription(body.description??'')
   const assetId     = `asset_${uuidv4().replace(/-/g, '').slice(0, 16)}`
   const uploadId    = uuidv4()
   const thumbId     = uuidv4()
@@ -85,6 +90,7 @@ export async function handleUploadAsset(db: any, body: any, request: Request) {
 
   const assetDoc: any = {
     id: assetId,
+    ...descriptionData,
     brand_id,
     url,
     thumbnail_url,
@@ -155,6 +161,23 @@ export async function handleGetAsset(db: any, id: string) {
   if (!asset) return corsify(NextResponse.json({ error: 'Not found' }, { status: 404 }))
   const { _id, ...rest } = asset
   return corsify(NextResponse.json(rest))
+}
+
+export async function handleUpdateAsset(db: any, id: string, body: any) {
+  if (typeof body?.brand_id !== 'string' || !body.brand_id || typeof body.description !== 'string' || body.description.length > 2000) {
+    return corsify(NextResponse.json({ error: 'brand_id and a description of at most 2000 characters are required' }, { status: 400 }))
+  }
+  const filter = { id, brand_id: body.brand_id }
+  const asset = await db.collection('assets').findOne(filter)
+  if (!asset) return corsify(NextResponse.json({ error: 'Image not found' }, { status: 404 }))
+  if (body.description.trim() === asset.description && (asset.search_description || !asset.description)) {
+    const { _id, ...unchanged } = asset
+    return corsify(NextResponse.json(unchanged))
+  }
+  const data = await indexAssetDescription(body.description)
+  await db.collection('assets').updateOne(filter, { $set: { ...data, updated_at: new Date() } })
+  const { _id, ...updated } = await db.collection('assets').findOne(filter)
+  return corsify(NextResponse.json(updated))
 }
 
 export async function handleDeleteAsset(db: any, id: string) {

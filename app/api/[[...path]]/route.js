@@ -10,7 +10,7 @@ import { handleGetFlows, handleCreateFlow, handleGetFlow, handleUpdateFlow, hand
 import { handleExtractBusinessInfo } from '@/lib/handlers/businessInfoHandler'
 import { handleGenerateContentIdeas } from '@/lib/handlers/contentIdeasHandler'
 import { handleGenerateCopywriting } from '@/lib/handlers/copywritingHandler'
-import { handleUploadAsset, handleListAssets, handleGetAsset, handleDeleteAsset } from '@/lib/handlers/assetHandlers'
+import { handleUploadAsset, handleListAssets, handleGetAsset, handleDeleteAsset, handleUpdateAsset } from '@/lib/handlers/assetHandlers'
 import { handlePlanAssets } from '@/lib/handlers/assetPlannerHandler'
 import { handleResolveAssets } from '@/lib/handlers/assetResolverHandler'
 import { handleDesignCanvas, handleSwitchDesign } from '@/lib/handlers/canvasDesignerHandler'
@@ -79,6 +79,7 @@ async function handleRoute(request, { params }) {
     if (assetMatch) {
       if (method === 'GET') return await handleGetAsset(db, assetMatch[1])
       if (method === 'DELETE') return await handleDeleteAsset(db, assetMatch[1])
+      if (method === 'PATCH') return await handleUpdateAsset(db, assetMatch[1], await request.json())
     }
 
     const designMatch = route.match(/^\/canvases\/([^/]+)\/design$/)
