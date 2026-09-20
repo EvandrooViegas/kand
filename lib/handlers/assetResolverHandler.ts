@@ -103,7 +103,7 @@ async function searchUnsplash(
     }
 
     const candidates = (Array.isArray(data?.results) ? data.results : [])
-      .filter((photo: any) => photo.id && (photo.urls?.regular || photo.urls?.full) && !usedPhotoIds.has(photo.id))
+      .filter((photo: any) => photo.id && (photo.urls?.regular || photo.urls?.full) && !usedPhotoIds.has(photo.id)&&!usedPhotoIds.has(photo.urls?.regular||photo.urls?.full))
       .slice(0, 20)
     if (!candidates.length) continue
     // Rank subject relevance; reserve before another slot resumes.
@@ -115,6 +115,7 @@ async function searchUnsplash(
     }
     const photo = candidates.sort((a: any, b: any) => score(b) - score(a))[0]
     usedPhotoIds.add(photo.id)
+    usedPhotoIds.add(photo.urls?.regular||photo.urls?.full)
 
     return {
       source:        'unsplash',
@@ -262,12 +263,13 @@ function buildGenerationBrief(slot: VisualSlot, nativeTransparency = false): str
     'SLIDE CONTEXT: '+JSON.stringify(slot.slide_context ?? {headline:slot.visual_purpose}),
     'BRAND CONTEXT: '+JSON.stringify(slot.brand_context ?? {}),
     'VISIBLE ACTION AND SUBJECT: '+(slot.subject_description || slot.visual_purpose),
+    'EXPLANATORY PURPOSE: Illustrate what the slide teaches, not an assortment of symbols associated with its topic. Identify the main entity, action and relationship in the supplied copy, then make that relationship visibly understandable. Time-based metrics need a visible progression; accumulated value needs visible contributions joining into one total. A single sale must not stand in for lifetime value. Every prop must contribute to the explanation. Do not add shopping bags, cards, coins, growth arrows, clocks or calendars simply because the text mentions a business metric. The chosen scene takes priority over generic brand imagery. Keep the composition simple, without invented numbers, labels or charts that imply unsupported data.',
     'GENERAL SUBJECT RULE: Choose imagery from the concrete meaning of this slide, not a recurring industry representative. Valid subjects include objects, tools, plants, animals, environments and people performing relevant actions. Keep the specified subject category. Object-only and Environment-only scenes must contain zero people or hands. Generic brand preferences for people do not override a specific slide subject. Never add a laptop user simply to represent business, technology or information.',
     " Only when the shot brief calls for a person, compose an expressive person with a believable emotion matching the message and a complete relevant prop. Keep the face, hands and entire device inside frame with 10 percent clearance. Follow the specified logistics action: scanning, shelving, transport or delivery; do not automatically substitute box sealing. Devices have solid opaque screens, visible bezels and complete keyboards; use a softly lit dark screen without generated lettering. Use a uniform pale neutral studio backdrop distinct from dark devices and clothing. Never make screens transparent or match their colour to the backdrop. Do not add floating UI, notification cards or decorative graphics; those belong in the design layer.",
     'SHOT BRIEF: '+(slot.generation_prompt || slot.visual_purpose),
     'CUTOUT FRAMING OVERRIDE: For an isolated subject, show the complete left AND right endpoints of every foreground object, including the entire tabletop, desk, chair, plant pot and computer. Do not add a desk, table, ladder or room fragment unless explicitly named in VISIBLE ACTION AND SUBJECT. If furniture is explicitly required, show a compact freestanding item with both outer ends visibly terminating inside frame. Leave 10 percent clear space on each horizontal side. Nothing may intersect either side border. Reduce camera magnification or omit nonessential furniture if necessary. This constraint overrides any instruction to fill the frame. Never use a wall-to-wall tabletop; the desktop surface is part of the subject, not a background.',
     'FRAMING: Never crop the subject assembly on both horizontal sides. Both horizontal sides must show complete outer contours and empty margin for isolated subjects. Widen the shot or rearrange props to achieve this. Keep the entire head visible.',
-    /Object-only:/i.test(slot.subject_description||'') ? 'MANDATORY OBJECT-ONLY COMPOSITION: '+slot.subject_description+'. Zero people, faces, hands, workers or human silhouettes. At most three compact relevant objects. No workbench, tabletop, floor plane, ladder, surrounding wall or room backdrop. Preserve every outer contour. This scene choice overrides generic brand directions asking for a person.' : 'Show only the activity described by this slide. Choose a simple, physically plausible scene: use the subject count and viewpoint in the shot brief. Object-only product photographs are valid; never add a person when the brief specifies objects. Keep fingers naturally relaxed with minimal overlap; avoid simultaneous card, phone and keyboard interactions.',
+    /Object-only:/i.test(slot.subject_description||'') ? 'MANDATORY OBJECT-ONLY COMPOSITION: '+slot.subject_description+'. Zero people, faces, hands, workers or portraits. Use only the objects explicitly named in the scene, as one compact coherent assembly. A customer marker in a teaching model is a symbolic object, not a human portrait. No workbench, tabletop, floor plane, ladder, surrounding wall or room backdrop. Preserve every outer contour. This scene choice overrides generic brand directions asking for a person.' : 'Show only the activity described by this slide. Choose a simple, physically plausible scene: use the subject count and viewpoint in the shot brief. Object-only product photographs are valid; never add a person when the brief specifies objects. Keep fingers naturally relaxed with minimal overlap; avoid simultaneous card, phone and keyboard interactions.',
     slot.image_style==='drawing' ? 'Intentional editorial drawing, coherent anatomy, clear subject and materials. Follow the illustration medium in the shot brief. No text, watermark or fake logos.' : 'Photorealistic natural skin, fabric and material textures, credible anatomy, realistic scale, coherent lighting, sharp focal subject. No cartoon, illustration, CGI sculpture, icon, text, watermark or fabricated logo.',
     slot.treatment==='isolated_subject'
       ? nativeTransparency ? 'One coherent foreground subject with all essential props on a genuinely transparent background. Preserve opaque screens, clothing and solid objects. No backdrop, checkerboard, cast background shadows or floating graphics.' : 'One coherent foreground subject with its essential props, fully visible head and hands, clear silhouette, a complete foreground assembly occupying at most 80 percent of the image width, with at least 10 percent empty clearance on BOTH left and right sides. Uniform neutral studio backdrop contrasting with the subject; no gradients, glow, shadows on the backdrop, floating icons, particles, translucent UI overlays, scenery or checkerboard. Keep all essential props physically connected to the subject. Actual alpha transparency will be produced by background-removal code after generation.'
@@ -393,6 +395,10 @@ async function resolveSlot(
   }
   if(slot.preferred_source==='uploaded_asset') {
     const {asset,warning}=await resolveUploadedAsset(db,slot,brand_id)
+    if(asset){
+      if(usedPhotoIds.has(asset.url))return {...base,resolvedAsset:null,warning:'This image is already used in this post; this slide will use text only.'}
+      usedPhotoIds.add(asset.url)
+    }
     return {...base,resolvedAsset:asset,warning}
   }
   // One generation only. Never retry or change the selected image source automatically.
@@ -404,6 +410,10 @@ async function resolveSlot(
       }catch(error){console.warn('[resolver] Generated library search unavailable:',(error as Error).message)}
     }
     const asset=await generateImage(buildGenerationBrief(slot,true),slot.search_keywords??[],falKey,slot.treatment==='isolated_subject')
+    if(asset){
+      if(usedPhotoIds.has(asset.url))return {...base,resolvedAsset:null,warning:'Duplicate image omitted; no additional generation was requested.'}
+      usedPhotoIds.add(asset.url)
+    }
     return {...base,source:'ai_generated',resolvedAsset:asset,warning:asset?null:'AI image generation returned no image'}
   }catch(error){return {...base,resolvedAsset:null,warning:(error as Error).message}}
 }

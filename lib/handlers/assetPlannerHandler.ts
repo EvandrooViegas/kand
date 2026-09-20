@@ -224,7 +224,9 @@ export async function handlePlanAssets(db: any, body: any) {
     if (!copy)   return corsify(NextResponse.json({ error: 'copy is required' },   { status: 400 }))
     if (!idea)   return corsify(NextResponse.json({ error: 'idea is required' },   { status: 400 }))
 
-    const aiSlots=layoutPlan.slots.map((layout:any,index:number)=>localAssetBrief(layout,copy.slides?.[index]||copy,idea))
+    const usedScenes=new Set<string>()
+    const aiSlots=layoutPlan.slots.map((layout:any,index:number)=>localAssetBrief(layout,copy.slides?.[index]||copy,idea,usedScenes))
+    layoutPlan.slots=layoutPlan.slots.map((layout:any,index:number)=>aiSlots[index].needs_visual===false?{...layout,needs_visual:false,background:false,frame:null,spec:{...layout.spec,background:{...layout.spec.background,type:'solid'},elements:layout.spec.elements.filter((e:any)=>e.type!=='image')}}:layout)
 
     // Load uploaded assets for this brand (for matching)
     let uploadedAssets: any[] = []

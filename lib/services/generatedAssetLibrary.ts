@@ -16,9 +16,11 @@ export function imageMatchScore(request:any,asset:any):number{
 export async function findGeneratedAsset(db:any,brandId:string|null,request:any,used:Set<string>){
  if(!brandId)return null
  const assets=await db.collection('assets').find({brand_id:brandId,source:'ai_generated',status:'ready'}).toArray()
- const match=assets.filter((a:any)=>a.url&&!used.has(a.id)).map((asset:any)=>({asset,score:imageMatchScore(request,asset)})).filter((m:any)=>m.score>=.85).sort((a:any,b:any)=>b.score-a.score||(a.asset.usage_count||0)-(b.asset.usage_count||0))[0]
+ const match=assets.filter((a:any)=>a.url&&!used.has(a.id)&&!used.has(a.url)&&(!a.subject?.url||!used.has(a.subject.url))).map((asset:any)=>({asset,score:imageMatchScore(request,asset)})).filter((m:any)=>m.score>=.85).sort((a:any,b:any)=>b.score-a.score||(a.asset.usage_count||0)-(b.asset.usage_count||0))[0]
  if(!match)return null
  used.add(match.asset.id)
+ used.add(match.asset.url)
+ if(match.asset.subject?.url)used.add(match.asset.subject.url)
  await db.collection('assets').updateOne({id:match.asset.id,brand_id:brandId},{$inc:{usage_count:1},$set:{last_used_at:new Date()}})
  return {url:match.asset.url,width:match.asset.width,height:match.asset.height,subject:match.asset.subject,asset_id:match.asset.id,reused:true,match_score:match.score}
 }

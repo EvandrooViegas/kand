@@ -33,3 +33,13 @@ test('same carousel reserves images and reused results are not inserted again',a
  assert.equal(results.filter(Boolean).length,1)
  await service.saveGeneratedAsset(db,'brand-a',request,results.find(Boolean));assert.equal(db.records.length,1)
 })
+
+test('gallery aliases cannot reuse identical photo or cutout URLs in a carousel',async()=>{
+ const db=database(),used=new Set()
+ for(const id of ['one','alias'])db.records.push({...request,id,brand_id:'brand-a',status:'ready',source:'ai_generated',url:'/api/uploads/same',subject:{url:'/api/uploads/cutout'}})
+ const first=await service.findGeneratedAsset(db,'brand-a',request,used)
+ assert.ok(first)
+ assert.equal(await service.findGeneratedAsset(db,'brand-a',request,used),null)
+ db.records.push({...db.records[0],id:'different-original',url:'/api/uploads/other'})
+ assert.equal(await service.findGeneratedAsset(db,'brand-a',request,used),null)
+})

@@ -152,3 +152,34 @@ test('strategic garment cuts select fabric details, never analytics imagery',()=
  const analytics=localAssetBrief(layout,{headline:'Análise de dados',body:'Compare métricas de vendas.'},{id:'data'})
  assert.match(analytics.subject_description,/chart/)
 })
+
+test('carousel scene planning avoids repeats and mixes relevant people with objects',()=>{
+ const {localAssetBrief}=new Function(load('lib/designs/localAssetBrief.ts')+';return {localAssetBrief}')()
+ const used=new Set(),idea={id:'project',topic:'Gestão de projetos e orçamento'}
+ const copy=[{headline:'Conheça o nosso método de gestão',body:'Entrega dentro do orçamento e do prazo.'},{headline:'Três fases do nosso Project Management',body:'Planeamento, execução e monitorização.'},{headline:'Controlo de custos e prazos em tempo real',body:'Variação de orçamento e cronograma.'}]
+ const briefs=copy.map((slide,i)=>localAssetBrief({slot_id:String(i),needs_visual:true,treatment:'isolated_subject',brief:''},slide,idea,used))
+ assert.equal(new Set(briefs.map(b=>b.subject_description)).size,3)
+ assert.ok(briefs.some(b=>/coordinator|manager/.test(b.subject_description)))
+ assert.ok(briefs.some(b=>b.subject_description.startsWith('Object-only:')))
+ assert.ok(briefs.every(b=>!b.subject_description.includes('calculator')))
+ const exhausted=new Set()
+ const repeated=Array.from({length:4},(_,i)=>localAssetBrief({slot_id:String(i),needs_visual:true,treatment:'isolated_subject',brief:''},copy[0],idea,exhausted))
+ assert.equal(repeated.filter(b=>b.needs_visual).length,3)
+ assert.equal(repeated[3].preferred_source,'none')
+ assert.equal(repeated[3].generation_prompt,'')
+})
+
+test('LTV explains one customer contributing revenue over time instead of shopping props',()=>{
+ const {localAssetBrief}=new Function(load('lib/designs/localAssetBrief.ts')+';return {localAssetBrief}')()
+ const used=new Set()
+ for(let i=0;i<2;i++){
+  const b=localAssetBrief({slot_id:String(i),needs_visual:true,treatment:'isolated_subject',brief:''},{headline:'Valor do Tempo de Vida do Cliente (LTV)',body:'O LTV mede a receita total que um cliente gera ao longo da sua relação com a empresa. Multiplique a margem média pela frequência de compra e duração do relacionamento.'},{id:'ltv',topic:'Vendas e finanças'},used)
+  assert.match(b.subject_description,/one customer|single customer/)
+  assert.match(b.subject_description,/milestones|timeline/)
+  assert.match(b.subject_description,/contributions|combined total/)
+  assert.match(b.subject_description,/No shopping bags, payment cards, coin piles/)
+  assert.match(b.generation_prompt,/specific relationship or mechanism/)
+  assert.equal(b.search_queries[0],'customer lifetime value repeat purchases')
+ }
+ assert.equal(used.size,2)
+})
