@@ -541,7 +541,7 @@ function PostPipelineCard({
                 {plan && plan.slots.map(slot => {
                   const srcMeta = {
                     uploaded_asset: { label: 'Uploaded', cls: 'bg-green-100 text-green-700' },
-                    unsplash:       { label: 'Unsplash',  cls: 'bg-blue-100 text-blue-700' },
+                    unsplash:       { label: 'Stock photo', cls: 'bg-blue-100 text-blue-700' },
                     ai_generated:   { label: 'AI gen',    cls: 'bg-purple-100 text-purple-700' },
                     none:           { label: 'No image',  cls: 'bg-slate-100 text-slate-500' },
                   }[slot.preferred_source] ?? { label: slot.preferred_source, cls: 'bg-slate-100 text-slate-500' }
@@ -584,6 +584,7 @@ function PostPipelineCard({
                       const srcCls = {
                         uploaded_asset: 'bg-green-100 text-green-700',
                         unsplash:       'bg-blue-100 text-blue-700',
+                        pexels:         'bg-teal-100 text-teal-700',
                         ai_generated:   'bg-purple-100 text-purple-700',
                         none:           'bg-slate-100 text-slate-500',
                       }[slot.source] ?? 'bg-slate-100 text-slate-500'
@@ -602,6 +603,9 @@ function PostPipelineCard({
                             </div>
                             {slot.visual_purpose && (
                               <p className="text-xs text-slate-500 dark:text-slate-400">{slot.visual_purpose}</p>
+                            )}
+                            {asset?.photo_page && /^https:\/\//.test(asset.photo_page) && (
+                              <a href={asset.photo_page} target="_blank" rel="noopener noreferrer" className="block text-xs text-slate-500 underline">Photo{asset.photographer ? ` by ${asset.photographer}` : ''} on {asset.source === 'pexels' ? 'Pexels' : 'Unsplash'}</a>
                             )}
                             {slot.warning && (
                               <div className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400">

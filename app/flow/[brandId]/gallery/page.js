@@ -8,7 +8,7 @@ export default async function GalleryPage({ params }) {
   if (!flow) notFound()
 
   return (
-    <div className="p-6 max-w-5xl mx-auto">
+    <div className="p-6 w-full">
       <Gallery
         flowId={flow.id}
         brandContext={flow.brandContext ?? null}

@@ -1,8 +1,10 @@
-import { budgetedModels, budgetedCompletion, compactBrand, retrySeconds } from '@/lib/services/ai/requestBudget'
+import { compactBrand, retrySeconds } from '@/lib/services/ai/requestBudget'
+import { availableGroqCompletion } from '@/lib/services/ai/availableGroqCompletion'
 import { NextResponse } from 'next/server'
 import { corsify } from '@/lib/services/middleware'
 import Groq from 'groq-sdk'
 import { randomUUID } from 'node:crypto'
+import { loadGenerationBrandContext, EXTRACTED_CONTEXT_RULES } from '@/lib/services/generationBrandContext'
 
 const SYSTEM_PROMPT = `You are an expert Instagram content strategist.
 
@@ -115,9 +117,9 @@ Return exactly this JSON structure:
 }`
 }
 
-export async function handleGenerateContentIdeas(body: any) {
+export async function handleGenerateContentIdeas(body: any, db: any) {
   try {
-    const { brandContext } = body
+    const brandContext = await loadGenerationBrandContext(db, body)
 
     if (!brandContext) {
       return corsify(
@@ -134,31 +136,18 @@ export async function handleGenerateContentIdeas(body: any) {
 
     const groq = new Groq({ apiKey,maxRetries:0 })
 
-    // Use the same model selection strategy as the business info extractor
-    let model = 'groq/compound-mini'
-    try {
-      const models = await budgetedModels(groq)
-      const preferred = ['groq/compound-mini', 'mixtral-8x7b-32768', 'llama-3-70b-versatile']
-      const found = preferred.find(p => models.data.some((m: any) => m.id === p))
-      if (found) model = found
-      else if (models.data.length > 0) model = models.data[0].id
-    } catch {
-      // stick with default
-    }
-
     const brandJson = JSON.stringify(compactBrand(brandContext))
     const existingTopics=(Array.isArray(body.existingTopics)?body.existingTopics:[]).filter((t:any)=>typeof t==='string').slice(-30).map((t:string)=>t.slice(0,160))
     const userPrompt = buildUserPrompt(brandJson)+'\nAvoid repeating these existing topics: '+JSON.stringify(existingTopics)
 
-    const response = await budgetedCompletion(groq,{
-      model,
+    const response = await availableGroqCompletion(groq,{
       messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: SYSTEM_PROMPT + '\n\n' + EXTRACTED_CONTEXT_RULES },
         { role: 'user', content: userPrompt },
       ],
       max_tokens: 1800,
       temperature: 0.7,
-    })
+    }, 'GROQ_CONTENT_IDEAS_MODEL')
 
     const raw = response.choices[0]?.message?.content?.trim()
     if (!raw) {

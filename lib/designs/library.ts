@@ -114,7 +114,7 @@ export function librarySpec(design: typeof DESIGN_LIBRARY[number], slot: any, co
     // Give text-led chapters a focal graphic in the space reserved for imagery.
     elements.push({type:['blueprint','editorial','poster'].includes(design.id)?'number':'ring',...box(8),size:240,color:accent,opacity:22,stroke:8,layer:-1})
   }
-  const size = art ? (chapter===0?96:chapter===2?82:70) : chapter===0 ? (design.id==='poster'?106:86) : closing ? 92 : chapter===2 ? 82 : chapter===3 ? 76 : 68
+  const size = art ? (chapter===0?108:chapter===2?82:70) : chapter===0 ? (design.id==='poster'?120:104) : closing ? 92 : chapter===2 ? 82 : chapter===3 ? 76 : 68
   elements.push({type:'text',role:'headline',...box(0),size,minSize:28,color:'text',align:chapter===4&&family%2?'center':'left',lineHeight:1.08})
   if (copy.body) elements.push({type:'text',role:'body',...box(4),size:chapter===2?28:chapter===3?34:30,minSize:18,color:'text'})
   if (copy.eyebrow) elements.push({type:'text',role:'eyebrow',x:72,y:66,width:650,height:44,size:22,color:'text'})

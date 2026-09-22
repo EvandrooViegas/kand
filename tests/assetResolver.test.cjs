@@ -7,8 +7,9 @@ const source = fs.readFileSync(require('node:path').join(__dirname, '../lib/hand
   .replace(/^import .*$/gm, '').replace(/export /g, '')
 function engine(fetch, generation, env = {}) {
   const library=new Function('createHash',stripTypeScriptTypes(fs.readFileSync('lib/services/generatedAssetLibrary.ts','utf8').replace(/^import .*$/gm,'').replace(/export /g,''))+';return {findGeneratedAsset,saveGeneratedAsset}')(require('node:crypto').createHash)
-  return vm.runInNewContext(stripTypeScriptTypes(source) + (generation ? '\ngenerateImage = generation;\n' : '') + '\n({ searchUnsplash, resolveSlot, buildGenerationBrief, generateImageOpenAI })', {
-    ...library,fetch, generation, console, Buffer, Uint8Array, AbortSignal, sharp: require('sharp'), process: {env}, Math: Object.assign(Object.create(Math), { random: () => 0 }),
+  return vm.runInNewContext(stripTypeScriptTypes(source) + (generation ? '\ngenerateImage = generation;\n' : '') + '\n({ searchUnsplash, searchStock, resolveSlot, buildGenerationBrief, generateImageOpenAI })', {
+    hasWatermarkMetadata: new Function(stripTypeScriptTypes(fs.readFileSync('lib/handlers/assetPlannerHandler.ts','utf8').replace(/^import .*$/gm,'').replace(/export /g,''))+';return hasWatermarkMetadata')(),
+    ...library,fetch, generation, console, URL, Buffer, Uint8Array, AbortSignal, sharp: require('sharp'), process: {env}, Math: Object.assign(Object.create(Math), { random: () => 0 }),
   })
 }
 const photo = id => ({ id, urls: { regular: `https://images.example/${id}` } })
@@ -165,4 +166,85 @@ test('object-only scene overrides brand requests for people without generating i
  assert.match(brief,/Zero people, faces, hands, workers/)
  assert.match(brief,/neither|both left and right/i)
  assert.ok(!brief.includes('Use a compact freestanding desk'))
+})
+
+test('stock-first background plans consult the brand gallery before network', async () => {
+ const e=engine(async()=>{throw Error('Stock should not run')})
+ const db={collection:()=>({find:()=>({limit:()=>({toArray:async()=>[
+  {id:'wrong',url:'wrong',tags:['garden'],description:'office',description_tags:['office']},
+  {id:'right',url:'right',description:'Jardim',description_tags:['garden'],status:'processing'}
+ ]})})})}
+ const result=await e.resolveSlot(db,{...slot,needs_visual:true,treatment:'environmental',preferred_source:'unsplash'},'brand','key',null,new Set())
+ assert.equal(result.source,'uploaded_asset');assert.equal(result.resolvedAsset.asset_id,'right')
+})
+
+test('missing planned background falls back to stock and rejects unrelated gallery tags', async () => {
+ const e=engine(async()=>({ok:true,json:async()=>({results:[photo('fallback')]})}))
+ const db={collection:()=>({findOne:async()=>null,find:()=>({limit:()=>({toArray:async()=>[{id:'wrong',url:'wrong',tags:['office']}]})})})}
+ const result=await e.resolveSlot(db,{...slot,needs_visual:true,treatment:'environmental',preferred_source:'uploaded_asset',selected:{asset_id:'deleted'}},'brand','key',null,new Set())
+ assert.equal(result.source,'unsplash');assert.equal(result.resolvedAsset.unsplash_id,'fallback')
+})
+
+test('stock rejects low resolution and unrelated results, preserving raw URL tracking',async()=>{
+ const e=engine(async()=>({ok:true,json:async()=>({results:[
+  {...photo('small'),width:640,height:480,alt_description:'garden'},
+  {...photo('wrong'),width:3000,height:2000,alt_description:'office computer'},
+  {...photo('sharp'),width:3000,height:2000,alt_description:'garden soil',urls:{raw:'https://images.unsplash.com/photo?ixid=tracking',regular:'preview'}}
+ ]})}))
+ const result=await e.searchUnsplash(slot,'key',new Set())
+ assert.equal(result.unsplash_id,'sharp')
+ const url=new URL(result.url)
+ assert.equal(url.searchParams.get('ixid'),'tracking');assert.equal(url.searchParams.get('w'),'2400');assert.equal(url.searchParams.get('q'),'90')
+})
+
+
+test('watermarked stock photos are skipped',async()=>{
+ const e=engine(async()=>({ok:true,json:async()=>({results:[{...photo('marked'),alt_description:'garden with watermark'},photo('clean')]})}))
+ assert.equal((await e.searchUnsplash(slot,'key',new Set())).unsplash_id,'clean')
+})
+
+test('watermarked planned gallery photos are rejected before stock fallback',async()=>{
+ const e=engine(async()=>({ok:true,json:async()=>({results:[photo('clean')]})}))
+ const marked={id:'marked',url:'marked',status:'ready',tags:['garden'],watermarked:true}
+ const db={collection:()=>({findOne:async()=>marked,find:()=>({limit:()=>({toArray:async()=>[marked]})})})}
+ const result=await e.resolveSlot(db,{...slot,needs_visual:true,treatment:'environmental',preferred_source:'uploaded_asset',selected:{asset_id:'marked'}},'brand','key',null,new Set())
+ assert.equal(result.resolvedAsset.unsplash_id,'clean')
+})
+
+const pexelsPhoto=(id,alt='garden soil')=>({id,alt,width:3000,height:2000,url:'https://www.pexels.com/photo/'+id,photographer:'Example Photographer',src:{original:'https://images.pexels.com/photos/'+id+'/image.jpeg',medium:'https://images.pexels.com/photos/'+id+'/thumb.jpeg'}})
+
+test('stock compares both providers and chooses the stronger content match',async()=>{
+ const requests=[]
+ const e=engine(async(url,options)=>{
+  requests.push({url,options})
+  return {ok:true,json:async()=>url.includes('pexels')?{photos:[pexelsPhoto(1)]}:{results:[{...photo('u'),width:4000,height:3000,alt_description:'garden'}]}}
+ })
+ const result=await e.searchStock({...slot,search_keywords:['garden','soil']},'unsplash-key','pexels-key',new Set())
+ assert.equal(requests.length,2);assert.equal(result.source,'pexels');assert.equal(result.pexels_id,'1')
+ assert.equal(requests.find(r=>r.url.includes('pexels')).options.headers.Authorization,'pexels-key')
+ assert.equal(result.photographer,'Example Photographer');assert.match(result.photo_page,/pexels/)
+})
+
+test('stock survives one provider failing and supports Pexels alone',async()=>{
+ const e=engine(async url=>url.includes('unsplash')?{ok:false,status:429}:{ok:true,json:async()=>({photos:[pexelsPhoto(2)]})})
+ assert.equal((await e.searchStock(slot,'key','key',new Set())).source,'pexels')
+ const result=await e.resolveSlot(null,{...slot,needs_visual:true,treatment:'environmental',preferred_source:'unsplash'},null,null,null,new Set())
+ assert.match(result.warning,/configure/)
+ const pexelsOnly=engine(async()=>({ok:true,json:async()=>({photos:[pexelsPhoto(3)]})}),null,{PEXELS_API_KEY:'key'})
+ assert.equal((await pexelsOnly.resolveSlot(null,{...slot,needs_visual:true,treatment:'environmental',preferred_source:'unsplash'},null,null,null,new Set())).source,'pexels')
+})
+
+test('Pexels excludes watermarked, undersized, unrelated and recently used photos',async()=>{
+ const e=engine(async()=>({ok:true,json:async()=>({photos:[
+  pexelsPhoto(1,'garden with watermark'),{...pexelsPhoto(2),width:640,height:480},pexelsPhoto(3,'office computer'),pexelsPhoto(4),pexelsPhoto(5)
+ ]})}))
+ assert.equal((await e.searchStock(slot,null,'key',new Set(['pexels:4']))).pexels_id,'5')
+})
+
+test('concurrent combined searches reserve distinct winners, not losing candidates',async()=>{
+ const e=engine(async url=>({ok:true,json:async()=>url.includes('pexels')?{photos:[pexelsPhoto(1),pexelsPhoto(2)]}:{results:[{...photo('u'),alt_description:'garden'}]}}))
+ const used=new Set()
+ const results=await Promise.all([e.searchStock({...slot,search_keywords:['garden','soil']},'key','key',used),e.searchStock({...slot,search_keywords:['garden','soil']},'key','key',used)])
+ assert.equal(new Set(results.map(r=>r.pexels_id)).size,2)
+ assert.equal(used.has('unsplash:u'),false)
 })

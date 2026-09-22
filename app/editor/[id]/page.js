@@ -320,6 +320,7 @@ function Editor() {
   const [hasChanges, setHasChanges] = useState(false)
   const [isEmbedded, setIsEmbedded] = useState(false)
   const savedCanvasRef = useRef(null)
+  const publishedCanvasRef = useRef(null)
   const historyRef = useRef({ past: [], future: [] })
   const clipboardRef = useRef([])
   const [, setHistoryTick] = useState(0)
@@ -346,6 +347,10 @@ function Editor() {
       return next
     })
   }
+
+  useEffect(() => {
+    if (savedCanvasRef.current && canvasState) setHasChanges(JSON.stringify(canvasState) !== savedCanvasRef.current)
+  }, [canvasState])
 
   const canvas = canvasState
 
@@ -662,6 +667,8 @@ function Editor() {
   }, [])
 
   useEffect(() => {
+    // Embedded slides come from the parent's current draft, including unsaved edits.
+    if (window.parent !== window) return
     fetch(`/api/canvases/${id}`).then((r) => r.json()).then((data) => {
       if (data.error) { toast.error(data.error); router.push('/') } else {
         // If editing a specific carousel page, use that page's design data
@@ -1266,6 +1273,10 @@ function Editor() {
 
   const save = async () => {
     if (!canvas) return
+    if (isEmbedded && canvas._carouselPageId) {
+      window.parent.postMessage({ type: 'kand:page-change', canvasId: id, slide: canvas, save: true }, window.location.origin)
+      return
+    }
 
     // If editing a carousel page, patch only that page inside the parent canvas
     if (canvas._carouselPageId) {
@@ -1286,7 +1297,7 @@ function Editor() {
       })
       if (res.ok) {
         savedCanvasRef.current = JSON.stringify(canvas)
-        setHasChanges(false)
+        setHasChanges(JSON.stringify(canvasRefObj.current) !== savedCanvasRef.current)
         // Notify parent frame (carousel editor) that this page was saved
         if (window.parent !== window) {
           window.parent.postMessage({ type: 'kand:page-saved', canvasId: id }, '*')
@@ -1299,7 +1310,7 @@ function Editor() {
     const res = await fetch(`/api/canvases/${id}`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(canvas) })
     if (res.ok) {
       savedCanvasRef.current = JSON.stringify(canvas)
-      setHasChanges(false)
+      setHasChanges(JSON.stringify(canvasRefObj.current) !== savedCanvasRef.current)
       // Notify parent frame (carousel editor) that this page was saved
       if (window.parent !== window) {
         window.parent.postMessage({ type: 'kand:page-saved', canvasId: id }, '*')
@@ -1311,12 +1322,61 @@ function Editor() {
   const saveRef = useRef(save)
   saveRef.current = save
 
+  useEffect(() => {
+    if (!isEmbedded || !canvas?._carouselPageId) return
+    const snapshot = JSON.stringify(canvas)
+    if (snapshot === publishedCanvasRef.current) return
+    publishedCanvasRef.current = snapshot
+    window.parent.postMessage({ type: 'kand:page-change', canvasId: id, slide: canvas }, window.location.origin)
+  }, [isEmbedded, canvas, id])
+
+  useEffect(() => {
+    const handler = (event) => {
+      if (event.origin !== window.location.origin || event.source !== window.parent || event.data?.canvasId !== id) return
+      if (event.data.type === 'kand:switch-page') {
+        // Message ordering ensures this draft reaches the parent before it sends the next slide.
+        window.parent.postMessage({ type: 'kand:page-change', canvasId: id,
+          slide: canvasRefObj.current, switchPage: true }, window.location.origin)
+      }
+      if (event.data.type === 'kand:load-page') {
+        const parent = event.data.canvas
+        const page = parent?.pages?.find(p => p.id === event.data.pageId)
+        if (!page) return
+        const next = { ...parent, nodes: page.nodes || [], groups: page.groups || [],
+          classes: page.classes || parent.classes || {}, background: page.background || parent.background,
+          _carouselPageId: page.id, _carouselPageName: page.name, _carouselPageType: page.type,
+        }
+        const snapshot = JSON.stringify(next)
+        savedCanvasRef.current = snapshot
+        publishedCanvasRef.current = snapshot
+        canvasRefObj.current = next
+        historyRef.current = { past: [], future: [] }
+        hasInitializedRef.current = false
+        setEditingId(null)
+        setSelectedIds([])
+        setSelectedGroupId(null)
+        setCropModeNodeId(null)
+        setSelectionRect(null)
+        savedRangeRef.current = null
+        setCanvasState(next)
+        setHasChanges(false)
+      }
+      if (event.data.type === 'kand:page-persisted' && event.data.pageId === canvasRefObj.current?._carouselPageId) {
+        savedCanvasRef.current = event.data.snapshot
+        setHasChanges(JSON.stringify(canvasRefObj.current) !== event.data.snapshot)
+      }
+    }
+    window.addEventListener('message', handler)
+    if (window.parent !== window) window.parent.postMessage({ type: 'kand:editor-ready', canvasId: id }, window.location.origin)
+    return () => window.removeEventListener('message', handler)
+  }, [id])
+
   // Debounced autosave — fires in the background without reloading anything
   useEffect(() => {
-    if (!hasChanges || !canvas) return
+    if (!hasChanges || !canvas || (isEmbedded && canvas._carouselPageId)) return
     const t = setTimeout(() => { saveRef.current() }, 2000)
     return () => clearTimeout(t)
-  }, [hasChanges, canvas])
+  }, [hasChanges, canvas, isEmbedded])
 
   const testRender = async () => {
     setRendering(true); setRenderResult(null)
@@ -1904,36 +1964,6 @@ function Editor() {
         </div>
       </header>
       )}
-      {isEmbedded && (
-        <header className="border-b-2 border-foreground/90 bg-[#FAF7F2] dark:bg-[#0E0D0B] px-4 py-2.5 flex items-center justify-between shrink-0 z-20">
-          <div className="flex items-center gap-3 min-w-0">
-            <Button variant="ghost" size="icon" className="hover:bg-[#D4FF00] hover:text-foreground shrink-0"
-              onClick={() => router.push(`/carousel/${id}`)}>
-              <ArrowLeft className="w-4 h-4" />
-            </Button>
-            <KandLogo size={26} />
-            {canvas._carouselPageType && (
-              <span className="text-[9px] px-1.5 py-0.5 rounded-full font-bold uppercase shrink-0"
-                style={{
-                  background: canvas._carouselPageType === 'top_peer' ? '#D4FF00'
-                    : canvas._carouselPageType === 'bottom_peer' ? '#9AB800' : '#6366f1',
-                  color: '#000'
-                }}>
-                {canvas._carouselPageType.replace(/_/g, ' ')}
-              </span>
-            )}
-            <span className="text-xs font-semibold truncate text-foreground/80">
-              {canvas._carouselPageName || 'Page'}
-            </span>
-            <span className="text-[10px] text-muted-foreground shrink-0">{canvas.width}×{canvas.height}</span>
-          </div>
-          <Button size="sm" onClick={save} disabled={!hasChanges}
-            className={`rounded-full px-4 h-8 font-semibold text-xs shrink-0 ${hasChanges ? 'bg-foreground text-background hover:bg-foreground/85' : 'bg-muted text-muted-foreground'}`}>
-            <Save className="w-3.5 h-3.5 mr-1.5" />{hasChanges ? 'Save' : 'Saved'}
-          </Button>
-        </header>
-      )}
-
       <ResizablePanelGroup direction="horizontal" className="flex-1 min-h-0">
         <ResizablePanel defaultSize={18} minSize={14} maxSize={32} className="min-w-0">
         <div className="h-full w-full border-r-2 border-foreground/90 bg-card flex flex-col min-h-0">
@@ -2352,6 +2382,7 @@ function Editor() {
                       onMouseDown={(e) => e.stopPropagation()}
                       onMouseUp={handleSelectionChange}
                       onKeyUp={handleSelectionChange}
+                      onInput={(e) => updateNode(enode.id, { text: htmlToTags(e.currentTarget.innerHTML || '') })}
                       onBlur={(e) => {
                         // Use innerHTML to capture all spaces including trailing ones
                         const html = e.target.innerHTML || '';

@@ -43,6 +43,11 @@ export function composeIdentity(blueprint:any,copy:any,slot:any,index:number,tot
   if(image&&seed%3===0) {b[0]=[72,150,420,600];b[2]=[540,120,468,800]}
   else if(image&&seed%3===1) {b[0]=[72,680,936,240];b[2]=[140,110,800,520]}
   else {b[0]=[72,100,936,image?250:540];if(image)b[2]=[72,380,936,550]}
+  if(body){
+   b[0][3]=Math.min(b[0][3],200)
+   if(b[0][1]+b[0][3]+128>1000)b[0][1]=1000-b[0][3]-128
+   b[1]=[b[0][0],b[0][1]+b[0][3]+18,b[0][2],100]
+  }
  }
  // Tune proportion and alignment to the post, without moving copy into imagery.
  if(kind==='split'&&chapter!=='cover') {
@@ -65,7 +70,7 @@ export function composeIdentity(blueprint:any,copy:any,slot:any,index:number,tot
   return {...e,opacity:Math.min(e.opacity??12,12),layer:-7}
  })
  elements.push({...title,type:'text',role:'headline',...box(b[0]),size:kind==='poster'||kind==='statistic'?110:chapter==='cover'?96:76})
- if(chapter!=='cover'&&copy.body)elements.push({...paragraph,type:'text',role:'body',...box(b[1]),size:body.length>250?28:32})
+ if(copy.body)elements.push({...paragraph,type:'text',role:'body',...box(b[1]),size:chapter==='cover'?28:body.length>250?28:32})
  if(showImage)elements.push({...visual,type:'image',...box(b[2]),image_variant:blueprint.imagery.placement==='cutout'?'subject':'photo',layer:2})
  if(copy.cta)elements.push({type:'text',role:'cta',x:72,y:956,width:680,height:64,size:26,color:'text'})
  if(copy.eyebrow)elements.push({type:'text',role:'eyebrow',x:72,y:48,width:800,height:40,size:22,color:'text'})
@@ -78,7 +83,7 @@ export function normalizeBlueprint(raw:any, issues:string[]=[]): any | null {
  for (const name of ['cover','content','closing']) {
   const template=raw.templates[name]
   if (!Array.isArray(template?.elements)) return reject('Missing '+name+' elements array')
-  const elements=template.elements.filter((e:any)=>e && !(name==='cover'&&e.role==='body') && TYPES.has(e.type) && [e.x,e.y,e.width,e.height].every(Number.isFinite) && e.width>0 && e.height>0).slice(0,24).map((e:any)=>{
+  const elements=template.elements.filter((e:any)=>e && TYPES.has(e.type) && [e.x,e.y,e.width,e.height].every(Number.isFinite) && e.width>0 && e.height>0).slice(0,24).map((e:any)=>{
    const out:any={...e}; delete out.font; delete out.text; delete out.url; delete out.src
    out.x=Math.max(0,Math.min(1060,e.x));out.y=Math.max(0,Math.min(1060,e.y));out.width=Math.min(e.width,1080-out.x);out.height=Math.min(e.height,1080-out.y)
    if(e.type==='text'||e.type==='badge') {

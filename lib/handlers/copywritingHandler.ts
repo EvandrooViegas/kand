@@ -3,6 +3,7 @@ import { cleanCopy } from '@/lib/services/copyText'
 import { NextResponse } from 'next/server'
 import { corsify } from '@/lib/services/middleware'
 import Groq from 'groq-sdk'
+import { loadGenerationBrandContext, EXTRACTED_CONTEXT_RULES } from '@/lib/services/generationBrandContext'
 
 const SYSTEM_PROMPT = `You are an expert Instagram copywriter specialized in creating high-quality social media content for businesses.
 
@@ -61,7 +62,7 @@ Each slide should have:
 * body
 * cta
 
-The first slide is a headline-only hook: a specific benefit, tension or intriguing question grounded in the brief. Aim for 5–12 words. Set its body and cta to empty strings; put explanations on subsequent slides.
+The first slide is a cover with a short hook and one brief teaser. Use 3–8 words for the headline when possible and never exceed 10 words. Make it instantly understandable, concrete and curiosity-driving without clickbait. Add a 2–14 word body that invites the reader into the carousel without explaining the whole topic. Set its cta to an empty string; put detailed explanations on subsequent slides.
 The middle slides should develop the idea logically.
 The final slide should summarize the message or provide a natural CTA.
 Do not put too much text on a slide.
@@ -154,21 +155,16 @@ Return ONLY valid JSON.`
 }
 
 async function getGroqModel(groq: Groq): Promise<string> {
-  try {
-    const models = await budgetedModels(groq)
-    const preferred = ['groq/compound-mini', 'mixtral-8x7b-32768', 'llama-3-70b-versatile']
-    const found = preferred.find(p => models.data.some((m: any) => m.id === p))
-    if (found) return found
-    if (models.data.length > 0) return models.data[0].id
-  } catch {
-    // fall through to default
-  }
-  return 'groq/compound-mini'
+  const models = await budgetedModels(groq)
+  const preferred = ['llama-3.3-70b-versatile', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'llama-3.1-8b-instant']
+  const found = preferred.find(id => models.data.some((model: any) => model.id === id && model.active !== false))
+  if (!found) throw new Error('No supported copywriting chat model is available in this Groq account. Check your project model permissions.')
+  return found
 }
-
-export async function handleGenerateCopywriting(body: any) {
+export async function handleGenerateCopywriting(body: any, db: any) {
   try {
-    const { brandContext, idea } = body
+    const { idea } = body
+    const brandContext = await loadGenerationBrandContext(db, body)
 
     if (!brandContext) {
       return corsify(NextResponse.json({ error: 'brandContext is required' }, { status: 400 }))
@@ -189,42 +185,51 @@ export async function handleGenerateCopywriting(body: any) {
     const briefJson = JSON.stringify(idea, null, 2)
     const userPrompt = buildUserPrompt(brandJson, briefJson)
 
-    // Retry up to 3 times on rate limit (429)
-    let raw: string | null = null
-    for (let attempt = 0; attempt < 1; attempt++) {
+    let parsed: any
+    let validationFeedback = ''
+    for (let attempt = 0; attempt < 2; attempt++) {
+      let response: any
       try {
-        const response = await budgetedCompletion(groq,{
+        response = await budgetedCompletion(groq, {
           model,
           messages: [
-            { role: 'system', content: SYSTEM_PROMPT },
-            { role: 'user', content: userPrompt },
+            { role: 'system', content: SYSTEM_PROMPT + '\n\n' + EXTRACTED_CONTEXT_RULES },
+            { role: 'user', content: userPrompt + (attempt ? `\nThe previous attempt failed output validation: ${validationFeedback}. Correct that issue and generate a complete JSON object with the requested fields and no commentary.` : '') },
           ],
-          max_tokens: 2400,
-          temperature: 0.7,
+          response_format: { type: 'json_object' },
+          max_tokens: attempt ? 4800 : 2400,
+          temperature: attempt ? 0.2 : 0.7,
         })
-        raw = response.choices[0]?.message?.content?.trim() ?? null
+      } catch (error: any) {
+        const code = error?.error?.error?.code || error?.error?.code || error?.code
+        if (attempt === 0 && code === 'json_validate_failed') continue
+        throw error
+      }
+      const choice = response.choices?.[0]
+      const raw = choice?.message?.content?.trim() || ''
+      try {
+        if (choice?.finish_reason === 'length') throw new Error('Truncated copywriting response')
+        parsed = JSON.parse(raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim())
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Expected a copywriting object')
+        if (!['single', 'carousel'].includes(parsed.format) || (idea.format && parsed.format !== idea.format)) throw new Error('Incorrect post format')
+        if (typeof parsed.caption !== 'string') throw new Error('Missing caption')
+        if (parsed.format === 'single' && (typeof parsed.headline !== 'string' || !parsed.headline.trim())) throw new Error('Missing headline')
+        if (parsed.format === 'carousel') {
+          if (!Array.isArray(parsed.slides) || parsed.slides.length < 2 || parsed.slides.some((slide: any) => !slide || typeof slide.headline !== 'string' || !slide.headline.trim())) throw new Error('Missing carousel slides')
+          const cover = parsed.slides[0]
+          const coverWords = cover.headline.trim().split(/\s+/u).filter(Boolean).length
+          const teaserWords = String(cover.body || '').trim().split(/\s+/u).filter(Boolean).length
+          if (coverWords > 10) throw new Error(`Carousel cover has ${coverWords} words; maximum is 10`)
+          if (teaserWords < 2 || teaserWords > 14) throw new Error(`Carousel cover teaser must contain 2–14 words; received ${teaserWords}`)
+          if (String(cover.cta || '').trim()) throw new Error('Carousel cover CTA must be empty')
+        }
         break
-      } catch (err: any) {
-        const is429 = err?.status === 429 || err?.message?.includes('rate_limit_exceeded')
-
-        throw err
+      } catch (error: any) {
+        validationFeedback = error?.message || 'invalid output'
+        if (attempt === 0) continue
+        return corsify(NextResponse.json({ error: 'AI could not generate complete, valid copywriting. Please retry; your saved content is unchanged.' }, { status: 502 }))
       }
     }
-
-    if (!raw) {
-      return corsify(NextResponse.json({ error: 'Empty response from AI' }, { status: 500 }))
-    }
-
-    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
-
-    let parsed: any
-    try {
-      parsed = JSON.parse(cleaned)
-    } catch {
-      console.error('Failed to parse copywriting AI response:', cleaned)
-      return corsify(NextResponse.json({ error: 'AI returned invalid JSON', raw: cleaned }, { status: 500 }))
-    }
-
     return corsify(NextResponse.json(cleanCopy(parsed)))
   } catch (error: any) {
     console.error('Copywriting generation error:', error)

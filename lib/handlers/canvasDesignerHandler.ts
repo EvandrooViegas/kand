@@ -1,6 +1,6 @@
 import { budgetedModels, budgetedCompletion } from '@/lib/services/ai/requestBudget'
 import { canvasBrand } from '@/lib/designs/canvasBrand'
-import { arrangeReadableBody, fitPlannedLayout, fitResolvedSlide, subjectOverlaps, parseDesignSequence, parseDesignBullets, planPostLayout } from '@/lib/designs/postLayout'
+import { arrangeReadableBody, backgroundCompositionForDesign, fitPlannedLayout, fitResolvedSlide, subjectOverlaps, parseDesignSequence, parseDesignBullets, planPostLayout } from '@/lib/designs/postLayout'
 
 import { blueprintSpec, complementaryAccent } from '@/lib/designs/brandBlueprint'
 import { persistInlineImages } from '@/lib/services/persistInlineImages'
@@ -1736,10 +1736,15 @@ function renderDesignSpec(spec: DesignSpec, si: SlideInput): { nodes: object[]; 
   const photoBackground=bg.type==='image'&&!!si.imageUrl
   if(photoBackground&&textElements.length){
     const readingElements=textElements.filter(e=>e.role!=='eyebrow')
-    const copyTop=Math.min(...(readingElements.length?readingElements:textElements).map(e=>e.y))
-    const top=Math.max(0,copyTop-300)
-    const fade=Math.min(100,(copyTop-top)/(H-top)*100)
-    nodes.push(grad({x:0,y:top,w:W,h:H-top,angle:180,stops:[{color:'#000000',position:0,alpha:0},{color:'#000000',position:fade,alpha:62},{color:'#000000',position:100,alpha:76}]}))
+    const reading=readingElements.length?readingElements:textElements
+    const panelCoversCopy=reading.every(copy=>spec.elements.some(layer=>
+      ['shape','card'].includes(layer.type)&&layer.opacity===100&&layer.x<=copy.x&&layer.y<=copy.y&&layer.x+layer.width>=copy.x+copy.width&&layer.y+layer.height>=copy.y+copy.height))
+    if(!panelCoversCopy){
+      const copyTop=Math.min(...reading.map(e=>e.y))
+      const top=Math.max(0,copyTop-300)
+      const fade=Math.min(100,(copyTop-top)/(H-top)*100)
+      nodes.push(grad({x:0,y:top,w:W,h:H-top,angle:180,stops:[{color:'#000000',position:0,alpha:0},{color:'#000000',position:fade,alpha:62},{color:'#000000',position:100,alpha:76}]}))
+    }
   }
   for (const e of textElements) {
     const content = si[e.role!]
@@ -1863,12 +1868,16 @@ function renderDesignSpec(spec: DesignSpec, si: SlideInput): { nodes: object[]; 
     const fit = fitTextLayout({ text: content, width: e.width - padding * 2, height: e.height - padding * 2, preferredSize: e.size, minSize: e.minSize, lineHeight: e.lineHeight, spacing: e.letterSpacing, font: e.font })
     // Unknown image pixels, translucent layers and gradients need a known surface for reliable contrast.
     const behind = nodes.filter(n => overlaps(e, rotatedBounds(n))&&(!subjectNodes.has(n.id)||subjectOverlaps(subjectMetadata.get(n.id),n,e,0)))
+    const opaquePanel=[...spec.elements].reverse().find(layer=>['shape','card'].includes(layer.type)&&layer.opacity===100&&layer.x<=e.x&&layer.y<=e.y&&layer.x+layer.width>=e.x+e.width&&layer.y+layer.height>=e.y+e.height)
     if (e.type !== 'badge' && behind.some(n => subjectNodes.has(n.id))) throw new Error('Move headline/body into negative space: text must not obscure the foreground subject')
     let surface = background
     let resolvedColor: string | null = null
     if (e.type === 'badge') {
       surface = p[e.fill]
       nodes.push(shp({ x: e.x, y: e.y, w: e.width, h: e.height, fill: surface, radius: e.radius || e.height / 2 }))
+    } else if(opaquePanel){
+      surface=p[opaquePanel.type==='card'?opaquePanel.fill:opaquePanel.color]
+      resolvedColor=ensureContrast(p[e.color],surface)
     } else if(photoBackground){
       surface='#616161'
       resolvedColor='#ffffff'
@@ -1885,7 +1894,7 @@ function renderDesignSpec(spec: DesignSpec, si: SlideInput): { nodes: object[]; 
         }
       }
     }
-    copyNodes.push(txt({ x: e.x + padding, y: e.y + padding, w: e.width - padding * 2, h: fit.height, text: si.d.library && e.role === 'headline' && shouldHighlightSlide(si.slideNumber, si.totalSlides) ? emphasizeHeadline(content, (si.d.highlight_style ?? 0), resolvedColor ? (textColorOverLayers(p.accent, background, behind) ?? resolvedColor) : ensureContrast(p.accent,surface), p.primary, e.font, spec.system.typography.body, surface) : content, font: e.font, size: fit.fontSize, weight: e.weight, color: resolvedColor ?? ensureContrast(p[e.color], surface), align: e.align, lineHeight: fit.lineHeight, letterSpacing: e.letterSpacing, shadow:e.shadow }))
+    copyNodes.push(txt({ x: e.x + padding, y: e.y + padding, w: e.width - padding * 2, h: fit.height, text: si.d.library && !photoBackground && e.role === 'headline' && shouldHighlightSlide(si.slideNumber, si.totalSlides) ? emphasizeHeadline(content, (si.d.highlight_style ?? 0), resolvedColor ? (textColorOverLayers(p.accent, background, behind) ?? resolvedColor) : ensureContrast(p.accent,surface), p.primary, e.font, spec.system.typography.body, surface) : content, font: e.font, size: fit.fontSize, weight: e.weight, color: resolvedColor ?? ensureContrast(p[e.color], surface), align: e.align, lineHeight: fit.lineHeight, letterSpacing: e.letterSpacing, shadow:e.shadow }))
   }
   nodes.push(...copyNodes)
   if (si.d.logo_url && si.d.logo_placement !== 'none') {
@@ -2125,7 +2134,7 @@ function assembleSlide(si: SlideInput): { nodes: object[]; background: string } 
 
 const copySafe = (value: any, fallback = '') => withoutEmoji(safe(value, fallback))
 
-interface SlideText { headline: string; body: string; cta: string; eyebrow: string }
+interface SlideText { headline: string; body: string; cta: string; eyebrow: string; cover: boolean }
 
 function extractSlideText(copy: any, idx: number, format: string, total: number): SlideText {
   if (format === 'single') {
@@ -2134,16 +2143,18 @@ function extractSlideText(copy: any, idx: number, format: string, total: number)
       body:     copySafe(copy.subheadline || copy.supportingText, ''),
       cta:      copySafe(copy.cta, ''),
       eyebrow:  '',
+      cover:     false,
     }
   }
   const slide = copy.slides?.[idx]
-  if (!slide) return { headline: '', body: '', cta: '', eyebrow: '' }
+  if (!slide) return { headline: '', body: '', cta: '', eyebrow: '', cover: false }
   const eyebrow = idx === 0 ? '' : `${String(idx).padStart(2, '0')}`
   return {
     headline: copySafe(slide.headline, ''),
-    body:     idx === 0 ? '' : copySafe(slide.body, ''),
+    body:     copySafe(slide.body, ''),
     cta:      idx === 0 ? '' : copySafe(slide.cta, ''),
     eyebrow,
+    cover:    idx === 0,
   }
 }
 
@@ -2509,14 +2520,15 @@ export async function handleDesignCanvas(db: any, body: any, persist = true) {
     const fresh = choices.filter(d=>!recentIds.includes(d.id))
     const pool = fresh.length ? fresh : DESIGN_LIBRARY.filter(d=>!recentIds.includes(d.id))
     const selected = DESIGN_LIBRARY.find(d=>d.id===requested) ?? pool[Math.floor(Math.random()*pool.length)] ?? DESIGN_LIBRARY[0]
+    const designCompositionIndex = backgroundCompositionForDesign(preset?.id || selected.id)
     const palettePick = choosePalette(preset?.paletteId || 'brand')
     if (!palettePick) return corsify(NextResponse.json({error:'Unknown palette'},{status:400}))
     const system = brandDesignSystem(brandContext, {visual_theme:preset?.blueprint?.theme || palettePick.theme || selected.theme,spacing:preset?.blueprint?.spacing || 'compact'})
     const palette = buildStrategyPalette(paletteColors(Array.isArray(brandContext?.colors)?brandContext.colors:[],palettePick.id),system)
     if (preset?.blueprint) Object.assign(palette,constrainBrandPalette(palette,paletteColors(brandContext?.colors||[],palettePick.id)))
-    direction = {...direction, system, slides:direction.slides.map((d,index)=>({...d, library:true, block_style:preset?.blueprint?.blockStyle || (selected.id==='blueprint'?'icons':['collage','colorblock'].includes(selected.id)?'cards':['gallery','botanical','panorama'].includes(selected.id)?'plain':'markers'), highlight_style:preset?.blueprint ? ({none:-1,underline:0,color:1,background:2,font:3,gradient_text:4,gradient_background:5,boxed_gradient_text:6} as any)[preset.blueprint.highlight] : DESIGN_LIBRARY.findIndex(item=>item.id===selected.id)%4, campaign:system,palette:{...palette},
+    direction = {...direction, system, slides:direction.slides.map((d,index)=>({...d, library:true, layout_offset:designCompositionIndex, block_style:preset?.blueprint?.blockStyle || (selected.id==='blueprint'?'icons':['collage','colorblock'].includes(selected.id)?'cards':['gallery','botanical','panorama'].includes(selected.id)?'plain':'markers'), highlight_style:preset?.blueprint ? ({none:-1,underline:0,color:1,background:2,font:3,gradient_text:4,gradient_background:5,boxed_gradient_text:6} as any)[preset.blueprint.highlight] : DESIGN_LIBRARY.findIndex(item=>item.id===selected.id)%4, campaign:system,palette:{...palette},
       heading_font:system.typography.heading,body_font:system.typography.body,
-      design:validateDesignSpec(fitResolvedSlide(arrangeReadableBody(resolvedPlan.layoutPlan?.slots?.[index] ? fitPlannedLayout(resolvedPlan.layoutPlan.slots[index],resolvedPlan.slots[index]) : preset?.blueprint ? blueprintSpec(preset.blueprint,resolvedPlan.slots[index],extractSlideText(copy,index,format,resolvedPlan.slots.length),index,resolvedPlan.slots.length) : librarySpec(selected,resolvedPlan.slots[index],extractSlideText(copy,index,format,resolvedPlan.slots.length),index,resolvedPlan.slots.length,preset?.artDirection),extractSlideText(copy,index,format,resolvedPlan.slots.length).body),resolvedPlan.slots[index],extractSlideText(copy,index,format,resolvedPlan.slots.length),fitTextLayout,system.typography),resolvedPlan.slots[index],system,resolvedPlan.slots)
+      design:validateDesignSpec(fitResolvedSlide(arrangeReadableBody(resolvedPlan.layoutPlan?.slots?.[index] ? fitPlannedLayout({...resolvedPlan.layoutPlan.slots[index],backgroundVariant:designCompositionIndex},resolvedPlan.slots[index]) : preset?.blueprint ? blueprintSpec(preset.blueprint,resolvedPlan.slots[index],extractSlideText(copy,index,format,resolvedPlan.slots.length),index,resolvedPlan.slots.length) : librarySpec(selected,resolvedPlan.slots[index],extractSlideText(copy,index,format,resolvedPlan.slots.length),index,resolvedPlan.slots.length,preset?.artDirection),extractSlideText(copy,index,format,resolvedPlan.slots.length).body),resolvedPlan.slots[index],extractSlideText(copy,index,format,resolvedPlan.slots.length),fitTextLayout,system.typography),resolvedPlan.slots[index],system,resolvedPlan.slots)
     }))}
 
     // ── Build canvas ───────────────────────────────────────────────────────
@@ -2528,7 +2540,7 @@ export async function handleDesignCanvas(db: any, body: any, persist = true) {
     await softenCanvasLogos(canvas, logoUrl, logoVariants,db)
 
     // ── Persist ────────────────────────────────────────────────────────────
-    const saved = await persistInlineImages(db, { ...canvas, designSelection: {paletteId:palettePick.id,id:preset?.id || selected.id,name:preset?.name || selected.name,tags:preset?.tags || selected.tags}, designInput:{brandContext,copy,resolvedPlan}, designCampaign: { brand: campaignBrand, index: campaignIndex, concept: campaignConcept(resolvedPlan), issues: designIssues(direction, copy, resolvedPlan) } })
+    const saved = await persistInlineImages(db, { ...canvas, designSelection: {paletteId:palettePick.id,id:preset?.id || selected.id,name:preset?.name || selected.name,tags:preset?.tags || selected.tags,compositionIndex:designCompositionIndex}, designInput:{brandContext,copy,resolvedPlan}, designCampaign: { brand: campaignBrand, index: campaignIndex, concept: campaignConcept(resolvedPlan), issues: designIssues(direction, copy, resolvedPlan) } })
     if (persist) await db.collection('canvases').insertOne(saved)
     const { _id, ...result } = saved as any
     return corsify(NextResponse.json(result))

@@ -11,13 +11,13 @@ test('authored coordinates and imagery survive normalization while arbitrary fon
 test('rejects overlapping copy boxes and missing templates',()=>{
  const b=blueprint();b.templates.content.elements[1].y=100;assert.equal(normalizeBlueprint(b),null);assert.equal(normalizeBlueprint({templates:{}}),null)
 })
-test('cover and content may omit CTA and vary image usage; invalid geometry explains the repair',()=>{
+test('cover and content may omit CTA, covers retain teaser copy, and invalid geometry explains the repair',()=>{
  const raw=blueprint()
  for(const chapter of ['cover','content'])raw.templates[chapter]={...raw.templates[chapter],elements:raw.templates[chapter].elements.filter(e=>e.role!=='cta'&&e.type!=='image')}
  const normalized=normalizeBlueprint(raw)
  assert.ok(normalized)
- assert.equal(normalized.templates.cover.elements.some(e=>e.role==='body'),false)
- const issues=[];raw.templates.content.elements[1].y=100
+ assert.equal(normalized.templates.cover.elements.some(e=>e.role==='body'),true)
+ const issues=[];raw.templates.content.elements[1]={...raw.templates.content.elements[1],y:100}
  assert.equal(normalizeBlueprint(raw,issues),null)
  assert.match(issues[0],/content: text boxes overlap/)
 })

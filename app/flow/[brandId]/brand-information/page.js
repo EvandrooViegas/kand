@@ -1,17 +1,18 @@
-import { getFlow, getFlows } from '@/lib/data/flows'
+import { getFlow } from '@/lib/data/flows'
 import { notFound } from 'next/navigation'
 import BrandInfo from '@/components/BrandInfo'
 
 export default async function BrandInformationPage({ params }) {
   const { brandId } = await params
-  const [flow, flows] = await Promise.all([getFlow(brandId), getFlows()])
+  const flow = await getFlow(brandId)
   if (!flow) notFound()
 
   return (
-    <div className="px-4 py-6 sm:p-6 max-w-5xl mx-auto">
+    <div className="px-4 py-6 sm:p-6 w-full">
       <BrandInfo
+        key={flow.id}
         flowId={flow.id}
-        flows={flows}
+        initialBrandContext={flow.brandContext || null}
       />
     </div>
   )

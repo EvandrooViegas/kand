@@ -52,12 +52,12 @@ async function handleRoute(request, { params }) {
 
     // Content ideas generation endpoint
     if (route === '/generate-content-ideas' && method === 'POST') {
-      return await handleGenerateContentIdeas(await request.json())
+      return await handleGenerateContentIdeas(await request.json(), db)
     }
 
     // Copywriting generation endpoint
     if (route === '/generate-copywriting' && method === 'POST') {
-      return await handleGenerateCopywriting(await request.json())
+      return await handleGenerateCopywriting(await request.json(), db)
     }
 
     // Asset planner endpoint

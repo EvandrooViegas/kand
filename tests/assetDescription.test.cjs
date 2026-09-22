@@ -102,3 +102,36 @@ test('background-photo planning selects a described brand upload only above the 
   assert.equal(insufficient.slots[0].selected, null)
   assert.equal(insufficient.slots[0].candidates.length, 0)
 })
+
+test('applicable website photos rank before uploads even outside the old top-three shortlist', () => {
+  const keywords = ['facade', 'restoration', 'building', 'historic', 'stone', 'repair', 'scaffolding']
+  const uploads = Array.from({ length: 4 }, (_, i) => ({ id: `upload-${i}`, status: 'ready', tags: keywords }))
+  const website = { id: 'website', source: 'website', status: 'ready', tags: keywords.slice(0, 6) }
+  const unrelated = { id: 'unrelated', source: 'website', status: 'ready', tags: ['facade'] }
+  const candidates = findCandidates([...uploads, website, unrelated], keywords, 3, true)
+  assert.equal(candidates[0].asset_id, 'website')
+  assert.ok(candidates[0].score >= .85)
+  assert.ok(!candidates.some(candidate => candidate.asset_id === 'unrelated'))
+})
+
+for (const background of [true, false]) {
+  test(`${background ? 'background' : 'photo-in-shape'} planning prioritizes distinct extracted photos without new AI calls`, async () => {
+    const brief = layout => ({ slot_id: layout.slot_id, needs_visual: true, preferred_source: 'unsplash', search_keywords: ['facade', 'restoration'] })
+    const handle = new Function('localAssetBrief', 'NextResponse', 'corsify', load('lib/handlers/assetPlannerHandler.ts') + ';return handlePlanAssets')(brief, { json: body => body }, r => r)
+    const assets = [
+      { id: 'manual', url: '/manual', tags: ['facade', 'restoration'] },
+      { id: 'web-1', url: '/first', source: 'website', content_hash: 'same-pixels', tags: ['facade', 'restoration'] },
+      { id: 'web-duplicate', url: '/duplicate', source: 'website', content_hash: 'same-pixels', tags: ['facade', 'restoration'] },
+      { id: 'web-2', url: '/second', source: 'website', tags: ['facade', 'restoration'] },
+      { id: 'unrelated', url: '/field', source: 'website', tags: ['wheat', 'field'] },
+    ].map(asset => ({ ...asset, status: 'ready' }))
+    const db = { collection: name => name === 'flows' ? { findOne: async () => ({ brandContext: {} }) } : { find: filter => {
+      assert.equal(filter.brand_id, 'brand_flow-a')
+      return { limit: () => ({ toArray: async () => assets }) }
+    } } }
+    const result = await handle(db, { brandContext: { id: 'flow-a' }, copy: { slides: [{}, {}, {}] }, idea: {}, layoutPlan: { slots: [1, 2, 3].map(i => ({ slot_id: `slide_${i}`, needs_visual: true, treatment: 'environmental', background })) } })
+    assert.deepEqual(result.slots.map(slot => slot.selected.asset_id), ['web-1', 'web-2', 'manual'])
+    assert.ok(result.slots.every(slot => slot.preferred_source === 'uploaded_asset'))
+    assert.match(result.slots[0].source_reason, /business website/)
+  })
+}

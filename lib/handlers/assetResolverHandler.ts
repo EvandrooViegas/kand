@@ -1,3 +1,4 @@
+import { hasWatermarkMetadata } from './assetPlannerHandler'
 import { persistInlineImages } from '@/lib/services/persistInlineImages'
 import { findGeneratedAsset, saveGeneratedAsset } from '@/lib/services/generatedAssetLibrary'
 /**
@@ -13,8 +14,8 @@ import { findGeneratedAsset, saveGeneratedAsset } from '@/lib/services/generated
  *                    If the planner found no candidate, fall back to a
  *                    fresh tag-overlap search against the brand library.
  *
- *   unsplash       → search the Unsplash API using search_keywords and
- *                    return the most relevant result.
+ *   unsplash       → legacy stock preference: search Unsplash and Pexels,
+ *                    compare relevance and resolution, and reserve the winner.
  *
  *   ai_generated   → call the image-generation API (fal.ai fast-sdxl).
  *                    Falls back gracefully when the key is absent.
@@ -30,9 +31,12 @@ import type { AssetPlan, VisualSlot } from './assetPlannerHandler'
 
 // ─── Output types (consumed by Canvas Designer) ───────────────────────────────
 
-export type AssetSource = 'uploaded_asset' | 'unsplash' | 'ai_generated' | 'none'
+export type AssetSource = 'uploaded_asset' | 'unsplash' | 'pexels' | 'ai_generated' | 'none'
 
 export interface ResolvedAsset {
+  pexels_id?: string
+  photographer?: string
+  photo_page?: string
   reused?: boolean
   match_score?: number
   subject?: { url: string; width: number; height: number }
@@ -71,64 +75,94 @@ export interface ResolvedAssetPlan {
   slots:   ResolvedSlot[]
 }
 
-// ─── Unsplash ─────────────────────────────────────────────────────────────────
+// ─── Stock photography: normalize both providers before ranking ───────────────
 
-const UNSPLASH_API = 'https://api.unsplash.com'
+type StockCandidate = { asset: ResolvedAsset; keys: string[]; score: number }
 
-async function searchUnsplash(
-  slot: VisualSlot,
-  accessKey: string,
-  usedPhotoIds: Set<string>,
-): Promise<ResolvedAsset | null> {
-  const clean = (values: unknown): string[] => Array.isArray(values)
-    ? values.filter((v): v is string => typeof v === 'string' && !!v.trim()).map(v => v.trim()) : []
-  const explicit = clean(slot.search_queries)
-  const queries = [...new Set(explicit.length ? explicit : [clean(slot.search_keywords).slice(0, 5).join(' ')])].filter(Boolean).slice(0, 3)
-  for (const query of queries) {
-    const url   = `${UNSPLASH_API}/search/photos?query=${encodeURIComponent(query)}&per_page=20`
+function stockQueries(slot: VisualSlot): string[] {
+  const clean = (values:any) => Array.isArray(values) ? values.filter((v:any)=>typeof v==='string' && v.trim()).map((v:string)=>v.trim()) : []
+  const explicit=clean(slot.search_queries)
+  return [...new Set<string>(explicit.length?explicit:[clean(slot.search_keywords).slice(0,5).join(' ')])].filter(Boolean).slice(0,3)
+}
 
-    let data: any
+function stockScore(slot: VisualSlot, description: string): number {
+  const words=(value:string)=>value.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().match(/[\p{L}\p{N}]+/gu)||[]
+  const keywords=[...new Set((slot.search_keywords||[]).flatMap(words))]
+  const terms=new Set(words(description))
+  const hits=keywords.filter(term=>terms.has(term)).length
+  if(description.trim() && keywords.length && !hits)return -1
+  const relevance=keywords.length?hits/keywords.length:0
+  const subject=slot.treatment==='isolated_subject'
+    ? (/portrait|isolated|single|studio|close.up/i.test(description)?.15:0)-(/crowd|group of|aerial|skyline|landscape/i.test(description)?.5:0):0
+  return relevance+subject
+}
+
+async function stockCandidates(slot: VisualSlot, provider: 'unsplash'|'pexels', key: string, used: Set<string>): Promise<StockCandidate[]> {
+  for(const query of stockQueries(slot)) {
+    const endpoint=provider==='pexels'
+      ? 'https://api.pexels.com/v1/search?query='+encodeURIComponent(query)+'&per_page=20&size=medium&locale=en-US'
+      : 'https://api.unsplash.com/search/photos?query='+encodeURIComponent(query)+'&per_page=20&order_by=relevant&content_filter=high'
     try {
-      const res = await fetch(url, {
-        headers: { Authorization: `Client-ID ${accessKey}` },
-      })
-      if (!res.ok) {
-        console.error(`[resolver] Unsplash ${res.status} for query "${query}"`)
-        return null
+      const response=await fetch(endpoint,{headers:{Authorization:provider==='pexels'?key:'Client-ID '+key},signal:AbortSignal.timeout(12000)})
+      if(!response.ok){console.warn('[resolver] '+provider+' search HTTP '+response.status);return []}
+      const data=await response.json()
+      const photos=provider==='pexels'?data.photos:data.results
+      const candidates:StockCandidate[]=[]
+      for(const photo of (Array.isArray(photos)?photos:[]).slice(0,20)) {
+        if(photo.id===undefined || photo.id===null || hasWatermarkMetadata({...photo,alt_description:photo.alt_description||photo.alt}))continue
+        // Both providers report original dimensions; reject known undersized sources.
+        if(photo.width && photo.height && Math.min(photo.width,photo.height)<1080)continue
+        const id=String(photo.id)
+        const original=provider==='pexels'?photo.src?.original:photo.urls?.raw||photo.urls?.full||photo.urls?.regular
+        if(!original)continue
+        const keys=[provider+':'+id,original,...(provider==='unsplash'?[id,photo.urls?.regular,photo.urls?.full]:[])].filter(Boolean)
+        if(keys.some(k=>used.has(k)))continue
+        const description=[photo.alt,photo.alt_description,photo.description,...(Array.isArray(photo.tags)?photo.tags:[]).map((t:any)=>typeof t==='string'?t:t.title)].filter(Boolean).join(' ')
+        const score=stockScore(slot,description)
+        if(score<0)continue
+        // Bound delivery size while retaining enough pixels for a sharp square crop.
+        let url=original
+        if(provider==='pexels' || photo.urls?.raw) {
+          const sized=new URL(original)
+          const ratio=photo.width && photo.height?photo.width/photo.height:1
+          sized.searchParams.set('w',String(Math.min(4096,Math.max(2400,Math.ceil(1080*ratio)))))
+          sized.searchParams.set('q','90');sized.searchParams.set('fit','max')
+          sized.searchParams.set('auto',provider==='pexels'?'compress':'format')
+          url=sized.toString()
+        }
+        keys.push(url)
+        candidates.push({keys,score,asset:{source:provider,url,thumbnail_url:provider==='pexels'?photo.src?.medium||photo.src?.small||url:photo.urls?.thumb||photo.urls?.small||url,
+          width:photo.width||1080,height:photo.height||1080,asset_id:null,unsplash_id:provider==='unsplash'?id:null,
+          ...(provider==='pexels'?{pexels_id:id}:{}),alt:photo.alt||photo.alt_description||photo.description||slot.visual_purpose,
+          photographer:provider==='pexels'?photo.photographer:photo.user?.name,
+          photo_page:provider==='pexels'?photo.url:photo.links?.html,match_score:Math.max(0,score)}})
       }
-      data = await res.json()
-    } catch (err: any) {
-      console.error('[resolver] Unsplash fetch error:', err?.message)
-      return null
-    }
-
-    const candidates = (Array.isArray(data?.results) ? data.results : [])
-      .filter((photo: any) => photo.id && (photo.urls?.regular || photo.urls?.full) && !usedPhotoIds.has(photo.id)&&!usedPhotoIds.has(photo.urls?.regular||photo.urls?.full))
-      .slice(0, 20)
-    if (!candidates.length) continue
-    // Rank subject relevance; reserve before another slot resumes.
-    const terms = clean(slot.search_keywords).join(' ').toLowerCase().split(/\W+/).filter(t => t.length > 2)
-    const score = (photo: any) => {
-      const description = [photo.alt_description, photo.description, ...(photo.tags ?? []).map((t: any) => t.title)].join(' ').toLowerCase()
-      return terms.filter(term => description.includes(term)).length + (slot.treatment === 'isolated_subject'
-        ? (/portrait|isolated|single|studio|close.up/.test(description) ? 3 : 0) - (/crowd|group of|aerial|skyline|landscape/.test(description) ? 6 : 0) : 0)
-    }
-    const photo = candidates.sort((a: any, b: any) => score(b) - score(a))[0]
-    usedPhotoIds.add(photo.id)
-    usedPhotoIds.add(photo.urls?.regular||photo.urls?.full)
-
-    return {
-      source:        'unsplash',
-      url:           photo.urls?.regular ?? photo.urls?.full ?? '',
-      thumbnail_url: photo.urls?.thumb   ?? photo.urls?.small ?? '',
-      width:         photo.width         ?? 1080,
-      height:        photo.height        ?? 1080,
-      asset_id:      null,
-      unsplash_id:   photo.id            ?? null,
-      alt:           photo.alt_description ?? photo.description ?? slot.visual_purpose,
-    }
+      if(candidates.length)return candidates
+    }catch(error){console.warn('[resolver] '+provider+' search unavailable');return []}
   }
-  return null
+  return []
+}
+
+function chooseStock(candidates:StockCandidate[], used:Set<string>):ResolvedAsset|null {
+  // Reserve only the winner, synchronously, after both providers finish. Other
+  // slides can still choose runners-up, without selecting this image twice.
+  const winner=candidates.filter(c=>!c.keys.some(key=>used.has(key))).sort((a,b)=>
+    b.score-a.score || Math.min(b.asset.width,b.asset.height)-Math.min(a.asset.width,a.asset.height))[0]
+  if(!winner)return null
+  winner.keys.forEach(key=>used.add(key))
+  return winner.asset
+}
+
+async function searchUnsplash(slot:VisualSlot,key:string,used:Set<string>):Promise<ResolvedAsset|null> {
+  return chooseStock(await stockCandidates(slot,'unsplash',key,used),used)
+}
+
+async function searchStock(slot:VisualSlot,unsplashKey:string|null,pexelsKey:string|null,used:Set<string>):Promise<ResolvedAsset|null> {
+  const results=await Promise.allSettled([
+    unsplashKey?stockCandidates(slot,'unsplash',unsplashKey,used):Promise.resolve([]),
+    pexelsKey?stockCandidates(slot,'pexels',pexelsKey,used):Promise.resolve([]),
+  ])
+  return chooseStock(results.flatMap(result=>result.status==='fulfilled'?result.value:[]),used)
 }
 
 // ─── AI image generation ──────────────────────────────────────────────────────
@@ -293,11 +327,14 @@ async function resolveUploadedAsset(
   db: any,
   slot: VisualSlot,
   brand_id: string | null,
+  usedPhotoIds = new Set<string>(),
 ): Promise<{ asset: ResolvedAsset | null; warning: string | null }> {
   // Primary: use the asset the planner already selected
   if (slot.selected?.asset_id) {
     const doc = await db.collection('assets').findOne({ id: slot.selected.asset_id, brand_id })
-    if (doc && (doc.status === 'ready' || doc.description_tags?.length > 0)) {
+    if (doc && !hasWatermarkMetadata(doc) && doc.url && !usedPhotoIds.has(doc.url) && !usedPhotoIds.has(doc.content_hash) && (doc.status === 'ready' || doc.description_tags?.length > 0)) {
+      usedPhotoIds.add(doc.url)
+      if(doc.content_hash)usedPhotoIds.add(doc.content_hash)
       return {
         asset: {
           source:        'uploaded_asset',
@@ -317,28 +354,23 @@ async function resolveUploadedAsset(
   // Fallback: fresh tag-overlap search if the planner had no candidate
   if (brand_id) {
     const assets = await db.collection('assets')
-      .find({ brand_id, status: 'ready' })
+      .find({ brand_id, $or: [{status:'ready'},{'description_tags.0':{$exists:true}}] })
       .limit(500)
       .toArray()
 
-    const kw  = slot.search_keywords ?? []
-    const kwSet = new Set(kw.map((k: string) => k.toLowerCase()))
-
-    let best: any = null
-    let bestScore = 0
-    for (const a of assets) {
-      if (!Array.isArray(a.tags)) continue
-      let hits = 0
-      for (const tag of a.tags.map((t: string) => t.toLowerCase())) {
-        for (const k of kwSet) {
-          if (tag.includes(k) || k.includes(tag)) { hits++; break }
-        }
-      }
-      const score = hits / Math.max(kwSet.size, 1)
-      if (score > bestScore) { bestScore = score; best = a }
+    const words = (value:string) => value.normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toLowerCase().match(/[\p{L}\p{N}]+/gu)||[]
+    const keywords = [...new Set((slot.search_keywords||[]).flatMap(words))]
+    let best:any = null, bestScore = 0
+    for (const asset of assets) {
+      if (hasWatermarkMetadata(asset) || !asset.url || asset.source==='ai_generated' || usedPhotoIds.has(asset.url) || usedPhotoIds.has(asset.content_hash)) continue
+      const tags = asset.description?.trim() ? asset.description_tags||[] : asset.tags||[]
+      const terms = new Set([...tags,asset.search_description||asset.description||''].flatMap(words))
+      const score = keywords.filter(word=>terms.has(word)).length / Math.max(keywords.length,1)
+      if (score>=.85 && score>bestScore) {best=asset;bestScore=score}
     }
-
-    if (best && bestScore > 0) {
+    if (best) {
+      usedPhotoIds.add(best.url)
+      if(best.content_hash)usedPhotoIds.add(best.content_hash)
       return {
         asset: {
           source:        'uploaded_asset',
@@ -348,7 +380,7 @@ async function resolveUploadedAsset(
           height:        best.height ?? 0,
           asset_id:      best.id,
           unsplash_id:   null,
-          alt:           best.filename,
+          alt:           best.description || best.search_description || best.filename,
         },
         warning: slot.selected?.asset_id
           ? 'Planned asset unavailable; using closest tag match from library'
@@ -386,20 +418,22 @@ async function resolveSlot(
     return { ...base, resolvedAsset: null, warning: null }
   }
 
-  if(slot.preferred_source==='unsplash') {
-    if(!unsplashKey)return {...base,resolvedAsset:null,warning:'UNSPLASH_ACCESS_KEY not configured'}
-    try {
-      const asset=await searchUnsplash(slot,unsplashKey,usedPhotoIds)
-      return {...base,resolvedAsset:asset,warning:asset?null:'Unsplash returned no matching unused photos'}
-    }catch(error){return {...base,resolvedAsset:null,warning:(error as Error).message}}
-  }
-  if(slot.preferred_source==='uploaded_asset') {
-    const {asset,warning}=await resolveUploadedAsset(db,slot,brand_id)
-    if(asset){
-      if(usedPhotoIds.has(asset.url))return {...base,resolvedAsset:null,warning:'This image is already used in this post; this slide will use text only.'}
-      usedPhotoIds.add(asset.url)
+  // Background photos always consult the brand gallery, even for old stock-first plans.
+  if(slot.treatment==='environmental' || slot.preferred_source==='unsplash' || slot.preferred_source==='uploaded_asset') {
+    let galleryWarning:string|null = null
+    if(brand_id && db) {
+      try {
+        const {asset,warning}=await resolveUploadedAsset(db,slot,brand_id,usedPhotoIds)
+        if(asset)return {...base,source:'uploaded_asset',resolvedAsset:asset,warning}
+      } catch(error) {galleryWarning='Gallery lookup unavailable: '+(error as Error).message}
     }
-    return {...base,resolvedAsset:asset,warning}
+    if(slot.treatment!=='environmental' && slot.preferred_source==='uploaded_asset')return {...base,resolvedAsset:null,warning:galleryWarning||'No matching unused gallery photo found'}
+    const pexelsKey=process.env.PEXELS_API_KEY?.trim()||null
+    if(!unsplashKey && !pexelsKey)return {...base,resolvedAsset:null,warning:galleryWarning||'No matching gallery photo; configure PEXELS_API_KEY or UNSPLASH_ACCESS_KEY'}
+    try {
+      const asset=await searchStock(slot,unsplashKey,pexelsKey,usedPhotoIds)
+      return {...base,source:asset?.source||'unsplash',resolvedAsset:asset,warning:asset?galleryWarning:'No relevant unused high-resolution stock photo found'}
+    }catch(error){return {...base,resolvedAsset:null,warning:(error as Error).message}}
   }
   // One generation only. Never retry or change the selected image source automatically.
   try {
@@ -444,7 +478,7 @@ export async function handleResolveAssets(db: any, body: any) {
     )
 
     if (brand_id) {
-      const history=slots.filter(s=>s.resolvedAsset?.unsplash_id).map(s=>({brand_id,photoId:s.resolvedAsset!.unsplash_id,createdAt:new Date()}))
+      const history=slots.flatMap(s=>{const a=s.resolvedAsset;if(!a?.unsplash_id && !a?.pexels_id)return [];return [{brand_id,photoId:a.pexels_id?'pexels:'+a.pexels_id:'unsplash:'+a.unsplash_id,source:a.source,createdAt:new Date()}]})
       if(history.length)try{await db.collection('assetImageHistory').insertMany(history)}catch(error){console.warn('[resolver] Could not save image history')}
     }
     const result: ResolvedAssetPlan = {

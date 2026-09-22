@@ -1,6 +1,11 @@
 import { blueprintSpec } from './brandBlueprint'
 import { DESIGN_LIBRARY, librarySpec } from './library'
 
+/** Keep a saved design's composition stable across separate post generations. */
+export function backgroundCompositionForDesign(designId:any):number{
+ return Array.from(String(designId||'default')).reduce((hash,char)=>(Math.imul(hash,31)+char.charCodeAt(0))>>>0,0)%6
+}
+
 export function parseDesignSequence(text:string):string[]{
  const numbered=String(text||'').replace(/<br\s*\/?\s*>/gi,'\n').split(/(?:^|\n|\s+(?=\d+[.)]\s+[A-ZÀ-Ý]))\s*\d+[.)]\s+/)
  if(!numbered[0]?.trim()&&numbered.length>=3&&numbered.length<=9)return numbered.slice(1).map(s=>s.trim()).filter(Boolean)
@@ -52,15 +57,18 @@ export function fitTextOnlySlide(spec:any,text:any,measure:any,typography?:any){
   return {...fitted,height:fitted.height+padding+8}
  }
  for(const width of [760,840,1080-x-72])for(const headingSize of hasFlow?[80,88,96]:[96,112,128])for(const bodySize of hasFlow?[30,32,36]:[36,42,46])try{
-  const headingFit=fit(title,text.headline||'',width,body&&text.body?320:650,body&&text.body?headingSize:160)
+  // Reserve the measured, padded CTA before allocating the reading stack.
+  const ctaWidth=1080-x-72
+  const ctaFit=cta&&text.cta?fit(cta,text.cta,ctaWidth,240,30):null
+  const readingBottom=ctaFit?1008-ctaFit.height-28:960
+  const headingFit=fit(title,text.headline||'',width,Math.min(body&&text.body?320:650,readingBottom-y),body&&text.body?headingSize:160)
   const heading={x,y,width,height:headingFit.height,size:headingFit.fontSize,lineHeight:headingFit.lineHeight}
   const bodyWidth=hasFlow?1080-x-72:Math.min(width,String(text.body||'').length>360?1080-x-72:780)
   const bodyY=y+heading.height+24
-  const bodyFit=body&&text.body?fit(body,text.body,bodyWidth,960-bodyY-(cta&&text.cta?120:0),bodySize):null
+  const bodyFit=body&&text.body?fit(body,text.body,bodyWidth,readingBottom-bodyY,bodySize):null
   const paragraph=bodyFit?{x,y:bodyY,width:bodyWidth,height:bodyFit.height,size:bodyFit.fontSize,lineHeight:bodyFit.lineHeight}:null
   const end=paragraph?paragraph.y+paragraph.height:heading.y+heading.height
-  const ctaFit=cta&&text.cta?fit(cta,text.cta,bodyWidth,100,30):null
-  const footer=ctaFit?{x,y:end+28,width:bodyWidth,height:ctaFit.height,size:ctaFit.fontSize,lineHeight:ctaFit.lineHeight}:null
+  const footer=ctaFit?{x,y:end+28,width:ctaWidth,height:ctaFit.height,size:ctaFit.fontSize,lineHeight:ctaFit.lineHeight}:null
   if(end>960||footer&&footer.y+footer.height>1008)continue
   const target=String(text.body||'').length>300?850:700
   candidates.push({heading,paragraph,footer,end:footer?footer.y+footer.height:end,score:heading.size*2+(paragraph?.size||0)*3-Math.abs(end-target)*.04})
@@ -89,17 +97,39 @@ export function fitResolvedSlide(spec:any,slot:any,text:any,measure:any,typograp
  if(!spec.elements.some((e:any)=>e.type==='image')&&spec.background.type!=='image')return fitTextOnlySlide(spec,text,measure,typography)
  if(slot?.treatment==='environmental'){
   if(spec.background.type!=='image')return spec
-  const out={...spec,background:{...spec.background},elements:spec.elements.filter((e:any)=>e.role).map((e:any)=>({...e}))}
-  let y=0
-  for(const role of ['headline','body','cta']){
+  const out={...spec,background:{...spec.background},elements:spec.elements.map((e:any)=>({...e}))}
+  const structured=out.elements.some((e:any)=>!e.role)
+  const cover=text.cover===true
+  let fittingRole=''
+  try {
+  for(const role of ['headline','body','cta','eyebrow']){
    const e=out.elements.find((e:any)=>e.role===role)
    if(!e||!text[role])continue
-   const fitted=measure({text:text[role],width:936,height:role==='headline'?300:role==='body'?300:90,preferredSize:role==='headline'?88:role==='body'?34:28,minSize:role==='headline'?48:24,lineHeight:role==='headline'?1.08:1.3,font:e.font||(role==='headline'?typography?.heading:typography?.body)})
-   Object.assign(e,{x:72,y,width:936,height:fitted.height+4,size:fitted.fontSize,lineHeight:fitted.lineHeight,align:'left'})
-   y+=e.height+(role==='headline'?12:24)
+   fittingRole=role
+   const padding=e.type==='badge'?24:0
+   const fitted=measure({text:text[role],width:e.width-padding,height:e.height-padding,preferredSize:role==='headline'&&cover?Math.max(108,e.size||0):e.size||(role==='headline'?88:role==='body'?34:24),minSize:role==='headline'?(cover?64:42):role==='body'?22:18,lineHeight:role==='headline'?1.08:1.3,font:e.font||(role==='headline'?typography?.heading:typography?.body)})
+   Object.assign(e,{height:fitted.height+padding,size:fitted.fontSize,lineHeight:fitted.lineHeight})
   }
-  const top=Math.max(140,1008-y)
-  for(const e of out.elements){if(e.role==='eyebrow')Object.assign(e,{x:72,y:48,width:120,height:64,size:24});else e.y+=top}
+  } catch(error:any) {
+   if(!/Copy does not fit|Invalid text bounds/.test(error?.message||''))throw error
+   // Fixed photo compositions can be too narrow or shallow for the actual copy.
+   // Recompose over the same photograph with a full-width reading area.
+   const reading={...out,elements:out.elements.filter((e:any)=>e.role).map((e:any)=>({...e,x:72,y:e.role==='eyebrow'?48:150,width:936,align:'left'}))}
+   const fitted=fitTextOnlySlide(reading,text,measure,typography)
+   if(fitted===reading){
+    const box=out.elements.find((e:any)=>e.role===fittingRole)
+    throw new Error(`${error.message} (slide ${slot?.slot_id||'unknown'}, ${fittingRole}, box ${box?.width}x${box?.height}, ${String(text[fittingRole]||'').length} characters; full-width recovery exhausted)`)
+   }
+   return fitted
+  }
+  if(!structured){
+   const stack=out.elements.filter((e:any)=>['headline','body','cta'].includes(e.role)&&text[e.role])
+   const total=stack.reduce((height:number,e:any,index:number)=>height+e.height+(index?e.role==='body'?12:24:0),0)
+   let y=Math.max(140,1008-total)
+   for(const e of stack){if(e!==stack[0])y+=e.role==='body'?12:24;e.x=72;e.y=y;e.width=e.role==='cta'?680:936;e.align='left';y+=e.height}
+   const eyebrow=out.elements.find((e:any)=>e.role==='eyebrow')
+   if(eyebrow)Object.assign(eyebrow,{x:72,y:48,width:120,height:64,size:24})
+  }
   return out
  }
  const subject=slot?.resolvedAsset?.subject
@@ -242,13 +272,12 @@ export function planPostLayout(brand:any,copy:any,idea:any,designId?:string,over
  const format=copy.format||idea?.format||'single'
  const slots=slides.map((slide:any,index:number)=>{
   const text={headline:slide.headline||slide.title||'',body:slide.body||slide.supportingText||'',cta:slide.cta||copy.cta||'',eyebrow:slides.length>1&&index>0?String(index).padStart(2,'0'):''}
-  if(slides.length>1&&index===0)text.body=''
   const slot_id=slides.length>1?'slide_'+(index+1):'single_main'
   const placeholder={slot_id,resolvedAsset:{url:'placeholder'}}
   let spec=selected?.blueprint?blueprintSpec(selected.blueprint,placeholder,text,index,slides.length):librarySpec(family,placeholder,text,index,slides.length,selected?.artDirection)
   if(disposition){
    const hadVisual=spec.background.type==='image'||spec.elements.some((e:any)=>e.type==='image')
-   spec.background.type=disposition==='background'&&hadVisual?'image':'solid'
+   spec.background.type=disposition==='background'?'image':'solid'
    if(disposition==='none'||disposition==='background')spec.elements=spec.elements.filter((e:any)=>e.type!=='image')
    else if(hadVisual){
     if(!spec.elements.some((e:any)=>e.type==='image')){
@@ -296,16 +325,51 @@ export function fitPlannedLayout(layout:any,slot:any) {
  const subject=slot.resolvedAsset?.subject
  const spec={...layout.spec,background:{...layout.spec.background},elements:layout.spec.elements.map((e:any)=>({...e}))}
  if(layout.background&&slot.resolvedAsset?.url) {
-  // Environmental scenes remain full bleed, with a text-aware scrim in the renderer.
+  // Keep the scene full bleed while rotating through distinct editorial structures.
   spec.background.type='image'
-  spec.elements=spec.elements.filter((e:any)=>e.role)
+  spec.elements=spec.elements.filter((e:any)=>e.role).map((e:any)=>({...e}))
   const hasBody=spec.elements.some((e:any)=>e.role==='body')
+  const hasCta=spec.elements.some((e:any)=>e.role==='cta')
+  const variant=Math.abs(Number(layout.backgroundVariant)||0)%6
+  const add=(...elements:any[])=>spec.elements.unshift(...elements)
   for(const e of spec.elements) {
-   if(e.role==='headline')Object.assign(e,{x:72,y:hasBody?620:700,width:936,height:hasBody?170:230})
-   if(e.role==='body')Object.assign(e,{x:72,y:814,width:936,height:130})
-   if(e.role==='cta')Object.assign(e,{x:72,y:970,width:680,height:54})
+   if(e.role==='eyebrow')Object.assign(e,{x:72,y:48,width:132,height:56,size:22})
+   if(variant===0){
+    if(e.role==='headline')Object.assign(e,{x:72,y:hasBody?610:690,width:936,height:hasBody?180:240,size:88})
+    if(e.role==='body')Object.assign(e,{x:72,y:810,width:936,height:hasCta?130:180,size:34})
+    if(e.role==='cta')Object.assign(e,{x:72,y:968,width:700,height:56,size:26})
+   }else if(variant===1){
+    if(e.role==='headline')Object.assign(e,{x:72,y:610,width:936,height:180,size:84,color:'text'})
+    if(e.role==='body')Object.assign(e,{x:72,y:810,width:936,height:hasCta?130:180,size:32,color:'text'})
+    if(e.role==='cta')Object.assign(e,{x:72,y:968,width:700,height:56,size:26,color:'text'})
+   }else if(variant===2){
+    if(e.role==='eyebrow')Object.assign(e,{x:64,y:72,width:380,color:'text'})
+    if(e.role==='headline')Object.assign(e,{x:64,y:230,width:392,height:250,size:76,color:'text'})
+    if(e.role==='body')Object.assign(e,{x:64,y:510,width:392,height:hasCta?300:400,size:30,color:'text'})
+    if(e.role==='cta')Object.assign(e,{x:64,y:900,width:392,height:72,size:24,color:'text'})
+   }else if(variant===3){
+    if(e.role==='eyebrow')Object.assign(e,{x:592,y:72,width:416,color:'text'})
+    if(e.role==='headline')Object.assign(e,{x:592,y:230,width:416,height:250,size:76,color:'text'})
+    if(e.role==='body')Object.assign(e,{x:592,y:510,width:416,height:hasCta?300:400,size:30,color:'text'})
+    if(e.role==='cta')Object.assign(e,{x:592,y:900,width:416,height:72,size:24,color:'text'})
+   }else if(variant===4){
+    if(e.role==='headline')Object.assign(e,{x:104,y:590,width:872,height:180,size:82,color:'text'})
+    if(e.role==='body')Object.assign(e,{x:104,y:790,width:872,height:hasCta?130:190,size:32,color:'text'})
+    if(e.role==='cta')Object.assign(e,{x:104,y:952,width:700,height:56,size:24,color:'text'})
+   }else{
+    if(e.role==='headline')Object.assign(e,{x:52,y:650,width:760,height:170,size:84,color:'text'})
+    if(e.role==='body')Object.assign(e,{x:72,y:842,width:900,height:hasCta?110:160,size:32})
+    if(e.role==='cta')Object.assign(e,{x:72,y:974,width:680,height:50,size:24})
+   }
   }
+  if(variant===0)add({type:'line',x:72,y:790,width:760,height:8,color:'accent',opacity:100,layer:1})
+  if(variant===1)add({type:'shape',x:0,y:550,width:1080,height:530,color:'bg',opacity:100,layer:-1},{type:'shape',x:0,y:550,width:1080,height:10,color:'primary',opacity:100,layer:0})
+  if(variant===2)add({type:'shape',x:0,y:0,width:520,height:1080,color:'bg',opacity:100,layer:-1},{type:'shape',x:520,y:0,width:12,height:1080,color:'accent',opacity:100,layer:0})
+  if(variant===3)add({type:'shape',x:520,y:0,width:560,height:1080,color:'surface',opacity:100,layer:-1},{type:'shape',x:508,y:0,width:12,height:1080,color:'primary',opacity:100,layer:0})
+  if(variant===4)add({type:'card',x:56,y:530,width:968,height:510,fill:'surface',color:'surface',opacity:100,radius:28,layer:-1},{type:'line',x:104,y:558,width:220,height:6,color:'accent',opacity:100,layer:0})
+  if(variant===5)add({type:'shape',x:28,y:620,width:820,height:210,color:'primary',opacity:100,layer:-1},{type:'shape',x:28,y:620,width:14,height:210,color:'accent',opacity:100,layer:0})
  }
+
  spec.elements=spec.elements.filter((e:any)=>e.type!=='image'||slot.resolvedAsset?.url).map((e:any)=>{
   if(e.type!=='image')return e
   const out={...e,assetId:slot.slot_id,image_variant:slot.treatment==='environmental'?'photo':subject?'subject':'photo'}

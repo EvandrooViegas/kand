@@ -1,0 +1,594 @@
+{
+  "brand": {
+    "name": "Layout regression",
+    "fonts": [
+      "Anton",
+      "Impact",
+      "Roboto"
+    ],
+    "colors": [],
+    "designs": [
+      {
+        "id": "starter-editorial",
+        "baseId": "editorial"
+      },
+      {
+        "id": "starter-spotlight",
+        "baseId": "spotlight"
+      },
+      {
+        "id": "starter-botanical",
+        "baseId": "botanical"
+      }
+    ],
+    "imageDisposition": "background"
+  },
+  "copy": {
+    "format": "carousel",
+    "headline": "",
+    "subheadline": "",
+    "supportingText": "",
+    "cta": "",
+    "slides": [
+      {
+        "slideNumber": 1,
+        "purpose": "hook",
+        "headline": "Até 30 % dos atrasos são por conflitos não detectados",
+        "body": "",
+        "cta": ""
+      },
+      {
+        "slideNumber": 2,
+        "purpose": "problem",
+        "headline": "Conflitos entre disciplinas",
+        "body": "Arquitetura, estrutura e especialidades sobrepõem‑se nos desenhos, gerando retrabalhos e custos inesperados.",
+        "cta": ""
+      },
+      {
+        "slideNumber": 3,
+        "purpose": "explanation",
+        "headline": "Clash Detection no BIM",
+        "body": "A ferramenta identifica, em tempo real, colisões entre elementos do modelo 3D e gera um relatório com os pontos críticos.",
+        "cta": ""
+      },
+      {
+        "slideNumber": 4,
+        "purpose": "solution",
+        "headline": "Correção antes da obra",
+        "body": "Com o relatório, a equipa ajusta o projeto – reposiciona tubulação, altera paredes ou re‑dimensiona vigas – evitando intervenções on‑site.",
+        "cta": ""
+      },
+      {
+        "slideNumber": 5,
+        "purpose": "summary",
+        "headline": "Menos custos, mais prazo cumprido",
+        "body": "Projetos com Clash Detection reduzem até 20 % dos custos de rework e aceleram a entrega em média 15 %.",
+        "cta": "Fale connosco e descubra como o BIM pode transformar o seu projeto."
+      }
+    ],
+    "caption": "Conflitos entre arquitetura, estrutura e especialidades são a principal causa de atrasos e custos adicionais nas obras. \n\nCom o Clash Detection integrado ao BIM, a PRUMO SOALHEIRO identifica essas incompatibilidades já na fase de projeto, gera relatórios precisos e permite correções antes do início da construção. \n\nO resultado? Menos retrabalhos, redução de até 20 % nos custos e entrega mais rápida. Quer saber como aplicar esta tecnologia ao seu próximo projeto? Entre em contacto.",
+    "hashtags": [
+      "#BIM",
+      "#ClashDetection",
+      "#Engenharia",
+      "#ConstruçãoSustentável",
+      "#Reabilitação",
+      "#Arquitetura"
+    ],
+    "visualNotes": [
+      "Slide 2‑4 contêm texto explicativo; recomenda‑se layout predominantemente textual com blocos bem separados para facilitar a leitura.",
+      "Slide 5 deve incluir um gráfico simples que compare custos/tempos com e sem Clash Detection, usando cores contrastantes e ícones de alerta para destacar a redução."
+    ]
+  },
+  "resolvedPlan": {
+    "designId": "starter-botanical",
+    "format": "carousel",
+    "layoutPlan": {
+      "version": 1,
+      "designId": "starter-botanical",
+      "imageDisposition": "background",
+      "format": "carousel",
+      "slots": [
+        {
+          "slot_id": "slide_1",
+          "spec": {
+            "slot_id": "slide_1",
+            "background": {
+              "type": "image",
+              "color": "bg",
+              "to": "surface",
+              "angle": 135
+            },
+            "elements": [
+              {
+                "type": "gradient",
+                "x": 0,
+                "y": 0,
+                "width": 1080,
+                "height": 1080,
+                "color": "bg",
+                "to": "bg",
+                "opacity": 12,
+                "endOpacity": 12,
+                "angle": 90,
+                "layer": -10
+              },
+              {
+                "type": "circle",
+                "x": 40,
+                "y": 120,
+                "width": 1000,
+                "height": 800,
+                "color": "primary",
+                "opacity": 12,
+                "radius": 80,
+                "layer": -5
+              },
+              {
+                "type": "glow",
+                "x": 72,
+                "y": 400,
+                "width": 936,
+                "height": 560,
+                "color": "primary",
+                "opacity": 12,
+                "layer": -3
+              },
+              {
+                "type": "text",
+                "role": "headline",
+                "x": 72,
+                "y": 140,
+                "width": 936,
+                "height": 230,
+                "size": 104,
+                "minSize": 28,
+                "color": "text",
+                "align": "left",
+                "lineHeight": 1.08
+              }
+            ]
+          },
+          "frame": {
+            "x": 0,
+            "y": 0,
+            "width": 1080,
+            "height": 1080
+          },
+          "background": true,
+          "needs_visual": true,
+          "treatment": "environmental",
+          "brief": "Image placement: full background at x=0, y=0, width=1080, height=1080 on a 1080px square. Aspect ratio 1.00. Keep the complete subject inside this frame with generous edge clearance. Keep the scene and background intact; leave quiet space behind text."
+        },
+        {
+          "slot_id": "slide_2",
+          "spec": {
+            "slot_id": "slide_2",
+            "background": {
+              "type": "image",
+              "color": "bg",
+              "to": "gradTo",
+              "angle": 45
+            },
+            "elements": [
+              {
+                "type": "gradient",
+                "x": 0,
+                "y": 0,
+                "width": 1080,
+                "height": 1080,
+                "color": "bg",
+                "to": "bg",
+                "opacity": 12,
+                "endOpacity": 12,
+                "angle": 90,
+                "layer": -10
+              },
+              {
+                "type": "circle",
+                "x": 40,
+                "y": 120,
+                "width": 1000,
+                "height": 800,
+                "color": "accent",
+                "opacity": 12,
+                "radius": 80,
+                "layer": -5
+              },
+              {
+                "type": "glow",
+                "x": 70,
+                "y": 250,
+                "width": 410,
+                "height": 600,
+                "color": "accent",
+                "opacity": 24,
+                "layer": -3
+              },
+              {
+                "type": "text",
+                "role": "headline",
+                "x": 528,
+                "y": 180,
+                "width": 480,
+                "height": 320,
+                "size": 68,
+                "minSize": 28,
+                "color": "text",
+                "align": "left",
+                "lineHeight": 1.08
+              },
+              {
+                "type": "text",
+                "role": "body",
+                "x": 568,
+                "y": 560,
+                "width": 440,
+                "height": 310,
+                "size": 30,
+                "minSize": 18,
+                "color": "text"
+              },
+              {
+                "type": "text",
+                "role": "eyebrow",
+                "x": 72,
+                "y": 66,
+                "width": 650,
+                "height": 44,
+                "size": 22,
+                "color": "text"
+              }
+            ]
+          },
+          "frame": {
+            "x": 0,
+            "y": 0,
+            "width": 1080,
+            "height": 1080
+          },
+          "background": true,
+          "needs_visual": true,
+          "treatment": "environmental",
+          "brief": "Image placement: full background at x=0, y=0, width=1080, height=1080 on a 1080px square. Aspect ratio 1.00. Keep the complete subject inside this frame with generous edge clearance. Keep the scene and background intact; leave quiet space behind text."
+        },
+        {
+          "slot_id": "slide_3",
+          "spec": {
+            "slot_id": "slide_3",
+            "background": {
+              "type": "image",
+              "color": "surface",
+              "to": "surface",
+              "angle": 135
+            },
+            "elements": [
+              {
+                "type": "gradient",
+                "x": 0,
+                "y": 0,
+                "width": 1080,
+                "height": 1080,
+                "color": "bg",
+                "to": "bg",
+                "opacity": 12,
+                "endOpacity": 12,
+                "angle": 90,
+                "layer": -10
+              },
+              {
+                "type": "circle",
+                "x": 40,
+                "y": 120,
+                "width": 1000,
+                "height": 800,
+                "color": "primary",
+                "opacity": 12,
+                "radius": 80,
+                "layer": -5
+              },
+              {
+                "type": "glow",
+                "x": 180,
+                "y": 150,
+                "width": 720,
+                "height": 370,
+                "color": "primary",
+                "opacity": 12,
+                "layer": -3
+              },
+              {
+                "type": "text",
+                "role": "headline",
+                "x": 72,
+                "y": 570,
+                "width": 936,
+                "height": 220,
+                "size": 82,
+                "minSize": 28,
+                "color": "text",
+                "align": "left",
+                "lineHeight": 1.08
+              },
+              {
+                "type": "text",
+                "role": "body",
+                "x": 72,
+                "y": 830,
+                "width": 880,
+                "height": 100,
+                "size": 28,
+                "minSize": 18,
+                "color": "text"
+              },
+              {
+                "type": "text",
+                "role": "eyebrow",
+                "x": 72,
+                "y": 66,
+                "width": 650,
+                "height": 44,
+                "size": 22,
+                "color": "text"
+              }
+            ]
+          },
+          "frame": {
+            "x": 0,
+            "y": 0,
+            "width": 1080,
+            "height": 1080
+          },
+          "background": true,
+          "needs_visual": true,
+          "treatment": "environmental",
+          "brief": "Image placement: full background at x=0, y=0, width=1080, height=1080 on a 1080px square. Aspect ratio 1.00. Keep the complete subject inside this frame with generous edge clearance. Keep the scene and background intact; leave quiet space behind text."
+        },
+        {
+          "slot_id": "slide_4",
+          "spec": {
+            "slot_id": "slide_4",
+            "background": {
+              "type": "image",
+              "color": "bg",
+              "to": "gradTo",
+              "angle": 45
+            },
+            "elements": [
+              {
+                "type": "gradient",
+                "x": 0,
+                "y": 0,
+                "width": 1080,
+                "height": 1080,
+                "color": "bg",
+                "to": "bg",
+                "opacity": 12,
+                "endOpacity": 12,
+                "angle": 90,
+                "layer": -10
+              },
+              {
+                "type": "circle",
+                "x": 40,
+                "y": 120,
+                "width": 1000,
+                "height": 800,
+                "color": "accent",
+                "opacity": 12,
+                "radius": 80,
+                "layer": -5
+              },
+              {
+                "type": "glow",
+                "x": 72,
+                "y": 180,
+                "width": 430,
+                "height": 700,
+                "color": "accent",
+                "opacity": 24,
+                "layer": -3
+              },
+              {
+                "type": "text",
+                "role": "headline",
+                "x": 570,
+                "y": 160,
+                "width": 440,
+                "height": 320,
+                "size": 76,
+                "minSize": 28,
+                "color": "text",
+                "align": "left",
+                "lineHeight": 1.08
+              },
+              {
+                "type": "text",
+                "role": "body",
+                "x": 570,
+                "y": 550,
+                "width": 440,
+                "height": 340,
+                "size": 34,
+                "minSize": 18,
+                "color": "text"
+              },
+              {
+                "type": "text",
+                "role": "eyebrow",
+                "x": 72,
+                "y": 66,
+                "width": 650,
+                "height": 44,
+                "size": 22,
+                "color": "text"
+              }
+            ]
+          },
+          "frame": {
+            "x": 0,
+            "y": 0,
+            "width": 1080,
+            "height": 1080
+          },
+          "background": true,
+          "needs_visual": true,
+          "treatment": "environmental",
+          "brief": "Image placement: full background at x=0, y=0, width=1080, height=1080 on a 1080px square. Aspect ratio 1.00. Keep the complete subject inside this frame with generous edge clearance. Keep the scene and background intact; leave quiet space behind text."
+        },
+        {
+          "slot_id": "slide_5",
+          "spec": {
+            "slot_id": "slide_5",
+            "background": {
+              "type": "image",
+              "color": "bg",
+              "to": "surface",
+              "angle": 135
+            },
+            "elements": [
+              {
+                "type": "gradient",
+                "x": 0,
+                "y": 0,
+                "width": 1080,
+                "height": 1080,
+                "color": "bg",
+                "to": "bg",
+                "opacity": 12,
+                "endOpacity": 12,
+                "angle": 90,
+                "layer": -10
+              },
+              {
+                "type": "circle",
+                "x": 40,
+                "y": 120,
+                "width": 1000,
+                "height": 800,
+                "color": "primary",
+                "opacity": 12,
+                "radius": 80,
+                "layer": -5
+              },
+              {
+                "type": "glow",
+                "x": 700,
+                "y": 540,
+                "width": 310,
+                "height": 350,
+                "color": "primary",
+                "opacity": 24,
+                "layer": -3
+              },
+              {
+                "type": "text",
+                "role": "headline",
+                "x": 72,
+                "y": 150,
+                "width": 936,
+                "height": 290,
+                "size": 92,
+                "minSize": 28,
+                "color": "text",
+                "align": "left",
+                "lineHeight": 1.08
+              },
+              {
+                "type": "text",
+                "role": "body",
+                "x": 72,
+                "y": 540,
+                "width": 560,
+                "height": 330,
+                "size": 30,
+                "minSize": 18,
+                "color": "text"
+              },
+              {
+                "type": "text",
+                "role": "eyebrow",
+                "x": 72,
+                "y": 66,
+                "width": 650,
+                "height": 44,
+                "size": 22,
+                "color": "text"
+              },
+              {
+                "type": "badge",
+                "role": "cta",
+                "x": 72,
+                "y": 960,
+                "width": 830,
+                "height": 64,
+                "size": 26,
+                "minSize": 18,
+                "fill": "primary",
+                "color": "text",
+                "radius": 24
+              }
+            ]
+          },
+          "frame": {
+            "x": 0,
+            "y": 0,
+            "width": 1080,
+            "height": 1080
+          },
+          "background": true,
+          "needs_visual": true,
+          "treatment": "environmental",
+          "brief": "Image placement: full background at x=0, y=0, width=1080, height=1080 on a 1080px square. Aspect ratio 1.00. Keep the complete subject inside this frame with generous edge clearance. Keep the scene and background intact; leave quiet space behind text."
+        }
+      ]
+    },
+    "slots": [
+      {
+        "slot_id": "slide_1",
+        "treatment": "environmental",
+        "resolvedAsset": {
+          "url": "photo",
+          "width": 1200,
+          "height": 800
+        }
+      },
+      {
+        "slot_id": "slide_2",
+        "treatment": "environmental",
+        "resolvedAsset": {
+          "url": "photo",
+          "width": 1200,
+          "height": 800
+        }
+      },
+      {
+        "slot_id": "slide_3",
+        "treatment": "environmental",
+        "resolvedAsset": {
+          "url": "photo",
+          "width": 1200,
+          "height": 800
+        }
+      },
+      {
+        "slot_id": "slide_4",
+        "treatment": "environmental",
+        "resolvedAsset": {
+          "url": "photo",
+          "width": 1200,
+          "height": 800
+        }
+      },
+      {
+        "slot_id": "slide_5",
+        "treatment": "environmental",
+        "resolvedAsset": {
+          "url": "photo",
+          "width": 1200,
+          "height": 800
+        }
+      }
+    ]
+  }
+}

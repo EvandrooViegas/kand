@@ -1,62 +1,72 @@
 'use client'
-import BrandDesignStudio from '@/components/BrandDesignStudio'
-import ImageDispositionPicker from '@/components/ImageDispositionPicker'
+import dynamic from 'next/dynamic'
 import BusinessResearchDetails from '@/components/BusinessResearchDetails'
 import { loadEnglishProfile } from '@/lib/client/englishProfile'
 
 import ColorPriority, { reorderColors } from '@/components/ColorPriority'
 import { useState, useEffect } from 'react'
-import LogoVariants from '@/components/LogoVariants'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { toast } from 'sonner'
-import { Loader2, Globe, Image as ImageIcon, Save, Plus, X, Copy } from 'lucide-react'
+import { Loader2, Globe, Image as ImageIcon, Save, Plus, X, Copy, Pipette } from 'lucide-react'
 
-export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSelect }) {
+const sectionLoading = () => <div role="status" className="animate-pulse rounded-xl bg-slate-100 p-6 text-sm text-slate-500 dark:bg-slate-900">Loading controls…</div>
+const BrandDesignStudio = dynamic(() => import('@/components/BrandDesignStudio'), { loading: sectionLoading })
+const ImageDispositionPicker = dynamic(() => import('@/components/ImageDispositionPicker'), { loading: sectionLoading })
+const LogoVariants = dynamic(() => import('@/components/LogoVariants'), { loading: sectionLoading })
+
+function normalizeBrand(bc) {
+  if (!bc || !(bc.name || bc.about || bc.colors?.length || bc.fonts?.length)) return null
+  return { ...bc, name: bc.name || '', about: bc.about || '', logo: bc.logo || '', logoVariants: bc.logoVariants || null, language: bc.language || '', colors: bc.colors || [], fonts: bc.fonts || [] }
+}
+
+export default function BrandInfo({ flowId, initialBrandContext, flows = [], onFlowCreated, onFlowSelect }) {
   const [url, setUrl] = useState('')
   const [activeTab, setActiveTab] = useState('business')
   const [translating, setTranslating] = useState(false)
   const [translationError, setTranslationError] = useState('')
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [extractedData, setExtractedData] = useState(null)
+  const [extractedData, setExtractedData] = useState(() => normalizeBrand(initialBrandContext))
+  const [profileLoading, setProfileLoading] = useState(initialBrandContext === undefined && !!flowId)
   const [loadedFonts, setLoadedFonts] = useState(new Set())
   const [fontLoadingErrors, setFontLoadingErrors] = useState(new Set())
 
-  // Load persisted brand context whenever the selected flow changes
+  // Server-provided data avoids a second request after hydration.
   useEffect(() => {
     if (!flowId) return
     let active = true
-    setExtractedData(null)
     setTranslationError('')
     setTranslating(false)
-    fetch(`/api/flows/${flowId}`)
-      .then(r => r.json())
-      .then(async flow => {
+    setProfileLoading(initialBrandContext === undefined)
+    const load = async () => {
+      try {
+        let bc = initialBrandContext
+        if (bc === undefined) {
+          setExtractedData(null)
+          const response = await fetch(`/api/flows/${flowId}`)
+          if (!response.ok) throw new Error('Could not load the brand. Please reload to try again.')
+          bc = (await response.json()).brandContext
+        }
         if (!active) return
-        let bc = flow?.brandContext
+        const displayed = normalizeBrand(bc)
+        setExtractedData(displayed)
+        setProfileLoading(false)
         if (bc?.about && bc.profileLanguage !== 'en') {
           setTranslating(true)
-          try { bc = await loadEnglishProfile(flowId, bc) } catch (error) { if (active) setTranslationError(error.message) }
-          finally { if (active) setTranslating(false) }
+          const translated = await loadEnglishProfile(flowId, bc)
+          // Do not overwrite edits made while the English profile was loading.
+          if (active) setExtractedData(current => current === displayed ? normalizeBrand(translated) : current)
         }
-        if (!active) return
-        if (bc && (bc.name || bc.about || bc.colors?.length || bc.fonts?.length)) {
-          setExtractedData({
-            ...bc,
-            name:     bc.name     || '',
-            about:    bc.about    || '',
-            logo:     bc.logo     || '',
-            logoVariants: bc.logoVariants || null,
-            language: bc.language || '',
-            colors:   bc.colors   || [],
-            fonts:    bc.fonts    || [],
-          })
-        }
-      })
-      .catch(() => {})
+      } catch (error) {
+        if (active) setTranslationError(error.message)
+      } finally {
+        if (active) { setProfileLoading(false); setTranslating(false) }
+      }
+    }
+    load()
     return () => { active = false }
-  }, [flowId])
+  }, [flowId, initialBrandContext])
 
   // Function to normalize font names (remove -Bold, -Regular, etc.)
   const normalizeFontName = (fontName) => {
@@ -103,12 +113,12 @@ export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSel
 
   // Load fonts when extractedData changes
   useEffect(() => {
-    if (extractedData?.fonts) {
+    if (activeTab === 'identity' && extractedData?.fonts) {
       extractedData.fonts.forEach(font => {
         if (font) loadGoogleFont(font)
       })
     }
-  }, [extractedData?.fonts?.length]) // Only depend on length to avoid infinite loops
+  }, [activeTab, extractedData?.fonts]) // Load preview fonts only when Visual identity is opened.
 
   const handleExtract = async () => {
     if (!url.trim()) {
@@ -274,6 +284,7 @@ export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSel
 
   return (
     <div className="space-y-6 pb-6">
+      {profileLoading && <div role="status" className="animate-pulse rounded-xl bg-slate-100 p-6 text-sm text-slate-500 dark:bg-slate-900">Loading brand profile…</div>}
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div><p className="mb-2 text-[11px] font-medium uppercase tracking-[0.16em] text-slate-400">Brand workspace</p><h1 className="text-2xl font-semibold tracking-tight text-slate-950 dark:text-slate-50">Brand personalization</h1><p className="mt-2 text-sm text-slate-500">Your business, your voice, your visual identity.</p></div>
         {extractedData && <Button onClick={handleSave} disabled={saving || loading || translating} className="bg-slate-900 text-white hover:bg-slate-800 dark:bg-slate-100 dark:text-slate-900">{saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Save className="mr-2 h-4 w-4" />}Save changes</Button>}
@@ -292,10 +303,38 @@ export default function BrandInfo({ flowId, flows = [], onFlowCreated, onFlowSel
 
         <div role="tabpanel" id={`brand-panel-${activeTab}`} aria-labelledby={`brand-tab-${activeTab}`}>
           {activeTab === 'business' && <BusinessResearchDetails data={extractedData} onChange={handleFieldChange} showOverview />}
-          {activeTab === 'identity' && <div className="space-y-5">
-            <section className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-950"><h3 className="text-base font-semibold">Brand logo</h3><p className="mb-5 mt-1 text-xs text-slate-500">Your original logo and transparent variants.</p><LogoVariants key={String(flowId) + extractedData.logo} logo={extractedData.logo} variants={extractedData.logoVariants} onChange={variants => setExtractedData(prev => prev.logo === variants.source ? { ...prev, logoVariants: variants } : prev)} /><label className="mt-5 block text-xs font-medium text-slate-500">Original logo URL<Input type="url" value={extractedData.logo} onChange={e => handleFieldChange('logo', e.target.value)} className="mt-2" /></label></section>
-            <section className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-950"><div className="mb-5 flex items-start justify-between gap-3"><div><h3 className="text-base font-semibold">Color palette</h3><p className="mt-1 text-xs text-slate-500">Primary first. Reorder colors by importance.</p></div><Button variant="outline" size="sm" onClick={addColor}><Plus size={14} className="mr-1" />Add color</Button></div><div className="space-y-3">{extractedData.colors.map((color, index) => <div key={index} className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-100 p-3 dark:border-slate-800"><ColorPriority index={index} count={extractedData.colors.length} onMove={(from, to) => setExtractedData(prev => ({ ...prev, colors: reorderColors(prev.colors, from, to) }))} /><input aria-label={`Color ${index + 1}`} type="color" value={color} onChange={e => handleColorChange(index, e.target.value)} className="h-9 w-9 cursor-pointer rounded border-0 bg-transparent" /><Input aria-label={`Color ${index + 1} hex value`} value={color} onChange={e => handleColorChange(index, e.target.value)} className="min-w-0 flex-1 font-mono text-xs" /><button aria-label={`Copy color ${index + 1}`} onClick={() => copyColorToClipboard(color)} className="p-1 text-slate-400"><Copy size={15} /></button><button aria-label={`Remove color ${index + 1}`} onClick={() => removeColor(index)} className="p-1 text-slate-400 hover:text-red-600"><X size={15} /></button></div>)}{!extractedData.colors.length && <p className="text-sm text-slate-400">Add your first brand color.</p>}</div></section>
-            <section className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-950"><div className="mb-5 flex items-start justify-between gap-3"><div><h3 className="text-base font-semibold">Typography</h3><p className="mt-1 text-xs text-slate-500">The typefaces used across your posts.</p></div><Button variant="outline" size="sm" onClick={addFont}><Plus size={14} className="mr-1" />Add font</Button></div><div className="divide-y divide-slate-100 dark:divide-slate-800">{extractedData.fonts.map((font, index) => <div key={index} className="space-y-4 py-5 first:pt-0 last:pb-0"><div className="flex gap-3"><Input aria-label={`Font ${index + 1}`} value={font} onChange={e => handleFontChange(index, e.target.value)} /><button aria-label={`Remove font ${index + 1}`} onClick={() => removeFont(index)} className="px-1 text-slate-400 hover:text-red-600"><X size={16} /></button></div><div style={{ fontFamily: `"${normalizeFontName(font)}", sans-serif` }}><p className="break-words text-2xl">{normalizeFontName(font) || 'Your typeface'}</p><p className="mt-2 text-sm text-slate-500">The quick brown fox jumps over the lazy dog.</p></div></div>)}</div></section>
+          {activeTab === 'identity' && <div className="grid grid-cols-1 items-start gap-5 lg:grid-cols-2">
+            <section className="min-w-0 rounded-xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-950"><h3 className="text-base font-semibold">Brand logo</h3><p className="mb-5 mt-1 text-xs text-slate-500">Your original logo and transparent variants.</p><LogoVariants key={String(flowId) + extractedData.logo} logo={extractedData.logo} variants={extractedData.logoVariants} onChange={variants => setExtractedData(prev => prev.logo === variants.source ? { ...prev, logoVariants: variants } : prev)} /><label className="mt-5 block text-xs font-medium text-slate-500">Original logo URL<Input type="url" value={extractedData.logo} onChange={e => handleFieldChange('logo', e.target.value)} className="mt-2" /></label></section>
+            <section className="min-w-0 overflow-hidden rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-950">
+              <div className="flex items-start justify-between gap-3 p-5 sm:p-6">
+                <div><h3 className="text-base font-semibold">Color palette</h3><p className="mt-1 text-xs text-slate-500">Pick a color or enter a hex value. Primary first.</p></div>
+                <Button variant="outline" size="sm" onClick={addColor}><Plus size={14} className="mr-1" />Add color</Button>
+              </div>
+              <div className="flex overflow-x-auto">
+                {extractedData.colors.map((color, index) => {
+                  const hex = /^#([a-f\d]{6}|[a-f\d]{3})$/i.test(color) ? color.slice(1) : 'ffffff'
+                  const fullHex = hex.length === 3 ? hex.split('').map(c => c + c).join('') : hex
+                  const channels = [0, 2, 4].map(offset => parseInt(fullHex.slice(offset, offset + 2), 16) / 255).map(value => value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4)
+                  const luminance = channels[0] * 0.2126 + channels[1] * 0.7152 + channels[2] * 0.0722
+                  return <div key={index} className="relative flex min-h-[320px] min-w-[144px] flex-1 flex-col sm:min-h-[380px]" style={{ backgroundColor: `#${fullHex}`, color: luminance > 0.179 ? '#000000' : '#ffffff' }}>
+                    <div className="relative mt-auto space-y-4 px-3 pb-6 pt-8">
+                      <Input aria-label={`Color ${index + 1} hex value`} value={color} onChange={e => handleColorChange(index, e.target.value)} className="h-10 w-full border-transparent bg-transparent px-0 text-center text-xl font-bold uppercase tracking-tight shadow-none focus-visible:ring-current" style={{ color: 'inherit' }} />
+                      <div className="flex justify-center [&_span]:text-current [&_button:hover]:bg-black/10"><ColorPriority index={index} count={extractedData.colors.length} onMove={(from, to) => setExtractedData(prev => ({ ...prev, colors: reorderColors(prev.colors, from, to) }))} /></div>
+                      <div className="flex justify-center gap-3">
+                        <label title="Pick color" className="relative cursor-pointer rounded-md p-2 hover:bg-black/10 focus-within:outline focus-within:outline-2">
+                          <Pipette size={16} aria-hidden="true" />
+                          <input aria-label={`Pick color ${index + 1}`} type="color" value={`#${fullHex}`} onChange={e => handleColorChange(index, e.target.value)} className="absolute inset-0 h-full w-full cursor-pointer opacity-0" />
+                        </label>
+                        <button type="button" aria-label={`Copy color ${index + 1}`} title="Copy hex" onClick={() => copyColorToClipboard(color)} className="rounded-md p-2 hover:bg-black/10 focus-visible:outline focus-visible:outline-2"><Copy size={16} /></button>
+                        <button type="button" aria-label={`Remove color ${index + 1}`} title="Remove color" onClick={() => removeColor(index)} className="rounded-md p-2 hover:bg-black/10 focus-visible:outline focus-visible:outline-2"><X size={16} /></button>
+                      </div>
+                    </div>
+                  </div>
+                })}
+              </div>
+              {!extractedData.colors.length && <p className="px-5 pb-6 text-sm text-slate-400 sm:px-6">Add your first brand color.</p>}
+            </section>
+            <section className="min-w-0 rounded-xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-950 lg:col-span-2"><div className="mb-5 flex items-start justify-between gap-3"><div><h3 className="text-base font-semibold">Typography</h3><p className="mt-1 text-xs text-slate-500">The typefaces used across your posts.</p></div><Button variant="outline" size="sm" onClick={addFont}><Plus size={14} className="mr-1" />Add font</Button></div><div className="divide-y divide-slate-100 dark:divide-slate-800">{extractedData.fonts.map((font, index) => <div key={index} className="space-y-4 py-5 first:pt-0 last:pb-0"><div className="flex gap-3"><Input aria-label={`Font ${index + 1}`} value={font} onChange={e => handleFontChange(index, e.target.value)} /><button aria-label={`Remove font ${index + 1}`} onClick={() => removeFont(index)} className="px-1 text-slate-400 hover:text-red-600"><X size={16} /></button></div><div style={{ fontFamily: `"${normalizeFontName(font)}", sans-serif` }}><p className="break-words text-2xl">{normalizeFontName(font) || 'Your typeface'}</p><p className="mt-2 text-sm text-slate-500">The quick brown fox jumps over the lazy dog.</p></div></div>)}</div></section>
           </div>}
           {activeTab === 'design' && <div className="space-y-5"><section className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-950"><label className="text-sm font-semibold">Post language<Input value={extractedData.language} onChange={e => handleFieldChange('language', e.target.value)} className="mt-3 max-w-sm" /></label><p className="mt-2 text-xs text-slate-500">Your profile is in English. Posts follow this language setting.</p></section><section className="rounded-xl border border-slate-200 bg-white p-5 sm:p-6 dark:border-slate-800 dark:bg-slate-950"><h3 className="text-base font-semibold">Default image style</h3><p className="mb-5 mt-1 text-xs leading-5 text-slate-500">Choose the starting style for new posts. You can change it for an individual post in step-by-step mode.</p><ImageDispositionPicker value={extractedData.imageDisposition || 'cutout'} onChange={imageDisposition => setExtractedData(prev => ({ ...prev, imageDisposition }))} /></section><BrandDesignStudio flowId={flowId} brand={extractedData} onChange={setExtractedData} /></div>}
         </div>

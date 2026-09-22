@@ -48,9 +48,10 @@ export function budgetedModels(groq:any) {return budgetedCompletion(groq,null,un
 export function compactBrand(brand:any) {
  const out:any={}
  const limits:Record<string,number>={about:6500,description:1200,services:3500,projects:5000,targetAudience:1800,tone:1000,suggestedCtas:1500,differentiators:1800,contentTopics:2000}
- for(const key of ['name','about','description','industry','services','products','projects','audience','targetAudience','values','tone','language','positioning','differentiators','suggestedCtas','contentTopics']) {
+ for(const key of ['name','about','description','industry','services','products','projects','audience','targetAudience','values','tone','language','languageVariant','profileLanguage','positioning','differentiators','suggestedCtas','contentTopics']) {
   const value=brand?.[key]
   if(value!=null)out[key]=(typeof value==='string'?value:JSON.stringify(value)).slice(0,limits[key]||450)
  }
+ if(Array.isArray(brand?.researchSources))out.researchSources=brand.researchSources.slice(0,5).map((page:any)=>({url:String(page.url||'').slice(0,500),title:String(page.title||'').slice(0,200)}))
  return out
 }

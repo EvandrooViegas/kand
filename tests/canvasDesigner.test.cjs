@@ -10,7 +10,7 @@ const engine = vm.runInNewContext(stripTypeScriptTypes(source) + '\n({assembleSl
   ...vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname, '../lib/designs/library.ts'),'utf8').replace(/export /g,''))+'\n({DESIGN_LIBRARY,librarySpec,splitBulletItems})'),
   ...vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname,'../lib/designs/palettes.ts'),'utf8').replace(/export /g,''))+'\n({PALETTE_PICKS,paletteColors,choosePalette,constrainBrandPalette})'),
   ...vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname,'../lib/designs/brandBlueprint.ts'),'utf8').replace(/export /g,''))+'\n({blueprintSpec,complementaryAccent})'),
-  ...vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname,'../lib/designs/postLayout.ts'),'utf8').replace(/^import .*$/gm,'').replace(/export /g,''))+'\n({arrangeReadableBody,fitResolvedSlide,fitPlannedLayout,subjectOverlaps,parseDesignSequence,parseDesignBullets,planPostLayout})'),
+  ...vm.runInNewContext(stripTypeScriptTypes(fs.readFileSync(require('node:path').join(__dirname,'../lib/designs/postLayout.ts'),'utf8').replace(/^import .*$/gm,'').replace(/export /g,''))+'\n({arrangeReadableBody,backgroundCompositionForDesign,fitResolvedSlide,fitPlannedLayout,subjectOverlaps,parseDesignSequence,parseDesignBullets,planPostLayout})'),
   canvasBrand: async (db,canvas)=>canvas.designInput?.brandContext||canvas.brandContext||{}, withoutEmoji: copyTools.withoutEmoji, prepareSubjectAssets: async (db, plan) => plan, hydrateSubjectCrops: async (db, plan) => plan, persistInlineImages: async (db, value) => value, uuidv4: require('node:crypto').randomUUID, console, process: { env: {} },
   NextResponse: { json: (body, options) => ({ body, status: options?.status ?? 200 }) }, corsify: response => response,
 })
@@ -796,4 +796,55 @@ test('introductory sentence and bullets become separate introduction and three c
 test('retired boxed gradient text decoration is not rendered',()=>{
  const text='Transform data into better decisions'
  assert.equal(engine.emphasizeHeadline(text,6,'#77aa44','#111111'),text)
+})
+
+test('long background copy recovers from fixed photo boxes without losing copy or image',()=>{
+ const content={headline:'Conheça as vantagens da gestão integrada para o sucesso do seu projeto',body:'Planeamento rigoroso e acompanhamento contínuo garantem qualidade, transparência e controlo em todas as etapas.',cta:'Contacte a nossa equipa para saber mais',eyebrow:'02'}
+ const slot={slot_id:'a',treatment:'environmental',resolvedAsset:{url:'office',width:1200,height:800}}
+ const raw={background:{type:'image',color:'bg'},elements:[
+  {type:'shape',x:0,y:0,width:520,height:1080,color:'bg'},
+  {type:'text',role:'headline',x:64,y:230,width:392,height:100,size:76},
+  {type:'text',role:'body',x:64,y:510,width:392,height:130,size:30},
+  {type:'badge',role:'cta',x:64,y:900,width:392,height:50,size:24},
+ ]}
+ const original=JSON.stringify(raw)
+ assert.throws(()=>engine.fitTextLayout({text:content.headline,width:392,height:100,preferredSize:76,minSize:42}))
+ const fitted=engine.fitResolvedSlide(raw,slot,content,engine.fitTextLayout)
+ assert.equal(JSON.stringify(raw),original)
+ assert.equal(fitted.background.type,'image')
+ assert.ok(!fitted.elements.some(e=>e.type==='shape'))
+ const boxes=['headline','body','cta'].map(role=>fitted.elements.find(e=>e.role===role))
+ for(const [index,e] of boxes.entries()){
+  assert.ok(e.size>=(index===0?48:28))
+  assert.ok(e.x>=72&&e.x+e.width<=1008&&e.y+e.height<=1008)
+  if(index)assert.ok(e.y>=boxes[index-1].y+boxes[index-1].height+12)
+ }
+ const system=engine.normalizeDesignSystem({spacing:'compact'})
+ const spec=engine.validateDesignSpec(fitted,slot,system)
+ const d={...direction().slides[0],slot_id:'a',library:true,design:spec}
+ const result=engine.assembleSlide({d,...content,imageUrl:'office',assets:{a:slot.resolvedAsset},slideNumber:2,totalSlides:3})
+ assert.ok(result.nodes.some(n=>n.src==='office'&&n.width===1080&&n.height===1080))
+ for(const copy of Object.values(content))assert.ok(result.nodes.some(n=>n.text===copy),'Missing copy: '+copy)
+})
+
+test('saved five-slide Portuguese carousel completes every photo campaign composition',async()=>{
+ const fixture=JSON.parse(fs.readFileSync(require('node:path').join(__dirname,'photoCopyLayout.fixture.json'),'utf8'))
+ for(let campaign=0;campaign<6;campaign++){
+  const db={collection:()=>({find:()=>({sort:()=>({limit:()=>({toArray:async()=>Array.from({length:5},(_,n)=>({designCampaign:{index:(campaign+n+1)%6}}))})})})})}
+  const result=await engine.handleDesignCanvas(db,{brandContext:fixture.brand,copy:fixture.copy,resolvedPlan:structuredClone(fixture.resolvedPlan)},false)
+  assert.equal(result.status,200,'Campaign '+campaign+': '+result.body.error)
+ }
+})
+
+test('saved long CTA carousel fits every composition without dropping the CTA',async()=>{
+ const fixture=JSON.parse(fs.readFileSync(require('node:path').join(__dirname,'longCtaLayout.fixture.json'),'utf8'))
+ for(let campaign=0;campaign<6;campaign++){
+  const db={collection:()=>({find:()=>({sort:()=>({limit:()=>({toArray:async()=>Array.from({length:5},(_,n)=>({designCampaign:{index:(campaign+n+1)%6}}))})})})})}
+  const result=await engine.handleDesignCanvas(db,{brandContext:fixture.brand,copy:fixture.copy,resolvedPlan:structuredClone(fixture.resolvedPlan)},false)
+  assert.equal(result.status,200,'Campaign '+campaign+': '+result.body.error)
+  const closing=result.body.pages.at(-1)
+  const cta=closing.nodes.find(n=>n.text?.includes('Fale connosco e descubra como o BIM pode transformar o seu projeto.'))
+  assert.ok(cta,'CTA must survive in rendered nodes, not just saved input')
+  assert.ok(cta.x>=0&&cta.x+cta.width<=1080&&cta.y>=0&&cta.y+cta.height<=1080)
+ }
 })

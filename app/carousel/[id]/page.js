@@ -53,6 +53,24 @@ export default function CarouselManager() {
   const [previousDesign, setPreviousDesign] = useState(null)
   const [switchingDesign, setSwitchingDesign] = useState(false)
   const savedStr = useRef(null)
+  const canvasRef = useRef(canvas)
+  canvasRef.current = canvas
+  const iframeRef = useRef(null)
+  const slideSnapshots = useRef({})
+  const pendingSave = useRef(null)
+  const selectedPageRef = useRef(selectedPage)
+  selectedPageRef.current = selectedPage
+  const editorSrc = useRef(null)
+  if (selectedPage && !editorSrc.current) editorSrc.current = `/editor/${id}?page=${selectedPage}`
+
+  const showSelectedSlide = () => {
+    const parent = canvasRef.current
+    const pageId = selectedPageRef.current
+    if (!parent?.pages?.some(page => page.id === pageId)) return
+    iframeRef.current?.contentWindow.postMessage({
+      type: 'kand:load-page', canvasId: id, canvas: parent, pageId,
+    }, window.location.origin)
+  }
 
   const load = useCallback(async () => {
     const res  = await fetch(`/api/canvases/${id}`)
@@ -72,19 +90,44 @@ export default function CarouselManager() {
 
   useEffect(() => { load() }, [load])
 
-  // Quietly sync the saved reference when the editor iframe autosaves a page.
-  // We intentionally do NOT call load() here — re-fetching would reload the
-  // iframe and interrupt editing. The data is already persisted server-side.
+  // Reuse the editor document; flush its current edits before loading another slide.
   useEffect(() => {
-    const handler = (e) => {
-      if (e.data?.type === 'kand:page-saved') {
-        savedStr.current = JSON.stringify(canvas)
-        setHasChanges(false)
+    iframeRef.current?.contentWindow.postMessage({ type: 'kand:switch-page', canvasId: id }, window.location.origin)
+  }, [selectedPage])
+
+  // The parent retains all slide edits while saves run in the background.
+  useEffect(() => {
+    const handler = (event) => {
+      if (event.origin !== window.location.origin || event.source !== iframeRef.current?.contentWindow || event.data?.canvasId !== id) return
+      if (event.data.type === 'kand:editor-ready') {
+        showSelectedSlide()
+        return
       }
+      if (event.data.type !== 'kand:page-change') return
+      const slide = event.data.slide
+      const parent = canvasRef.current
+      if (!parent?.pages?.some(p => p.id === slide?._carouselPageId)) {
+        if (event.data.switchPage) showSelectedSlide()
+        return
+      }
+      const pages = slide._designChanged ? slide.pages : parent.pages
+      const next = { ...parent,
+        ...(slide._designChanged ? { designSelection: slide.designSelection, designInput: slide.designInput } : {}),
+        pages: pages.map(p => p.id === slide._carouselPageId ? {
+          ...p, nodes: slide.nodes || [], groups: slide.groups || [],
+          classes: slide.classes || {}, background: slide.background,
+        } : p),
+      }
+      slideSnapshots.current[slide._carouselPageId] = JSON.stringify(slide)
+      canvasRef.current = next
+      setCanvas(next)
+      setHasChanges(JSON.stringify(next) !== savedStr.current)
+      if (event.data.switchPage) showSelectedSlide()
+      if (event.data.save) saveRef.current()
     }
     window.addEventListener('message', handler)
     return () => window.removeEventListener('message', handler)
-  }, [canvas])
+  }, [id])
 
   const persistDesign = async (next) => {
     const response = await fetch('/api/canvases/'+id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(next)})
@@ -122,17 +165,41 @@ export default function CarouselManager() {
   }
 
   const save = async () => {
-    if (switchingDesign) return
-    if (!canvas) return
-    const updated = { ...canvas, pages: canvas.pages.map((p, i) => ({ ...p, order: i })) }
-    const res = await fetch(`/api/canvases/${id}`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(updated),
-    })
-    if (res.ok) {
-      savedStr.current = JSON.stringify(updated)
-      setHasChanges(false)
-    } else toast.error('Save failed')
+    if (pendingSave.current) {
+      const ok = await pendingSave.current
+      if (!ok) return false
+      return saveRef.current()
+    }
+    if (switchingDesign || !canvasRef.current) return false
+    const snapshot = canvasRef.current
+    if (JSON.stringify(snapshot) === savedStr.current) return true
+    const snapshots = { ...slideSnapshots.current }
+    pendingSave.current = (async () => {
+      try {
+        const res = await fetch(`/api/canvases/${id}`, {
+          method: 'PUT', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(snapshot),
+        })
+        if (!res.ok) throw new Error('Save failed')
+        savedStr.current = JSON.stringify(snapshot)
+        setHasChanges(JSON.stringify(canvasRef.current) !== savedStr.current)
+        const frame = iframeRef.current
+        const pageId = selectedPageRef.current
+        if (snapshots[pageId]) frame.contentWindow.postMessage({
+          type: 'kand:page-persisted', canvasId: id, pageId, snapshot: snapshots[pageId],
+        }, window.location.origin)
+        return true
+      } catch (error) {
+        toast.error(error.message || 'Save failed')
+        return false
+      }
+    })()
+    try { return await pendingSave.current }
+    finally { pendingSave.current = null }
+  }
+
+  const selectPage = (pageId) => {
+    setSelectedPage(pageId)
   }
 
   // Keep a ref to the latest save so the autosave effect stays stable
@@ -327,7 +394,7 @@ export default function CarouselManager() {
 
   const goToPage = (pageName) => {
     const pg = pages.find((p) => p.name === pageName)
-    if (pg) setSelectedPage(pg.id)
+    if (pg) selectPage(pg.id)
   }
 
   return (
@@ -413,7 +480,7 @@ export default function CarouselManager() {
               const color     = PAGE_COLORS[page.type]
               return (
                 <div key={page.id}
-                  onClick={() => setSelectedPage(page.id)}
+                  onClick={() => selectPage(page.id)}
                   className={`rounded-xl border-2 overflow-hidden cursor-pointer transition-all ${
                     isActive ? 'shadow-sm' : 'opacity-70 hover:opacity-100'
                   }`}
@@ -492,8 +559,9 @@ export default function CarouselManager() {
           <div className="flex-1 min-h-0">
             {selectedPage ? (
               <iframe
-                key={`${selectedPage}-${iframeKey}`}
-                src={`/editor/${id}?page=${selectedPage}`}
+                ref={iframeRef}
+                key={iframeKey}
+                src={editorSrc.current}
                 className="w-full h-full border-0"
                 title="Page editor"
                 allow="clipboard-read; clipboard-write"
