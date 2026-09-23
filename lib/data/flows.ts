@@ -9,6 +9,11 @@ export interface FlowBrandContext {
   language?: string
   colors?: string[]
   fonts?: string[]
+  headingFont?: string
+  bodyFont?: string
+  designTokens?: Partial<Record<'primary' | 'secondary' | 'accent' | 'background' | 'textPrimary' | 'textSecondary', string>>
+  designLibraryVersion?: number
+  designs?: Array<import('@/lib/designs/global/types').BrandGlobalDesign | { id: string; source?: string; baseId?: string; [key: string]: unknown }>
   imageDisposition?: 'cutout' | 'background' | 'framed' | 'none'
   services?: string[]
   projects?: { name: string; description: string; sourceUrl: string }[]

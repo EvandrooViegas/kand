@@ -9,7 +9,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { corsify } from '@/lib/services/middleware'
 
 export async function handleGetCanvases(db: any) {
-  const list = await db.collection('canvases').find({}).sort({ updatedAt: -1 }).limit(500).toArray()
+  const list = await db.collection('canvases').find({ globalDesignEditor: { $exists: false } }).sort({ updatedAt: -1 }).limit(500).toArray()
   return corsify(NextResponse.json(list.map(({ _id, ...rest }: any) => rest)))
 }
 
@@ -80,7 +80,10 @@ export async function handleGetCanvas(db: any, id: string) {
 }
 
 export async function handleUpdateCanvas(db: any, id: string, body: any) {
+  const current = await db.collection('canvases').findOne({ id })
   const update = { ...await persistInlineImages(db, body), id, updatedAt: new Date() }
+  delete update.globalDesignEditor
+  if (current?.globalDesignEditor) update.globalDesignEditor = current.globalDesignEditor
   delete (update as any)._id
   delete (update as any).createdAt
   await db.collection('canvases').updateOne({ id }, { $set: update })

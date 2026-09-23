@@ -1,6 +1,7 @@
 import './globals.css'
 import { Toaster } from '@/components/ui/sonner'
 import { ThemeProvider } from '@/components/theme-provider'
+import DeferredFonts from '@/components/DeferredFonts'
 
 export const metadata = {
   title: 'Kand — Make once. Render forever.',
@@ -32,10 +33,11 @@ export default function RootLayout({ children }) {
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
-        <link rel="stylesheet" href={GOOGLE_FONTS_HREF} />
+        <link rel="preload" as="style" href={GOOGLE_FONTS_HREF} />
         <script dangerouslySetInnerHTML={{__html:'window.addEventListener("error",function(e){if(e.error instanceof DOMException&&e.error.name==="DataCloneError"&&e.message&&e.message.includes("PerformanceServerTiming")){e.stopImmediatePropagation();e.preventDefault()}},true);'}} />
       </head>
       <body className="bg-background text-foreground">
+        <DeferredFonts href={GOOGLE_FONTS_HREF} />
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false}>
           {children}
           <Toaster position="top-center" richColors />

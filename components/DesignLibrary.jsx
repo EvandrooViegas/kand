@@ -4,7 +4,7 @@ import {blueprintSpec,complementaryAccent} from '@/lib/designs/brandBlueprint'
 import {useState,useId,useEffect} from 'react'
 import {PALETTE_PICKS,paletteColors,constrainBrandPalette} from '@/lib/designs/palettes'
 import {Search,Check,ArrowRight,Loader2,Plus} from 'lucide-react'
-import {generateBrandBatch} from '@/lib/designs/generateBrandBatch'
+import GlobalDesignPreview from '@/components/GlobalDesignPreview'
 import {Tabs,TabsList,TabsTrigger,TabsContent} from '@/components/ui/tabs'
 import {DESIGN_LIBRARY,librarySpec} from '@/lib/designs/library'
 import {Dialog,DialogContent,DialogHeader,DialogTitle,DialogDescription} from '@/components/ui/dialog'
@@ -88,34 +88,26 @@ export function Sample({design,chapter=0,canvas,pick='brand'}) {
 }
 
 export default function DesignLibrary({canvas,selected,onSelect,disabled}) {
-  const [savedBrand,setSavedBrand]=useState(null)
-  const brand=canvas?.designInput?.brandContext || canvas?.brandContext
-  useEffect(()=>{if(!brand?.id)return;let cancelled=false;fetch('/api/flows/'+brand.id).then(r=>r.ok?r.json():null).then(flow=>{if(!cancelled&&flow?.brandContext)setSavedBrand({...flow.brandContext,id:flow.id})}).catch(()=>{});return()=>{cancelled=true}},[brand?.id])
-  const brandDesigns=(savedBrand?.designs || brand?.designs || []).map(p=>({...DESIGN_LIBRARY.find(d=>d.id===p.baseId),...p}))
-  const choices=[...brandDesigns,...DESIGN_LIBRARY]
-  if(savedBrand) canvas={...canvas,designInput:{...canvas?.designInput,brandContext:savedBrand}}
-
-  const [open,setOpen]=useState(false),[query,setQuery]=useState(''),[active,setActive]=useState(DESIGN_LIBRARY[0].id)
-  const [pick,setPick]=useState(selected?.paletteId||'brand')
-  const [busy,setBusy]=useState(false),[error,setError]=useState(''),[chapter,setChapter]=useState(0)
-  const [tab,setTab]=useState('premade'),[creating,setCreating]=useState(false),[progress,setProgress]=useState('')
-  const design=choices.find(d=>d.id===active)
-  const filtered=(tab==='brand'?brandDesigns:DESIGN_LIBRARY).filter(d=>(d.name+' '+(d.tags||[]).join(' ')).toLowerCase().includes(query.toLowerCase()))
-  const switchTab=value=>{setTab(value);setQuery('');setError('');const list=value==='brand'?brandDesigns:DESIGN_LIBRARY;if(!list.some(d=>d.id===active)){setActive(list[0]?.id||'');if(list[0]?.paletteId)setPick(list[0].paletteId)}setChapter(0)}
-  return <><Button variant="outline" size="sm" disabled={disabled} onClick={()=>{const chosen=choices.find(d=>d.id===selected?.id);setTab(brandDesigns.some(d=>d.id===selected?.id)||selected?.id?.startsWith('brand-')?'brand':'premade');setActive(chosen?.id||(selected?.id?.startsWith('brand-')?selected.id:DESIGN_LIBRARY[0].id));setPick(selected?.paletteId||'brand');setQuery('');setError('');setChapter(0);setOpen(true)}}>Design: {selected?.name||'Custom'}</Button>
-    <Dialog open={open} onOpenChange={v=>{if(!busy&&!creating)setOpen(v)}}><DialogContent className="w-[calc(100vw-1rem)] max-w-7xl h-[94dvh] max-h-[1040px] p-0 flex flex-col gap-0 overflow-hidden">
-      <DialogHeader className="px-6 py-5 border-b text-left shrink-0"><DialogTitle className="text-xl">Find your look</DialogTitle><DialogDescription>Brand identities and premade designs. Every slide gets its own composition.</DialogDescription></DialogHeader>
-      <div className="flex-1 min-h-0 grid grid-cols-1 md:grid-cols-[1fr_1.15fr] overflow-y-auto md:overflow-hidden">
-        <div className="min-w-0 p-4 md:p-5 md:overflow-y-auto border-b md:border-b-0 md:border-r"><div className="relative mb-4"><Search className="absolute left-3 top-3 h-4 w-4 text-muted-foreground"/><input aria-label="Search designs" value={query} onChange={e=>setQuery(e.target.value)} placeholder="Search a name or mood…" className="w-full rounded-lg border bg-background pl-9 pr-3 py-2.5 text-sm"/></div>
-          <Tabs value={tab} onValueChange={switchTab}><TabsList className="w-full h-11 mb-3"><TabsTrigger disabled={creating||busy} value="brand" className="flex-1">Brand designs ({brandDesigns.length})</TabsTrigger><TabsTrigger disabled={creating||busy} value="premade" className="flex-1">Premade designs</TabsTrigger></TabsList>
-          <TabsContent value={tab}>
-          {tab==='brand'&&<div className="mb-4"><Button className="w-full" variant="outline" disabled={creating||busy||!brand?.id||!brand?.name} onClick={async()=>{setCreating(true);setError('');try{await generateBrandBatch({flowId:brand.id,brand:savedBrand||brand,onProgress:setProgress,onSaved:next=>{setSavedBrand(next);const newest=next.designs?.at(-1);if(newest){setActive(newest.id);setPick(newest.paletteId||'brand');setQuery('');setChapter(0)}}})}catch(e){setError(e.message||'Could not create design')}finally{setCreating(false);setProgress('')}}}>{creating?<Loader2 className="mr-2 h-4 w-4 animate-spin"/>:<Plus className="mr-2 h-4 w-4"/>}{creating?'Creating design…':'Create a brand design'}</Button>{creating&&<p role="status" className="text-xs mt-2 text-muted-foreground">{progress}</p>}{!brand?.id&&<p className="text-xs mt-2 text-muted-foreground">Save your brand to create a design.</p>}</div>}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">{filtered.map(d=><button key={d.id} disabled={busy||creating} aria-pressed={active===d.id} onClick={()=>{setActive(d.id);if(d.paletteId)setPick(d.paletteId);setChapter(0);setError('')}} className={'text-left rounded-xl border-2 overflow-hidden transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-primary '+(active===d.id?'border-primary ring-2 ring-primary/15':'border-border bg-background hover:border-primary/50')}><div className="relative"><Sample design={d} canvas={canvas} pick={active===d.id?pick:d.paletteId||'brand'}/>{selected?.id===d.id&&<span className="absolute top-2 left-2 flex items-center gap-1 rounded-full bg-background px-2 py-1 text-[10px] font-semibold shadow"><Check size={11}/>Current</span>}</div><div className="p-3"><span className="block text-sm font-semibold">{d.name}</span><span className="text-xs text-muted-foreground">{(d.tags||[]).slice(0,2).join(' · ')}</span></div></button>)}</div>
-          {!filtered.length&&<p className="py-10 text-center text-sm text-muted-foreground">{query?'No matching designs.':tab==='brand'?'Create your first design using your brand’s colors and fonts.':'No designs available.'}</p>}
-          </TabsContent></Tabs>
-        </div>
-        {design?<section aria-label="Sample preview" className="min-w-0 bg-muted/30 p-5 md:overflow-y-auto"><div className="flex justify-between items-center mb-3"><h3 className="font-semibold">{design.name}</h3><span className="text-xs text-muted-foreground">Brand palette · Sample preview</span></div><div className="max-w-[520px] w-full mx-auto rounded-xl overflow-hidden shadow-lg ring-1 ring-border"><Sample design={design} chapter={chapter} canvas={canvas} pick={pick}/></div><div className="grid grid-cols-3 gap-3 max-w-[360px] mx-auto my-4">{['Cover','Content','Closing'].map((label,i)=><button key={label} onClick={()=>setChapter(i)} aria-pressed={chapter===i} className={'overflow-hidden rounded-lg border-2 text-xs '+(chapter===i?'border-primary text-foreground':'border-transparent text-muted-foreground hover:border-border')}><Sample design={design} chapter={i} canvas={canvas} pick={pick}/><span className="block py-1.5">{label}</span></button>)}</div><div className="flex justify-center flex-wrap gap-2">{(design.tags||[]).map(tag=><span key={tag} className="text-xs border rounded-full px-2.5 py-1">{tag}</span>)}</div><p className="text-xs text-muted-foreground text-center mt-4">Sample content for instant browsing. Applying uses your post’s saved content and brand.</p></section>:<section className="flex min-h-[360px] items-center justify-center bg-muted/30 p-8 text-center text-muted-foreground"><p>Select or create a brand design to preview its layout here.</p></section>}
-      </div>
-      <footer className="shrink-0 border-t p-4 flex items-center justify-between gap-3 bg-background"><div className="min-w-0"><p className="text-sm">Current: <strong>{selected?.name||'Custom design'}</strong></p><p className="text-xs text-muted-foreground">Applies to all slides and replaces manual layout edits.</p>{error&&<p role="alert" className="text-xs text-red-500">{error}</p>}</div><Button disabled={busy||creating||!design} onClick={async()=>{setBusy(true);setError('');try{await onSelect(active);setOpen(false)}catch(e){setError(e.message||'Could not apply design')}finally{setBusy(false)}}}>{busy?<Loader2 className="mr-2 h-4 w-4 animate-spin"/>:<ArrowRight className="mr-2 h-4 w-4"/>}{busy?'Applying…':design?'Use '+design.name:'Select a design'}</Button></footer>
+  const brand = canvas?.designInput?.brandContext || canvas?.brandContext || {}
+  const [open,setOpen]=useState(false), [entries,setEntries]=useState([]), [legacy,setLegacy]=useState([])
+  const [active,setActive]=useState(''), [chapter,setChapter]=useState(''), [query,setQuery]=useState('')
+  const [busy,setBusy]=useState(false), [loading,setLoading]=useState(false), [error,setError]=useState(''), [showLegacy,setShowLegacy]=useState(false)
+  useEffect(()=>{
+    if(!open)return
+    let current=true
+    setLoading(true);setError('')
+    const read=async r=>{const data=await r.json();if(!r.ok)throw Error(data.error);return data}
+    Promise.all([brand.id?fetch('/api/global-designs/brand?flowId='+encodeURIComponent(brand.id)).then(read):Promise.resolve([]),brand.id?fetch('/api/flows/'+brand.id).then(read):Promise.resolve({brandContext:brand})])
+      .then(([items,flow])=>{if(!current)return;setEntries(items);setLegacy((flow.brandContext?.designs||[]).filter(d=>d.source!=='global').map(d=>({...DESIGN_LIBRARY.find(p=>p.id===d.baseId),...d})));setActive(items.find(item=>item.design.id===selected?.id)?.design.id||items[0]?.design.id||selected?.id||DESIGN_LIBRARY[0].id);setShowLegacy(!items.length)})
+      .catch(e=>{if(current)setError(e.message)}).finally(()=>{if(current)setLoading(false)})
+    return()=>{current=false}
+  },[open,brand.id])
+  const global=entries.find(item=>item.design.id===active)
+  const legacyDesign=[...legacy,...DESIGN_LIBRARY].find(d=>d.id===active)
+  const choices=showLegacy?[...legacy,...DESIGN_LIBRARY].map(design=>({design})):entries
+  return <><Button variant="outline" size="sm" disabled={disabled} onClick={()=>{setOpen(true);setChapter('')}}>Design: {selected?.name||'Custom'}</Button>
+    <Dialog open={open} onOpenChange={setOpen}><DialogContent className="max-w-5xl max-h-[92dvh] overflow-y-auto"><DialogHeader><DialogTitle>Choose a brand design</DialogTitle><DialogDescription>One family keeps every carousel slide consistent. Applying a design replaces manual layout edits.</DialogDescription></DialogHeader>
+      {loading?<p role="status">Loading brand designs…</p>:<div className="grid gap-5 md:grid-cols-2"><div className="space-y-3"><input aria-label="Search designs" placeholder="Search designs" value={query} onChange={e=>setQuery(e.target.value)} className="w-full rounded border bg-background p-2"/><button className="text-xs underline" onClick={()=>setShowLegacy(v=>!v)}>{showLegacy?'Show Global Design imports':'Show legacy designs'}</button><div className="grid grid-cols-2 gap-3">{choices.filter(({design})=>(design.name+' '+(design.tags||[]).join(' ')).toLowerCase().includes(query.toLowerCase())).map(({design,family})=><button key={design.id} disabled={busy} aria-pressed={active===design.id} className={'rounded-lg border-2 p-2 text-left '+(active===design.id?'border-primary':'border-border')} onClick={()=>{setActive(design.id);setChapter('')}}>{family?<GlobalDesignPreview family={family} brand={brand}/>:<Sample design={design} canvas={canvas}/>}<span className="mt-2 block text-sm font-medium">{design.name}</span></button>)}</div>{!entries.length&&<p className="text-sm text-muted-foreground">Choose at least 3 Global Designs in Brand Personalization → Post design to use them for new posts.</p>}</div><div className="space-y-3">{global?<><GlobalDesignPreview family={global.family} brand={brand} variantId={chapter}/><select aria-label="Preview variant" value={chapter||global.family.variants[0].id} onChange={e=>setChapter(e.target.value)} className="w-full rounded border bg-background p-2">{global.family.variants.map(v=><option key={v.id} value={v.id}>{v.name}</option>)}</select></>:legacyDesign?<Sample design={legacyDesign} canvas={canvas}/>:null}<p className="text-xs text-muted-foreground">Preview uses sample content and your brand identity. Generated posts stay editable in Canvas.</p></div></div>}
+      {error&&<p role="alert" className="text-sm text-red-600">{error}</p>}<Button disabled={busy||loading||(!global&&!legacyDesign)} onClick={async()=>{setBusy(true);setError('');try{await onSelect(active);setOpen(false)}catch(e){setError(e.message)}finally{setBusy(false)}}}>{busy?'Applying…':'Apply design'}</Button>
     </DialogContent></Dialog></>
 }

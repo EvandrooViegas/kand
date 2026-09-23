@@ -1,3 +1,5 @@
+import { handleGlobalDesignRequest } from '@/lib/handlers/globalDesignHandler'
+import { requireDesignAdmin } from '@/lib/designs/global/admin'
 import { handleBrandDesigns, handleDeleteBrandDesign } from '@/lib/handlers/brandDesignHandler'
 import { NextResponse } from 'next/server'
 import { connectToMongo } from '@/lib/services/db/mongo'
@@ -30,6 +32,8 @@ async function handleRoute(request, { params }) {
 
   try {
     const db = await connectToMongo()
+
+    if (path[0] === 'global-designs') return await handleGlobalDesignRequest(db, request, path.slice(1))
 
     if (route === '/brand-designs' && method === 'POST') return await handleBrandDesigns(db, await request.json())
 
@@ -95,9 +99,15 @@ async function handleRoute(request, { params }) {
     if (route === '/canvases' && method === 'GET') return await handleGetCanvases(db)
     if (route === '/canvases' && method === 'POST') return await handleCreateCanvas(db, await request.json())
     const dupMatch = route.match(/^\/canvases\/([^/]+)\/duplicate$/)
-    if (dupMatch && method === 'POST') return await handleDuplicateCanvas(db, dupMatch[1])
+    if (dupMatch && method === 'POST') {
+      const existing = await db.collection('canvases').findOne({ id: dupMatch[1] })
+      if (existing?.globalDesignEditor) requireDesignAdmin(request)
+      return await handleDuplicateCanvas(db, dupMatch[1])
+    }
     const canvasMatch = route.match(/^\/canvases\/([^/]+)$/)
     if (canvasMatch) {
+      const existing = await db.collection('canvases').findOne({ id: canvasMatch[1] })
+      if (existing?.globalDesignEditor) requireDesignAdmin(request)
       if (method === 'GET') return await handleGetCanvas(db, canvasMatch[1])
       if (method === 'PUT') return await handleUpdateCanvas(db, canvasMatch[1], await request.json())
       if (method === 'DELETE') return await handleDeleteCanvas(db, canvasMatch[1])
@@ -141,7 +151,7 @@ async function handleRoute(request, { params }) {
     return corsify(NextResponse.json({ error: `Route ${route} not found` }, { status: 404 }))
   } catch (error) {
     console.error('API Error:', error)
-    return corsify(NextResponse.json({ error: error?.message || 'Internal server error' }, { status: 500 }))
+    return corsify(NextResponse.json({ error: error?.message || 'Internal server error' }, { status: error?.status || 500 }))
   }
 }
 

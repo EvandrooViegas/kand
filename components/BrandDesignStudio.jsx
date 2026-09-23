@@ -1,23 +1,48 @@
 'use client'
-import {generateBrandBatch} from '@/lib/designs/generateBrandBatch'
-import {useState} from 'react'
-import {Sample} from '@/components/DesignLibrary'
-import {DESIGN_LIBRARY} from '@/lib/designs/library'
-import {Button} from '@/components/ui/button'
-import {Card,CardHeader,CardTitle,CardDescription,CardContent} from '@/components/ui/card'
-import {Dialog,DialogContent,DialogTitle,DialogDescription} from '@/components/ui/dialog'
-import {Loader2,Sparkles,Trash2} from 'lucide-react'
-export default function BrandDesignStudio({flowId,brand,onChange}) {
- const [progress,setProgress]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState(''),[notice,setNotice]=useState(''),[preview,setPreview]=useState(null),[chapter,setChapter]=useState(0)
- const designs=brand.designs||[]
- const canvas={brandContext:brand}
- const expand=d=>({...DESIGN_LIBRARY.find(x=>x.id===d.baseId),...d})
- return <Card><CardHeader><CardTitle>Your brand designs</CardTitle><CardDescription>Every brand includes at least 3 reusable designs. Add more directions from your identity; saved designs are used for new posts.</CardDescription></CardHeader><CardContent className="space-y-4">
- <Button disabled={busy||!flowId||!brand.name} onClick={async()=>{setBusy(true);setError('');setNotice('');try{await generateBrandBatch({flowId,brand,onSaved:onChange,onProgress:setProgress});setNotice('Your new design is saved.')}catch(e){setError(e.message)}finally{setBusy(false);setProgress('')}}}>{busy?<Loader2 className="mr-2 h-4 w-4 animate-spin"/>:<Sparkles className="mr-2 h-4 w-4"/>}{busy?'Creating your design…':'Generate brand design'}</Button>
- {busy&&<p role="status" aria-live="polite" className="text-sm text-muted-foreground">{progress}</p>}
- {!flowId&&<p className="text-sm">Save your brand before generating designs.</p>}{error&&<p role="alert" className="text-sm text-red-600">{error}</p>}
- {notice&&<p role="status" className="text-sm text-muted-foreground">{notice}</p>}
- <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">{designs.map(d=><div key={d.id} className="relative"><button className="rounded-xl border overflow-hidden text-left hover:ring-2 hover:ring-primary" onClick={()=>{setPreview(d);setChapter(0)}}><Sample design={expand(d)} canvas={canvas} pick={d.paletteId}/><div className="p-3"><p className="font-semibold">{d.name}</p><p className="text-xs text-muted-foreground mt-1">{d.tags.join(' · ')}</p><p className="text-xs mt-2">Preview design</p></div></button><Button variant="destructive" size="sm" disabled={busy||designs.length<=3} title={designs.length<=3?"Add another design first — brands must keep at least 3 designs.":"Delete design"} aria-label={'Delete '+d.name} className="absolute top-2 right-2" onClick={async()=>{setBusy(true);setError('');try{const r=await fetch('/api/brand-designs',{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({flowId,designId:d.id})});if(!r.ok){const data=await r.json();throw Error(data.error||'Could not delete design')}onChange({...brand,designs:designs.filter(item=>item.id!==d.id)});if(preview?.id===d.id)setPreview(null)}catch(e){setError(e.message)}finally{setBusy(false)}}}><Trash2 className="h-4 w-4"/></Button></div>)}</div>
- <Dialog open={!!preview} onOpenChange={v=>{if(!v)setPreview(null)}}><DialogContent className="max-w-3xl max-h-[92dvh] overflow-y-auto"><DialogTitle>{preview?.name}</DialogTitle><DialogDescription>{preview?.rationale}</DialogDescription>{preview&&<>{preview.blueprint&&<p className="text-xs text-muted-foreground">{preview.blueprint.theme} · {preview.blueprint.imagery.style} · {preview.blueprint.imagery.placement} · {preview.blueprint.highlight.replaceAll('_',' ')} highlights</p>}<div className="max-w-[440px] w-full mx-auto shadow-xl rounded-lg overflow-hidden"><Sample design={expand(preview)} canvas={canvas} chapter={chapter} pick={preview.paletteId}/></div><div className="flex gap-2 justify-center">{['Cover','Content','Closing'].map((name,i)=><Button key={name} variant={chapter===i?'default':'outline'} onClick={()=>setChapter(i)}>{name}</Button>)}</div><p className="text-xs text-muted-foreground">Brand composition with sample imagery. Your post text and generated assets replace these placeholders.</p></>}</DialogContent></Dialog>
- </CardContent></Card>
+import { useEffect, useState } from 'react'
+import Link from 'next/link'
+import { Button } from '@/components/ui/button'
+import GlobalDesignPreview from '@/components/GlobalDesignPreview'
+import { Check, Loader2 } from 'lucide-react'
+
+export default function BrandDesignStudio({ flowId, brand, onChange }) {
+  const [families, setFamilies] = useState([]), [selected, setSelected] = useState([])
+  const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('')
+  const [variants, setVariants] = useState({}), [query, setQuery] = useState('')
+  useEffect(() => {
+    let active = true
+    setLoading(true); setError('')
+    const read = async r => { const data = await r.json(); if (!r.ok) throw Error(data.error); return data }
+    Promise.all([fetch('/api/global-designs').then(read), flowId ? fetch(`/api/global-designs/brand?flowId=${encodeURIComponent(flowId)}`).then(read) : Promise.resolve([])])
+      .then(([published, imported]) => {
+        if (!active) return
+        const pinned = new Map(imported.map(item => [item.family.id, item.family]))
+        setFamilies([...published.map(f => pinned.get(f.id) || f), ...imported.filter(item => !published.some(f => f.id === item.family.id)).map(item => item.family)])
+        setSelected(imported.map(item => item.family.id))
+      }).catch(e => { if (active) setError(e.message) }).finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [flowId])
+  const save = async () => {
+    setBusy(true); setError(''); setNotice('')
+    try {
+      const response = await fetch('/api/brand-designs', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ flowId, familyIds: selected }) })
+      const data = await response.json()
+      if (!response.ok) throw Error(data.error)
+      onChange({ ...brand, designs: data.brandContext.designs, designLibraryVersion: 1 })
+      setNotice('Brand designs saved. New posts will use these families with your brand identity.')
+    } catch (e) { setError(e.message) } finally { setBusy(false) }
+  }
+  return <section className="rounded-xl border bg-white p-5 sm:p-6 dark:bg-slate-950">
+    <div className="flex flex-wrap items-start justify-between gap-4"><div><h3 className="text-base font-semibold">Your brand designs</h3><p className="mt-2 max-w-2xl text-sm text-muted-foreground">Choose at least 3 Global Designs. Their layouts stay consistent while colors, fonts, and logo follow your brand.</p></div><Link href="/design-library" className="text-sm underline underline-offset-4">Global Design Library</Link></div>
+    <div className="my-5 flex flex-wrap items-center gap-3"><input aria-label="Search global designs" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search designs or categories" className="h-10 min-w-0 flex-1 rounded-md border bg-background px-3 text-sm" /><span className="text-sm text-muted-foreground">{selected.length} selected · minimum 3</span></div>
+    {loading && <p role="status" className="py-12 text-center text-sm text-muted-foreground">Loading design families…</p>}
+    <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">{families.filter(f => `${f.name} ${f.tags.join(' ')}`.toLowerCase().includes(query.toLowerCase())).map(family => <article key={family.id} className={`min-w-0 rounded-xl border-2 p-3 ${selected.includes(family.id) ? 'border-slate-900 dark:border-slate-100' : 'border-slate-200 dark:border-slate-800'}`}>
+      <GlobalDesignPreview family={family} brand={brand} variantId={variants[family.id]} />
+      <h4 className="mt-3 font-semibold">{family.name}</h4><p className="mt-1 text-xs text-muted-foreground">{family.tags.join(' · ')}</p>
+      <select aria-label={`Preview ${family.name} variant`} className="my-3 w-full rounded border bg-background p-2 text-xs" value={variants[family.id] || family.variants[0].id} onChange={e => setVariants(prev => ({ ...prev, [family.id]: e.target.value }))}>{family.variants.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</select>
+      <Button type="button" disabled={busy} variant={selected.includes(family.id) ? 'default' : 'outline'} className="w-full" aria-pressed={selected.includes(family.id)} onClick={() => { setNotice(''); setSelected(prev => prev.includes(family.id) ? prev.filter(id => id !== family.id) : [...prev, family.id]) }}>{selected.includes(family.id) && <Check size={14} className="mr-2" />}{selected.includes(family.id) ? 'Selected' : 'Select design'}</Button>
+    </article>)}</div>
+    {error && <p role="alert" className="mt-4 text-sm text-red-600">{error}</p>}{notice && <p role="status" className="mt-4 text-sm text-green-700">{notice}</p>}
+    <div className="mt-6 flex items-center justify-between gap-4 border-t pt-5"><p className="text-xs text-muted-foreground">Existing saved posts and legacy designs stay editable.</p><Button onClick={save} disabled={loading || busy || !flowId || selected.length < 3}>{busy && <Loader2 size={14} className="mr-2 animate-spin" />}Save design selection</Button></div>
+  </section>
 }

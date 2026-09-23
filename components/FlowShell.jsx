@@ -150,6 +150,7 @@ export default function FlowShell({ flows: initialFlows, currentFlow, children }
         </nav>
 
         <div className="hidden md:block flex-1" />
+        <Link href="/design-library" className="hidden shrink-0 text-xs text-slate-500 hover:text-foreground sm:block">Design Library</Link>
       </header>
 
       {/* ── Page content ─────────────────────────────────────────────────────── */}

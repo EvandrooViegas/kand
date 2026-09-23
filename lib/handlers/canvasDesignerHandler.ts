@@ -1,3 +1,4 @@
+import { chooseBrandFamily, renderGlobalPost } from '@/lib/designs/global/generation'
 import { budgetedModels, budgetedCompletion } from '@/lib/services/ai/requestBudget'
 import { canvasBrand } from '@/lib/designs/canvasBrand'
 import { arrangeReadableBody, backgroundCompositionForDesign, fitPlannedLayout, fitResolvedSlide, subjectOverlaps, parseDesignSequence, parseDesignBullets, planPostLayout } from '@/lib/designs/postLayout'
@@ -2447,6 +2448,15 @@ export async function handleDesignCanvas(db: any, body: any, persist = true) {
       const flow = await db.collection('flows').findOne({id:brandContext.id})
       if (flow?.brandContext) brandContext={...flow.brandContext,id:flow.id}
     }
+    if (!copy || !Array.isArray(inputPlan?.slots) || !inputPlan.slots.length) return corsify(NextResponse.json({ error: 'copy and resolvedPlan.slots are required' }, { status: 400 }))
+    const globalSelection = await chooseBrandFamily(db, brandContext, copy, body.designId || inputPlan.designId || inputPlan.layoutPlan?.designId)
+    if (globalSelection) {
+      const canvas = renderGlobalPost(globalSelection.family, brandContext, copy, inputPlan, globalSelection.design, uuidv4, canvasName)
+      const saved = await persistInlineImages(db, canvas)
+      if (persist) await db.collection('canvases').insertOne(saved)
+      const { _id, ...result } = saved as any
+      return corsify(NextResponse.json(result))
+    }
     const brandDesigns = (Array.isArray(brandContext?.designs)?brandContext.designs:[]).filter((p:any)=>DESIGN_LIBRARY.some(d=>d.id===p.baseId))
     const requestedDesignId=body.designId || inputPlan?.designId
     const preset = requestedDesignId ? brandDesigns.find((p:any)=>p.id===requestedDesignId) : brandDesigns[Math.floor(Math.random()*brandDesigns.length)]
@@ -2546,7 +2556,7 @@ export async function handleDesignCanvas(db: any, body: any, persist = true) {
     return corsify(NextResponse.json(result))
   } catch (error: any) {
     console.error('[canvas-designer] error:', error)
-    return corsify(NextResponse.json({ error: error.message || 'Canvas design failed' }, { status: 500 }))
+    return corsify(NextResponse.json({ error: error.message || 'Canvas design failed' }, { status: error.status || 500 }))
   }
 }
 

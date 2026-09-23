@@ -1,45 +1,23 @@
-import { brandDesignRequest } from '@/lib/designs/brandDesignRequest'
-import { retrySeconds } from '@/lib/services/ai/requestBudget'
-import { normalizeBlueprint } from '@/lib/designs/brandBlueprint'
-import { normalizeBrandDesigns } from '@/lib/designs/normalizeBrandDesigns'
-import { availableGroqCompletion } from '@/lib/services/ai/availableGroqCompletion'
 import { NextResponse } from 'next/server'
-import { randomUUID } from 'node:crypto'
-import Groq from 'groq-sdk'
+import { selectBrandFamilies } from '@/lib/designs/global/store'
 
+// Brand Design now imports reviewed global structures; it never invents coordinates.
 export async function handleBrandDesigns(db: any, body: any) {
   try {
-  const flow = await db.collection('flows').findOne({id:body.flowId})
-  if (!flow) return NextResponse.json({error:'Save your brand first'},{status:404})
-  if (!(process.env.GROQ_API_KEY || process.env.GROQ_API_KEY_2)) return NextResponse.json({error:'GROQ_API_KEY is required to generate brand designs'},{status:400})
-  const brand = {...flow.brandContext,...body.brandContext,id:flow.id}
-  const groq = new Groq({apiKey:(process.env.GROQ_API_KEY || process.env.GROQ_API_KEY_2),maxRetries:0})
-  let parsed:any={}
-  let failure=''
-  for(let attempt=0;attempt<2;attempt++) {
-    const response=await availableGroqCompletion(groq,brandDesignRequest(brand,flow.brandContext?.designs||[],failure||false))
-    const content=response.choices[0]?.message.content || '{}'
-    try { parsed=JSON.parse(content.trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'')) } catch { parsed={};failure='JSON was incomplete or malformed. Use at most 5 elements per template and omit optional fields to finish within the output budget.' }
-    const issues:string[]=[]
-    const valid=normalizeBrandDesigns(parsed).find((d:any)=>normalizeBlueprint(d.blueprint,issues))
-    if(valid){parsed={designs:[valid]};break}
-    failure=issues[0]||failure||'Return {designs:[{name,blueprint:{templates:{cover,content,closing},imagery}}]} with elements arrays in each template.'
-    console.warn('[brand-designs] Invalid response:',response.choices[0]?.finish_reason,failure)
-  }
-  const designs=normalizeBrandDesigns(parsed).slice(0,1).map((d:any)=>({...d,blueprint:normalizeBlueprint(d.blueprint),artDirection:undefined,id:'brand-'+randomUUID(),baseId:d.baseId,paletteId:d.paletteId,name:String(d.name||brand.name+' design').slice(0,80),tags:(Array.isArray(d.tags)?d.tags:[]).slice(0,4).map((x:any)=>String(x).slice(0,30)),rationale:String(d.rationale||'').slice(0,600),headline:String(d.headline||brand.name).slice(0,120),body:String(d.body||brand.about||'').slice(0,180),createdAt:new Date().toISOString()})).filter((d:any)=>d.blueprint)
-  if (!designs.length) return NextResponse.json({error:'Could not complete the design: '+failure},{status:502})
-  brand.designs=[...(flow.brandContext?.designs||[]),...designs].slice(-24)
-  await db.collection('flows').updateOne({id:flow.id},{$set:{brandContext:brand,updatedAt:new Date()}})
-  return NextResponse.json({brandContext:brand,notice:null})
-  } catch (error: any) {
-    const status = [413,429].includes(error.status) ? error.status : 502
-    const retryAfter=retrySeconds(error)
-    return NextResponse.json({error: error.status === 401 ? 'Groq authentication failed. Check GROQ_API_KEY.' : error.status === 429 ? 'Groq rate limit reached. Please retry shortly.' : error.status === 413 ? 'The design request exceeds the current Groq token limit. Please retry with a shorter brand description.' : error.message || 'Brand design generation failed. Please retry.'},{status,headers:status===429?{'Retry-After':String(retryAfter)}:{}})
-  }
+    if (typeof body.flowId !== 'string' || !Array.isArray(body.familyIds) || !body.familyIds.every((id: any) => typeof id === 'string')) return NextResponse.json({ error: 'Choose at least 3 designs from the Global Design Library.', code: 'GLOBAL_SELECTION_REQUIRED' }, { status: 400 })
+    return NextResponse.json(await selectBrandFamilies(db, body.flowId, body.familyIds))
+  } catch (error: any) { return NextResponse.json({ error: error.message }, { status: error.status || 500 }) }
 }
 
 export async function handleDeleteBrandDesign(db: any, body: any) {
   if (typeof body.flowId !== 'string' || typeof body.designId !== 'string') return NextResponse.json({error:'Flow and design are required'},{status:400})
+  const flow = await db.collection('flows').findOne({ id: body.flowId })
+  const target = flow?.brandContext?.designs?.find((d: any) => d.id === body.designId)
+  if (target?.source === 'global') {
+    const remaining = flow.brandContext.designs.filter((d: any) => d.source === 'global' && d.id !== body.designId).map((d: any) => d.globalFamilyId)
+    try { return NextResponse.json(await selectBrandFamilies(db, body.flowId, remaining)) }
+    catch (error: any) { return NextResponse.json({ error: error.message }, { status: error.status || 500 }) }
+  }
   const result=await db.collection('flows').updateOne({id:body.flowId,'brandContext.designs.id':body.designId,$expr:{$gt:[{$size:{$ifNull:['$brandContext.designs',[]]}},3]}},{$pull:{'brandContext.designs':{id:body.designId}},$set:{updatedAt:new Date()}})
   if (!result.matchedCount) return NextResponse.json({error:'Every brand must keep at least 3 designs. Add another design before deleting one.'},{status:409})
   return NextResponse.json({success:true})

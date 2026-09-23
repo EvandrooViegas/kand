@@ -86,7 +86,7 @@ test('brand image preference restricts every visual slide and permits dense text
 })
 
 const {localAssetBrief:plannerBrief}=new Function(load('lib/designs/localAssetBrief.ts')+';return {localAssetBrief}')()
-const {handlePlanAssets}=new Function('planPostLayout','localAssetBrief','NextResponse','corsify',load('lib/handlers/assetPlannerHandler.ts')+';return {handlePlanAssets}')(planPostLayout,plannerBrief,{json:body=>body},r=>r)
+const {handlePlanAssets}=new Function('planPostLayout','localAssetBrief','NextResponse','corsify',('const chooseBrandFamily = async () => null;\n' + load('lib/handlers/assetPlannerHandler.ts'))+';return {handlePlanAssets}')(planPostLayout,plannerBrief,{json:body=>body},r=>r)
 test('planner uses saved background preference despite stale client brand, and honors explicit post override',async()=>{
  const template={background:{type:'image'},elements:[{type:'text',role:'headline',x:72,y:100,width:900,height:250}]}
  const savedBrand={imageDisposition:'background',designs:[{id:'brand',baseId:'editorial',blueprint:{imagery:{placement:'background'},templates:{cover:template,content:template,closing:template}}}]}

@@ -1891,6 +1891,7 @@ function Editor() {
         </div>
       )}
       <div ref={measureRef} aria-hidden="true" style={{ position: 'fixed', visibility: 'hidden', pointerEvents: 'none', left: -99999, top: -99999, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }} />
+      {canvas.globalDesignEditor && <div className="border-b bg-amber-50 px-4 py-2 text-sm text-amber-950">Editing a Global Design draft. Save this canvas, then return to the <a href="/design-library" target="_blank" rel="noreferrer" className="underline">Design Library</a> to apply your saved edits and publish.</div>}
       {!isEmbedded && (
       <header className="border-b-2 border-foreground/90 bg-[#FAF7F2] dark:bg-[#0E0D0B] px-4 py-3 flex items-center justify-between shrink-0 z-20">
         <div className="flex items-center gap-3 min-w-0">

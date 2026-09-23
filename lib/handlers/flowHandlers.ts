@@ -18,7 +18,7 @@ export async function handleCreateFlow(db: any, body: any) {
     const flow = {
       id: uuidv4(),
       name: body.name || 'New Flow',
-      brandContext: withMinimumBrandDesigns(body.brandContext||{}),
+      brandContext: withMinimumBrandDesigns({...body.brandContext, designs:(body.brandContext?.designs||[]).filter((d:any)=>d.source!=='global')}),
       brandAnswers: {},
       brandQuestions: [],
       extractedContext: '',
@@ -52,7 +52,7 @@ export async function handleUpdateFlow(db: any, flowId: string, body: any) {
     if(body.brandContext){
       const current=await db.collection('flows').findOne({id:flowId})
       const existing=current?.brandContext?.designs||[]
-      const incoming=body.brandContext.designs||[]
+      const incoming=(body.brandContext.designs||[]).filter((d:any)=>d.source!=='global')
       const designs=[...existing,...incoming.filter((d:any)=>!existing.some((e:any)=>e.id===d.id))]
       body={...body,brandContext:withMinimumBrandDesigns({...body.brandContext,designs})}
     }

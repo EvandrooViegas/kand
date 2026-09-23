@@ -3,7 +3,7 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const { stripTypeScriptTypes } = require('node:module')
 const load = path => stripTypeScriptTypes(fs.readFileSync(path, 'utf8').replace(/^import .*$/gm, '').replace(/export /g, ''))
-const { scoreAsset, findCandidates } = new Function(load('lib/handlers/assetPlannerHandler.ts') + ';return {scoreAsset,findCandidates}')()
+const { scoreAsset, findCandidates } = new Function(('const chooseBrandFamily = async () => null;\n' + load('lib/handlers/assetPlannerHandler.ts')) + ';return {scoreAsset,findCandidates}')()
 
 test('multilingual descriptions are preserved and indexed once with no automatic retries', async () => {
   const requests = []
@@ -86,7 +86,7 @@ test('description editing is brand scoped, avoids unchanged reindexing, and supp
 
 test('background-photo planning selects a described brand upload only above the relevance threshold', async () => {
   const brief = () => ({ slot_id: 'slide_1', needs_visual: true, preferred_source: 'unsplash', search_keywords: ['wheat', 'field', 'harvest'] })
-  const handle = new Function('localAssetBrief', 'NextResponse', 'corsify', load('lib/handlers/assetPlannerHandler.ts') + ';return handlePlanAssets')(brief, { json: body => body }, r => r)
+  const handle = new Function('localAssetBrief', 'NextResponse', 'corsify', ('const chooseBrandFamily = async () => null;\n' + load('lib/handlers/assetPlannerHandler.ts')) + ';return handlePlanAssets')(brief, { json: body => body }, r => r)
   let tags = ['wheat', 'field', 'harvest']
   const db = { collection: name => name === 'flows' ? { findOne: async () => null } : { find: filter => {
     assert.equal(filter.brand_id, 'brand-a')
@@ -117,7 +117,7 @@ test('applicable website photos rank before uploads even outside the old top-thr
 for (const background of [true, false]) {
   test(`${background ? 'background' : 'photo-in-shape'} planning prioritizes distinct extracted photos without new AI calls`, async () => {
     const brief = layout => ({ slot_id: layout.slot_id, needs_visual: true, preferred_source: 'unsplash', search_keywords: ['facade', 'restoration'] })
-    const handle = new Function('localAssetBrief', 'NextResponse', 'corsify', load('lib/handlers/assetPlannerHandler.ts') + ';return handlePlanAssets')(brief, { json: body => body }, r => r)
+    const handle = new Function('localAssetBrief', 'NextResponse', 'corsify', ('const chooseBrandFamily = async () => null;\n' + load('lib/handlers/assetPlannerHandler.ts')) + ';return handlePlanAssets')(brief, { json: body => body }, r => r)
     const assets = [
       { id: 'manual', url: '/manual', tags: ['facade', 'restoration'] },
       { id: 'web-1', url: '/first', source: 'website', content_hash: 'same-pixels', tags: ['facade', 'restoration'] },

@@ -118,3 +118,4 @@ credentials.json
 *.key
 .credentials
 /.next-dev/
+!.env.example

@@ -1,3 +1,4 @@
+import { chooseBrandFamily, globalLayoutPlan } from '@/lib/designs/global/generation'
 import { localAssetBrief } from '@/lib/designs/localAssetBrief'
 /**
  * Asset Planner handler
@@ -245,10 +246,11 @@ export async function handlePlanAssets(db: any, body: any) {
       const flowId=brandContext?.id || String(brand_id).replace(/^brand_/,'')
       if (!brand_id) brand_id = `brand_${flowId}`
       const flow=await db.collection('flows').findOne({id:flowId})
-      if(flow?.brandContext)brandContext=flow.brandContext
+      if(flow?.brandContext)brandContext={...flow.brandContext,id:flow.id}
     }
     const designs=Array.isArray(brandContext?.designs)?brandContext.designs:[]
-    const layoutPlan=body.layoutPlan||planPostLayout(brandContext,copy,idea,body.designId,body.imageDisposition)
+    const globalSelection = await chooseBrandFamily(db, brandContext, copy, body.designId || body.layoutPlan?.designId)
+    const layoutPlan=globalSelection ? globalLayoutPlan(globalSelection.family, globalSelection.design.id, copy) : body.layoutPlan||planPostLayout(brandContext,copy,idea,body.designId,body.imageDisposition)
     if(body.phase==='canvas')return corsify(NextResponse.json(layoutPlan))
     const selectedDesign=designs.find((d:any)=>d.id===layoutPlan.designId)
     const imagery=selectedDesign?.blueprint?.imagery
@@ -259,7 +261,7 @@ export async function handlePlanAssets(db: any, body: any) {
     const usedScenes=new Set<string>()
     const aiSlots=layoutPlan.slots.map((layout:any,index:number)=>localAssetBrief(layout,copy.slides?.[index]||copy,idea,usedScenes))
     await refinePhotoBriefs(aiSlots,layoutPlan.slots,copy,idea)
-    layoutPlan.slots=layoutPlan.slots.map((layout:any,index:number)=>aiSlots[index].needs_visual===false?{...layout,needs_visual:false,background:false,frame:null,spec:{...layout.spec,background:{...layout.spec.background,type:'solid'},elements:layout.spec.elements.filter((e:any)=>e.type!=='image')}}:layout)
+    if (!globalSelection) layoutPlan.slots=layoutPlan.slots.map((layout:any,index:number)=>aiSlots[index].needs_visual===false?{...layout,needs_visual:false,background:false,frame:null,spec:{...layout.spec,background:{...layout.spec.background,type:'solid'},elements:layout.spec.elements.filter((e:any)=>e.type!=='image')}}:layout)
 
     // Load uploaded assets for this brand (for matching)
     let uploadedAssets: any[] = []
@@ -320,6 +322,6 @@ export async function handlePlanAssets(db: any, body: any) {
     return corsify(NextResponse.json(plan))
   } catch (error: any) {
     console.error('Asset planner error:', error)
-    return corsify(NextResponse.json({ error: error.message || 'Asset planning failed' }, { status: 500 }))
+    return corsify(NextResponse.json({ error: error.message || 'Asset planning failed' }, { status: error.status || 500 }))
   }
 }
