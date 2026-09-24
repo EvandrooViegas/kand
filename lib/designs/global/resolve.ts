@@ -41,7 +41,12 @@ export function chooseVariant(family: GlobalDesignFamily, slide: any, index: num
 }
 
 function fitSize(text: string, node: TemplateNode, resolvedFont: string): number {
-  const preferred = node.fontSize || 40, minimum = Math.min(preferred, node.minFontSize || 22)
+  const preferred = node.fontSize || 40
+  const designedMinimum = Math.min(preferred, node.minFontSize || 22)
+  // Imported templates use minFontSize as their ideal visual floor. Real post
+  // copy can be longer than reference copy, so keep shrinking within a readable
+  // range before rejecting it. Geometry and the complete text stay unchanged.
+  const minimum = Math.min(designedMinimum, Math.max(14, Math.floor(preferred * .34)))
   const factor = ['Oswald', 'Bebas Neue', 'Anton'].includes(resolvedFont) ? .82 : ['Playfair Display', 'Dancing Script', 'Pacifico', 'Lobster'].includes(resolvedFont) ? 1.12 : 1
   const width = node.width - (node.highlight === 'background' ? 28 : 8)
   for (let size = preferred; size >= minimum; size--) {

@@ -53,8 +53,17 @@ async function main() {
 
     const flow = await call('/flows', 'POST', { name: 'Temporary Global Design QA', brandContext: { name: 'QA Brand', colors: ['#18284a', '#ffffff', '#f3cb4a'], fonts: ['Inter'], profileLanguage: 'en' } })
     assert.equal(flow.status, 200); flowId = flow.data.id
-    const selected = await call('/brand-designs', 'POST', { flowId, familyIds: seeds.map(f => f.id) })
-    assert.equal(selected.status, 200)
+    await page.goto(base + `/flow/${flowId}/brand-information`, { waitUntil: 'networkidle2', timeout: 120000 })
+    await page.waitForSelector('[role="tab"]', { timeout: 120000 })
+    await page.evaluate(() => [...document.querySelectorAll('[role="tab"]')].find(e => e.textContent === 'Post design').click())
+    await page.waitForFunction(() => document.body.innerText.includes('0 selected'), { timeout: 120000 })
+    for (let index = 0; index < 3; index++) {
+      await page.waitForFunction(() => [...document.querySelectorAll('button')].some(button => button.textContent.trim() === 'Select design' && !button.disabled))
+      await page.evaluate(() => [...document.querySelectorAll('button')].find(button => button.textContent.trim() === 'Select design' && !button.disabled).click())
+    }
+    await page.waitForFunction(() => document.body.innerText.includes('3 brand designs saved and verified'), { timeout: 120000 })
+    const imported = await call(`/global-designs/brand?flowId=${encodeURIComponent(flowId)}`)
+    assert.equal(imported.status, 200); assert.equal(imported.data.length, 3)
     assert.equal((await call('/brand-designs', 'POST', { flowId, familyIds: [seeds[0].id] })).status, 400)
     const copy = { format: 'carousel', slides: [{ headline: 'Build better habits' }, { headline: 'One clear step', body: 'Choose one action you can take today.', purpose: 'content' }, { headline: 'Start today', body: 'Progress starts with a clear decision.', cta: 'Explore more' }] }
     const layout = await call('/plan-assets', 'POST', { phase: 'canvas', brandContext: { id: flowId }, copy, idea: { id: 'qa' }, designId: 'global-highlight-editorial' })

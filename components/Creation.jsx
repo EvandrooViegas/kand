@@ -703,6 +703,7 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
   const [selectionMode, setSelectionMode] = useState(false)
 
   const hasBrand    = !!(brandContext?.name || brandContext?.about)
+  const globalDesignCount = (brandContext?.designs || []).filter(design => design.source === 'global').length
   const selectedIdeas = ideas.filter(i => selectedIds.has(i.id))
   const brandId     = flowId ? `brand_${flowId}` : null
 
@@ -971,6 +972,13 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
 
   return (
     <div className="space-y-6">
+
+      {globalDesignCount === 0 && (
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-200">
+          <span>Using your saved starter designs. To use the Global Design Library, select at least 3 designs for this brand.</span>
+          <a href={`/flow/${flowId}/brand-information`} className="font-semibold underline underline-offset-4">Choose designs</a>
+        </div>
+      )}
 
       {/* ── Generate ideas card ── */}
       <Card className="border-2 border-dashed border-primary/20 bg-gradient-to-br from-primary/5 to-transparent">

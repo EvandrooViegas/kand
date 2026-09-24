@@ -7,8 +7,10 @@ export async function chooseBrandFamily(db: any, brand: any, copy: any, designId
   // Explicit legacy selections keep older posts and saved designs editable.
   if (designId && !designId.startsWith('global-')) return null
   const families = await hydrateBrandFamilies(db, brand)
+  // Brands that have not opted into the Global Design Library continue to use
+  // their saved legacy/starter designs. A partial Global selection is invalid.
+  if (!families.length) return null
   if (families.length < 3) {
-    if (!brand?.id && !families.length) return null
     throw new DesignLibraryError('Choose at least 3 Global Designs in Brand Personalization → Post design before generating a post.', 409)
   }
   if (designId) {

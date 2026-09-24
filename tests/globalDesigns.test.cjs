@@ -88,6 +88,11 @@ test('photo slots require resolved assets, preserve crop/overlay, and never use 
 })
 
 test('text overflow fails clearly rather than rearranging the design or deleting copy', () => {
+  const portuguese = resolve.resolveVariant(seeds[2], seeds[2].variants[0], {}, { headline: 'Teste simples pode dobrar o desempenho dos anúncios', body: 'Descubra o passo a passo para otimizar seu ROI' }, 0, '/photo.jpg')
+  const fitted = portuguese.nodes.find(node => node.id === 'headline')
+  assert.equal(fitted.text, 'Teste simples pode dobrar o desempenho dos anúncios')
+  assert.ok(fitted.fontSize < seeds[2].variants[0].nodes.find(node => node.id === 'headline').minFontSize)
+  assert.ok(fitted.fontSize >= 14)
   assert.throws(() => resolve.resolveVariant(seeds[1], seeds[1].variants[1], {}, { headline: 'Test', body: 'Very long body. '.repeat(400) }), /too long/)
 })
 
@@ -127,7 +132,9 @@ test('brand selection enforces three distinct published families and stores refe
   for (const design of result.brandContext.designs.filter(d => d.source === 'global')) { assert.equal(design.globalVersion, seeds[0].version); assert.equal(design.nodes, undefined); assert.equal(design.blueprint, undefined) }
   const selected = await generation.chooseBrandFamily(db, { ...result.brandContext, id: 'brand' }, { headline: 'A new beginning' })
   assert.ok(seeds.some(f => f.id === selected.family.id))
-  await assert.rejects(generation.chooseBrandFamily(db, { id: 'empty' }, {}), /at least 3/)
+  assert.equal(await generation.chooseBrandFamily(db, { id: 'empty', designs: [] }, {}), null)
+  const partial = { id: 'partial', designs: result.brandContext.designs.filter(d => d.source === 'global').slice(0, 2) }
+  await assert.rejects(generation.chooseBrandFamily(db, partial, {}), /at least 3/)
 })
 
 test('admin sessions require the configured key, expire, and reject cross-origin writes', () => {
