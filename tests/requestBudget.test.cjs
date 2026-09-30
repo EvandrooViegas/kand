@@ -1,10 +1,19 @@
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),{stripTypeScriptTypes}=require('node:module')
 const source=stripTypeScriptTypes(fs.readFileSync('lib/services/ai/requestBudget.ts','utf8').replace(/^import .*$/gm,'').replace(/export /g,''))
-const create=()=>new Function('globalThis','process',source+';return {retrySeconds,budgetedCompletion,compactBrand}')({},{env:{}})
+const create=(env={})=>new Function('globalThis','process',source+';return {groqKeys,retrySeconds,budgetedCompletion,resilientCompletion,compactBrand}')({},{env})
 test('daily quota message uses the provider wait, not a fixed 15 seconds',()=>{
  const e=create();assert.equal(e.retrySeconds({message:'Please try again in 5m24.864s.'}),325)
  assert.equal(e.retrySeconds({headers:{'retry-after':'420'}}),420)
  assert.equal(e.compactBrand({name:'Brand',designs:[{huge:'x'.repeat(10000)}],logoVariants:{}}).designs,undefined)
+})
+test('discovers numbered and listed credentials without duplicates',()=>{
+ const e=create({GROQ_API_KEY:'one',GROQ_API_KEY_2:'two',GROQ_API_KEY_3:'three',GROQ_API_KEYS:'three, four;five'})
+ assert.deepEqual(e.groqKeys(),['one','two','three','four','five'])
+})
+test('long jobs survive repeated short all-key cooldowns',async()=>{
+ const e=create(),delays=[],responses=[Object.assign(Error('cooling'),{status:429,headers:{'retry-after':'2'}}),Object.assign(Error('cooling'),{status:429,headers:{'retry-after':'1'}}),{ok:true}]
+ const result=await e.resilientCompletion({}, {}, {maxWaitMs:10000,sleep:async ms=>delays.push(ms),complete:async()=>{const value=responses.shift();if(value instanceof Error)throw value;return value}})
+ assert.deepEqual(result,{ok:true});assert.deepEqual(delays,[3000,2000])
 })
 test('simultaneous requests are serialized and a quota failure suppresses subsequent API calls',async()=>{
  const e=create();let active=0,peak=0,calls=0

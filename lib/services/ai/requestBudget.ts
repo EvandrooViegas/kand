@@ -4,7 +4,9 @@ const stateKey=Symbol.for('kand.groq.key-pool.v1')
 const root=globalThis as any
 const state=root[stateKey]||(root[stateKey]={tail:Promise.resolve(),cooldowns:new Map(),clients:new Map(),anonymous:new WeakMap(),active:null})
 export function groqKeys() {
- return [...new Set([process.env.GROQ_API_KEY,process.env.GROQ_API_KEY_2].map(k=>k?.trim()).filter(Boolean))]
+ const numbered=Array.from({length:10},(_,index)=>process.env[index?'GROQ_API_KEY_'+(index+1):'GROQ_API_KEY'])
+ const listed=(process.env.GROQ_API_KEYS||'').split(/[;,\s]+/)
+ return [...new Set([...numbered,...listed].map(k=>k?.trim()).filter(Boolean))]
 }
 export function retrySeconds(error:any) {
  const header=Number(error.headers?.get?.('retry-after')||error.headers?.['retry-after'])
@@ -43,6 +45,21 @@ export async function budgetedCompletion(groq:any,request:any,backups?:any[],ope
   throw Object.assign(new Error('All configured AI keys are cooling down. Retry in '+wait+' seconds.'),{status:429,headers:{'retry-after':String(wait)}})
  }
  const work=state.tail.then(run,run);state.tail=work.catch(()=>{});return work
+}
+/** Long jobs can outlive a short provider cooldown without losing completed work. */
+export async function resilientCompletion(groq:any,request:any,options:any={}) {
+ const maxWaitMs=Math.max(0,options.maxWaitMs??180000),sleep=options.sleep||((ms:number)=>new Promise(resolve=>setTimeout(resolve,ms)))
+ const complete=options.complete||budgetedCompletion
+ const started=Date.now()
+ while(true){
+  try{return await complete(groq,request)}
+  catch(error:any){
+   if(error.status!==429)throw error
+   const delay=(retrySeconds(error)+1)*1000
+   if(Date.now()-started+delay>maxWaitMs)throw error
+   await sleep(delay)
+  }
+ }
 }
 export function budgetedModels(groq:any) {return budgetedCompletion(groq,null,undefined,'models')}
 export function compactBrand(brand:any) {

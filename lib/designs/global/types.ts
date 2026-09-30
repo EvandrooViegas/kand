@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 export const COLOR_TOKENS = ['brand.primary', 'brand.secondary', 'brand.accent', 'brand.background', 'brand.textPrimary', 'brand.textSecondary', 'brand.onPrimary', 'brand.onAccent', 'brand.onImage', 'brand.overlay', 'transparent'] as const
-export const FONT_TOKENS = ['brand.headingFont', 'brand.bodyFont'] as const
+export const FONT_TOKENS = ['brand.headingFont', 'brand.bodyFont', 'brand.accentFont'] as const
 export const SLOT_NAMES = ['headline', 'body', 'cta', 'eyebrow', 'number', 'author', 'brand.name', 'brand.website', 'brand.logo', 'image.primary', 'step.1', 'step.2', 'step.3', 'step.4'] as const
 export const VARIANT_ROLES = ['cover', 'content', 'image-content', 'list', 'quote', 'cta'] as const
 const color = z.enum(COLOR_TOKENS)
@@ -47,7 +47,7 @@ export const familySchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/).max(100), schemaVersion: z.literal(1), version: z.number().int().positive(),
   name: z.string().trim().min(1).max(100), description: z.string().max(3000), tags: z.array(z.string().max(40)).max(12),
   width: z.number().int().min(320).max(4096), height: z.number().int().min(320).max(4096),
-  typography: z.object({ headingFallback: z.string().max(80), bodyFallback: z.string().max(80) }),
+  typography: z.object({ headingFallback: z.string().max(80), bodyFallback: z.string().max(80), accentFallback: z.string().max(80).optional() }),
   referenceStyle: z.object({
     primary: z.string().regex(/^#[a-fA-F0-9]{6}$/), secondary: z.string().regex(/^#[a-fA-F0-9]{6}$/),
     accent: z.string().regex(/^#[a-fA-F0-9]{6}$/), background: z.string().regex(/^#[a-fA-F0-9]{6}$/),

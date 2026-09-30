@@ -18,7 +18,13 @@ export default function GlobalDesignPreview({ family, brand = {}, variantId, cop
     // Reference colors belong only to unbranded library previews. Brand imports use brand tokens.
     const previewBrand = Object.keys(brand).length ? { ...DEMO_BRAND, ...brand }
       : { ...DEMO_BRAND, ...(family.referenceStyle ? { designTokens: family.referenceStyle } : {}) }
-    return resolveVariant(family, variant, previewBrand, copy || { ...SAMPLE_COPY, ...(variant.role === 'cover' ? { body: 'Start with one practical step.', ...(variant.nodes.some(n => n.src === '{{image.primary}}') ? { headline: 'Live with purpose' } : {}) } : {}) }, 0, image, { preview: true })
+    const hasReplaceablePhoto = variant.nodes.some(n => n.src === '{{image.primary}}')
+    const photoDoodle = hasReplaceablePhoto && /hand.drawn|doodle|scribble|script|neon/i.test(family.analysis || '')
+    const previewImage = image || (hasReplaceablePhoto ? '/design-photo-placeholder.webp' : '')
+    const previewCopy = photoDoodle && variant.role === 'cover'
+      ? { ...SAMPLE_COPY, headline: 'Highlights\nof my year', eyebrow: '(2030) Year end recap', body: 'as a content\ncreator', cta: '' }
+      : { ...SAMPLE_COPY, ...(variant.role === 'cover' ? { body: 'Start with one practical step.', ...(hasReplaceablePhoto ? { headline: 'Live with purpose' } : {}) } : {}) }
+    return resolveVariant(family, variant, previewBrand, copy || previewCopy, 0, previewImage, { preview: true })
   }, [family, variant, brand, copy, image, visible])
   useEffect(() => {
     if (!canvas) return
@@ -26,12 +32,11 @@ export default function GlobalDesignPreview({ family, brand = {}, variantId, cop
       if ([...document.querySelectorAll('link[data-design-font]')].some(link => link.dataset.designFont === font)) continue
       const link = document.createElement('link')
       link.rel = 'stylesheet'; link.dataset.designFont = font
-      link.href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(font)}:ital,wght@0,400;0,700;1,400;1,700&display=swap`
+      link.href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(font)}&display=swap`
       document.head.appendChild(link)
     }
   }, [canvas])
   return <div ref={ref} className="relative w-full overflow-hidden rounded-lg bg-slate-100" style={{ aspectRatio: `${family.width}/${family.height}` }}>
     {canvas ? <CanvasPreview canvas={canvas} /> : <span role="status" className="absolute inset-0 flex items-center justify-center text-xs text-slate-400">Loading preview…</span>}
-    {visible && !image && variant.nodes.some(n => n.src === '{{image.primary}}') && <span className="absolute bottom-2 right-2 rounded bg-black/70 px-2 py-1 text-[10px] text-white">Replaceable photo area</span>}
   </div>
 }

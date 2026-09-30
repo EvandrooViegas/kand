@@ -9,11 +9,12 @@ function load(file, names, dependencies = {}) {
   const source = fs.readFileSync(file, 'utf8').replace(/^import .*$/gm, '').replace(/export /g, '')
   return new Function(...Object.keys(dependencies), stripTypeScriptTypes(source, { mode: 'transform' }) + `;return {${names.join(',')}}`)(...Object.values(dependencies))
 }
-const types = load('lib/designs/global/types.ts', ['familySchema', 'variantSchema', 'referenceSchema', 'COLOR_TOKENS', 'SLOT_NAMES'], { z })
+const types = load('lib/designs/global/types.ts', ['familySchema', 'variantSchema', 'referenceSchema', 'COLOR_TOKENS', 'FONT_TOKENS', 'SLOT_NAMES'], { z })
 const { INITIAL_GLOBAL_FAMILIES: seeds } = load('lib/designs/global/seeds.ts', ['INITIAL_GLOBAL_FAMILIES'])
-const resolve = load('lib/designs/global/resolve.ts', ['resolveBrandTokens', 'resolveVariant', 'chooseVariant', 'contentSlots', 'templateFromCanvas', 'SAMPLE_COPY'])
-const store = load('lib/designs/global/store.ts', ['DesignLibraryError', 'ensureGlobalDesignLibrary', 'getGlobalVersion', 'listGlobalDesigns', 'getGlobalRecord', 'saveGlobalDraft', 'publishGlobalDesign', 'retireGlobalDesign', 'selectBrandFamilies', 'hydrateBrandFamilies'], { INITIAL_GLOBAL_FAMILIES: seeds, ...types })
-const generation = load('lib/designs/global/generation.ts', ['chooseBrandFamily', 'globalLayoutPlan', 'renderGlobalPost'], { ...resolve, ...store })
+const resolve = load('lib/designs/global/resolve.ts', ['resolveBrandTokens', 'resolveVariant', 'chooseVariant', 'composeVariant', 'contentSlots', 'templateFromCanvas', 'SAMPLE_COPY'])
+const variations = load('lib/designs/global/variations.ts', ['ensureFamilyVariations'])
+const store = load('lib/designs/global/store.ts', ['DesignLibraryError', 'ensureGlobalDesignLibrary', 'getGlobalVersion', 'listGlobalDesigns', 'getGlobalRecord', 'saveGlobalDraft', 'publishGlobalDesign', 'retireGlobalDesign', 'selectBrandFamilies', 'hydrateBrandFamilies'], { INITIAL_GLOBAL_FAMILIES: seeds, ...types, ...variations })
+const generation = load('lib/designs/global/generation.ts', ['chooseBrandFamily', 'globalLayoutPlan', 'renderGlobalPost'], { ...resolve, ...store, ...variations })
 const auth = load('lib/designs/global/admin.ts', ['validAdminKey', 'adminSession', 'isDesignAdmin', 'requireDesignAdmin'], { ...crypto })
 
 function memoryDb() {
@@ -66,15 +67,57 @@ test('brand adaptation changes identity while preserving geometry and source tem
   assert.equal(JSON.stringify(family), original)
 })
 
+test('every two-reference family expands into three covers and ten structurally distinct content designs', () => {
+  for (const source of seeds) {
+    const family = types.familySchema.parse(variations.ensureFamilyVariations(source))
+    assert.equal(family.variants.filter(variant => variant.role === 'cover').length, 3)
+    const contents = family.variants.filter(variant => variant.role !== 'cover')
+    assert.equal(contents.length, 10)
+    assert.equal(new Set(contents.map(variant => variant.nodes.map(node => `${node.type}:${node.x}:${node.y}:${node.width}:${node.height}:${node.rotation || 0}`).join('|'))).size, 10)
+    assert.ok(contents.every(variant => variant.nodes.filter(node => node.text?.includes('{{body}}')).length === 1))
+  }
+  const [momentum, editorial, photographic] = seeds.map(source => variations.ensureFamilyVariations(source))
+  assert.ok(momentum.variants.every(variant => variant.nodes.some(node => node.id.startsWith('diamond-'))))
+  assert.ok(editorial.variants.every(variant => variant.nodes.find(node => node.text === '{{headline}}')?.highlight === 'background'))
+  assert.ok(photographic.variants.every(variant => variant.nodes.some(node => node.src === '{{image.primary}}')))
+  const fingerprints = [momentum, editorial, photographic].map(family => family.variants.map(variant => variant.nodes.map(node => `${node.type}:${node.id.replace(/-\d+$/, '')}`).join('|')).join('::'))
+  assert.equal(new Set(fingerprints).size, 3)
+})
+
+test('photo doodle upgrades stay within the template node budget', () => {
+  const source = seeds.find(family => family.variants.some(variant => variant.nodes.some(node => node.src === '{{image.primary}}')))
+  const expanded = variations.ensureFamilyVariations(source)
+  const overloaded = { ...expanded, analysis: expanded.analysis + ' Hand-drawn script with neon accents.', variants: expanded.variants.map(variant => ({ ...variant,
+    nodes: [...variant.nodes, ...Array.from({ length: 1700 }, (_, index) => ({ id: `star-field-${index}`, type: 'shape', shape: 'ellipse', x: index % 1080, y: index % 1350, width: 4, height: 4, fill: 'brand.accent' }))] })) }
+  const limited = variations.ensureFamilyVariations(overloaded)
+  assert.ok(limited.variants.every(variant => variant.nodes.length <= 1500))
+  assert.ok(limited.variants.every(variant => variant.nodes.some(node => node.text?.includes('{{headline}}'))))
+  types.familySchema.parse(limited)
+})
+
 test('carousels use variants from one family and produce normal editable Canvas nodes', () => {
   const family = seeds[1], copy = { format: 'carousel', slides: [{ headline: 'A better beginning' }, { headline: 'Small steps', purpose: 'steps', body: '1. Decide\n2. Begin' }, { headline: 'Start today', body: 'Make the next step count.', cta: 'Learn more' }] }
   const canvas = generation.renderGlobalPost(family, { id: 'brand', name: 'Brand' }, copy, { slots: [] }, { id: 'global-' + family.id }, crypto.randomUUID)
-  assert.deepEqual(canvas.pages.map(p => p.globalVariantId), ['cover', 'list', 'cta'])
+  assert.match(canvas.pages[0].globalVariantId, /^cover-/)
+  assert.equal(new Set(canvas.pages.slice(1).map(p => p.globalVariantId)).size, 2)
   assert.equal(canvas.height, 1350)
   assert.equal(new Set(canvas.pages.flatMap(p => p.nodes.map(n => n.id))).size, canvas.pages.reduce((n, p) => n + p.nodes.length, 0))
   assert.ok(canvas.pages.every(p => p.nodes.some(n => n.type === 'text')))
   assert.equal(canvas.designSelection.globalFamilyId, family.id)
   assert.equal(canvas.designInput.resolvedPlan.layoutPlan.source, 'global')
+})
+
+test('generation creates coordinated layout variations while keeping one design family', () => {
+  const family = seeds[2]
+  const copy = { format: 'carousel', slides: Array.from({ length: 5 }, (_, index) => ({ headline: `Distinct headline ${index + 1}`, body: index ? `Supporting copy for slide ${index + 1}.` : '', cta: index === 4 ? 'Get started' : '' })) }
+  const plan = generation.globalLayoutPlan(family, `global-${family.id}`, copy)
+  assert.equal(plan.slots.every(slot => slot.compositionId === 'structural'), true)
+  assert.equal(new Set(plan.slots.map(slot => slot.variantId)).size, 5)
+  const canvas = generation.renderGlobalPost(family, { id: 'brand', name: 'Brand' }, copy, { slots: plan.slots.map(slot => ({ slot_id: slot.slot_id, resolvedAsset: { url: '/photo.jpg' } })) }, { id: `global-${family.id}` }, crypto.randomUUID)
+  assert.equal(canvas.pages.every(page => page.globalCompositionId === 'structural'), true)
+  assert.ok(canvas.pages.every(page => page.nodes.every(node => !node.templateBinding || ['text','shape','image','gradient'].includes(node.type))))
+  const headlinePositions = canvas.pages.map(page => page.nodes.find(node => node.templateBinding?.text === '{{headline}}')).map(node => `${node.x}:${node.y}:${node.width}:${node.textAlign || 'left'}`)
+  assert.ok(new Set(headlinePositions).size >= 3)
 })
 
 test('photo slots require resolved assets, preserve crop/overlay, and never use reference screenshots', () => {
@@ -130,8 +173,11 @@ test('brand selection enforces three distinct published families and stores refe
   const result = await store.selectBrandFamilies(db, 'brand', seeds.map(f => f.id))
   assert.equal(result.brandContext.designs.length, 4)
   for (const design of result.brandContext.designs.filter(d => d.source === 'global')) { assert.equal(design.globalVersion, seeds[0].version); assert.equal(design.nodes, undefined); assert.equal(design.blueprint, undefined) }
-  const selected = await generation.chooseBrandFamily(db, { ...result.brandContext, id: 'brand' }, { headline: 'A new beginning' })
-  assert.ok(seeds.some(f => f.id === selected.family.id))
+  await db.collection('canvases').insertOne({ id: 'one', flowId: 'brand', designSelection: { source: 'global', globalFamilyId: 'serif-escape' } })
+  await db.collection('canvases').insertOne({ id: 'two', flowId: 'brand', designSelection: { source: 'global', globalFamilyId: 'serif-escape' } })
+  await db.collection('canvases').insertOne({ id: 'three', flowId: 'brand', designSelection: { source: 'global', globalFamilyId: 'highlight-editorial' } })
+  const selected = await generation.chooseBrandFamily(db, { ...result.brandContext, id: 'brand', imageDisposition: 'background' }, { headline: 'A new beginning' })
+  assert.equal(selected.family.id, 'momentum-timeline')
   assert.equal(await generation.chooseBrandFamily(db, { id: 'empty', designs: [] }, {}), null)
   const partial = { id: 'partial', designs: result.brandContext.designs.filter(d => d.source === 'global').slice(0, 2) }
   await assert.rejects(generation.chooseBrandFamily(db, partial, {}), /at least 3/)
@@ -150,16 +196,15 @@ test('admin sessions require the configured key, expire, and reject cross-origin
   } finally { if (previous === undefined) delete process.env.GLOBAL_DESIGN_ADMIN_KEY; else process.env.GLOBAL_DESIGN_ADMIN_KEY = previous }
 })
 
-test('reference analysis accepts 5 images, batches them with an anchor, and validates semantic output', async () => {
+test('reference analysis accepts 5 images without resending an anchor bitmap in every batch', async () => {
   const calls = []
   const oldKey = process.env.GROQ_API_KEY
   process.env.GROQ_API_KEY = 'test-only'
   const analyzer = load('lib/designs/global/analyze.ts', ['analyzeDesignReferences', 'normalizeReferenceVariant'], {
-    ...types, z,
+    ...types, ...variations, z,
     Groq: class {}, sharp: () => ({ rotate() { return this }, resize() { return this }, jpeg() { return this }, async toBuffer() { return Buffer.from('image') } }),
     readFile: async () => Buffer.from('reference'), join: require('node:path').join, randomUUID: crypto.randomUUID,
-    retrySeconds: () => 1,
-    budgetedCompletion: async (_client, request) => {
+    resilientCompletion: async (_client, request) => {
       calls.push(request)
       if (request.messages[0].content.startsWith('Measure reference')) {
         const count = Number(request.messages[0].content.match(/exactly (\d+) observations/)[1])
@@ -173,13 +218,14 @@ test('reference analysis accepts 5 images, batches them with an anchor, and vali
   try {
     const references = seeds.flatMap(f => f.referenceImages).slice(0, 5)
     const family = await analyzer.analyzeDesignReferences({}, { referenceImages: references })
-    assert.equal(family.referenceImages.length, 5); assert.equal(family.variants.length, 5)
+    assert.equal(family.referenceImages.length, 5); assert.equal(family.variants.length, 13)
     assert.equal(calls.length, 6)
     assert.equal(family.name, 'Golden Editorial')
     assert.equal(family.typography.headingFallback, 'DM Sans')
     assert.equal(family.referenceStyle.accent, '#ffe05b')
-    assert.ok(calls.every(call => call.messages[1].content.filter(item => item.type === 'image_url').length <= 3))
-    assert.deepEqual(family.variants.map(v => v.id), ['cover', 'content-1', 'content-2', 'content-3', 'content-4'])
+    assert.ok(calls.every(call => call.messages[1].content.filter(item => item.type === 'image_url').length <= 2))
+    assert.deepEqual(family.variants.filter(v => v.role === 'cover').map(v => v.id), ['cover-1', 'cover-2', 'cover-3'])
+    assert.equal(family.variants.filter(v => v.role !== 'cover').length, 10)
     assert.equal(typeof family.variants[0].nodes[0].x, 'number')
   } finally { if (oldKey === undefined) delete process.env.GROQ_API_KEY; else process.env.GROQ_API_KEY = oldKey }
 })

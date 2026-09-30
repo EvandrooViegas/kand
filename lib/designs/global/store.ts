@@ -1,5 +1,6 @@
 import { INITIAL_GLOBAL_FAMILIES } from './seeds'
 import { familySchema } from './types'
+import { ensureFamilyVariations } from './variations'
 import type { GlobalDesignFamily, GlobalDesignRecord, BrandGlobalDesign } from './types'
 
 export class DesignLibraryError extends Error {
@@ -31,21 +32,24 @@ async function seedLibrary(db: any) {
 export async function getGlobalVersion(db: any, id: string, version: number): Promise<GlobalDesignFamily> {
   const family = await versions(db).findOne({ _id: `${id}:${version}` })
   if (!family) throw new DesignLibraryError('The selected design version is unavailable.', 404)
-  return plain(family)
+  return familySchema.parse(ensureFamilyVariations(plain(family)))
 }
 export async function listGlobalDesigns(db: any, admin = false) {
   await ensureGlobalDesignLibrary(db)
   const list = await records(db).find({ deletedAt: { $exists: false }, ...(admin ? {} : { status: 'published' }) }).toArray()
-  return admin ? list.map(plain) : Promise.all(list.map((r: GlobalDesignRecord) => getGlobalVersion(db, r.id, r.publishedVersion!)))
+  return admin
+    ? list.map(record => ({ ...plain(record), draft: familySchema.parse(ensureFamilyVariations(record.draft)) }))
+    : Promise.all(list.map((r: GlobalDesignRecord) => getGlobalVersion(db, r.id, r.publishedVersion!)))
 }
 export async function getGlobalRecord(db: any, id: string): Promise<GlobalDesignRecord> {
   await ensureGlobalDesignLibrary(db)
   const record = await records(db).findOne({ _id: id, deletedAt: { $exists: false } })
   if (!record) throw new DesignLibraryError('Design family not found', 404)
-  return plain(record)
+  const value = plain(record)
+  return { ...value, draft: familySchema.parse(ensureFamilyVariations(value.draft)) }
 }
 export async function saveGlobalDraft(db: any, input: unknown, revision?: number) {
-  const family = familySchema.parse(input)
+  const family = familySchema.parse(ensureFamilyVariations(familySchema.parse(input)))
   if (revision === undefined) {
     try { await records(db).insertOne({ _id: family.id, id: family.id, draft: family, revision: 1, status: 'draft', updatedAt: new Date() }) }
     catch (error: any) { if (error.code === 11000) throw new DesignLibraryError('This family already exists. Reload before saving.', 409); throw error }

@@ -10,7 +10,8 @@ function lightness(color: string) {
   return c[0] * .2126 + c[1] * .7152 + c[2] * .0722
 }
 const on = (color: string) => lightness(color) > .179 ? '#101010' : '#ffffff'
-const font = (value: any, fallback: string) => (typeof value === 'string' ? value : value?.family || value?.name || fallback).replace(/-?(Regular|SemiBold|Bold|Italic)$/i, '')
+const font = (value: any, fallback: string) => (typeof value === 'string' ? value : value?.family || value?.name || fallback)
+  .split(',')[0].trim().replace(/^['\"]|['\"]$/g, '').replace(/-?(Regular|SemiBold|Bold|Italic)$/i, '')
 
 export function resolveBrandTokens(brand: any = {}, family?: GlobalDesignFamily): Record<string, string> {
   const colors = (Array.isArray(brand.colors) ? brand.colors : []).map(hex).filter(Boolean) as string[]
@@ -27,6 +28,7 @@ export function resolveBrandTokens(brand: any = {}, family?: GlobalDesignFamily)
     'brand.onPrimary': lightness(primary) <= .3 ? '#ffffff' : '#101010', 'brand.onAccent': on(accent), 'brand.onImage': '#ffffff', 'brand.overlay': '#000000', transparent: '#00000000',
     'brand.headingFont': font(brand.headingFont || brand.fonts?.[0], family?.typography.headingFallback || 'Inter'),
     'brand.bodyFont': font(brand.bodyFont || brand.fonts?.[1] || brand.fonts?.[0], family?.typography.bodyFallback || 'Inter'),
+    'brand.accentFont': font(brand.accentFont, family?.typography.accentFallback || 'Caveat'),
   }
 }
 
@@ -40,6 +42,60 @@ export function chooseVariant(family: GlobalDesignFamily, slide: any, index: num
   return family.variants.find(v => v.role === preferred && accepts(v)) || family.variants.find(v => v.role === 'content' && accepts(v)) || family.variants.find(accepts) || family.variants[0]
 }
 
+const flipAlign = (value?: string) => value === 'left' ? 'right' : value === 'right' ? 'left' : value
+
+/** Build a coordinated, editable layout variation from a reviewed template. */
+export function composeVariant(family: GlobalDesignFamily, variant: DesignVariant, compositionId = 'base'): DesignVariant {
+  if (compositionId === 'base') return variant
+  const slot = (node: TemplateNode) => node.text?.match(/\{\{([^}]+)\}\}/)?.[1]
+  const mirror = (node: TemplateNode): TemplateNode => {
+    const fullBleed = (node.type === 'image' || node.type === 'gradient') && node.x === 0 && node.width === family.width
+    if (fullBleed) return { ...node }
+    return { ...node, x: family.width - node.x - node.width,
+      ...(node.type === 'text' ? { textAlign: flipAlign(node.textAlign) as TemplateNode['textAlign'] } : {}),
+      ...(node.rotation ? { rotation: -node.rotation } : {}) }
+  }
+  if (compositionId === 'mirror') return { ...variant, name: `${variant.name} · mirrored`, nodes: variant.nodes.map(mirror) }
+
+  if (family.id === 'serif-escape') {
+    const nodes = variant.nodes.map(node => {
+      const role = slot(node)
+      if (compositionId === 'photo-reverse') return mirror(node)
+      if (compositionId === 'photo-bottom') {
+        if (role === 'headline') return { ...node, x: 108, y: 690, width: 864, height: 205, fontSize: Math.min(node.fontSize || 102, 102), textAlign: 'left' as const }
+        if (role === 'body') return { ...node, x: 108, y: 920, width: 720, height: 270, fontSize: Math.min(node.fontSize || 34, 34), textAlign: 'left' as const }
+        if (role === 'eyebrow') return { ...node, x: 690, y: 108, width: 282, textAlign: 'right' as const }
+      }
+      if (compositionId === 'photo-top') {
+        if (role === 'headline') return { ...node, x: 108, y: 245, width: 864, height: 225, fontSize: Math.min(node.fontSize || 102, 102), textAlign: 'left' as const }
+        if (role === 'body') return { ...node, x: 108, y: 510, width: 650, height: 300, fontSize: Math.min(node.fontSize || 32, 32), textAlign: 'left' as const }
+      }
+      return { ...node }
+    })
+    return { ...variant, name: `${variant.name} · ${compositionId.replace('photo-', '')}`, nodes }
+  }
+
+  if (compositionId === 'inset') {
+    const nodes = variant.nodes.map(node => {
+      const role = slot(node)
+      if (!['headline', 'body'].includes(role || '')) return { ...node }
+      const width = Math.max(280, Math.round(node.width * .76))
+      const lower = node.y / family.height > .45
+      return { ...node, x: lower ? 108 : family.width - 108 - width, width,
+        textAlign: (lower ? 'left' : 'right') as TemplateNode['textAlign'] }
+    })
+    return { ...variant, name: `${variant.name} · inset`, nodes }
+  }
+  if (compositionId === 'headline-right') {
+    return { ...variant, name: `${variant.name} · right`, nodes: variant.nodes.map(node => {
+      if (slot(node) !== 'headline') return { ...node }
+      const width = Math.round(node.width * .82)
+      return { ...node, x: family.width - 108 - width, width, textAlign: 'right' as const }
+    }) }
+  }
+  return variant
+}
+
 function fitSize(text: string, node: TemplateNode, resolvedFont: string): number {
   const preferred = node.fontSize || 40
   const designedMinimum = Math.min(preferred, node.minFontSize || 22)
@@ -47,7 +103,7 @@ function fitSize(text: string, node: TemplateNode, resolvedFont: string): number
   // copy can be longer than reference copy, so keep shrinking within a readable
   // range before rejecting it. Geometry and the complete text stay unchanged.
   const minimum = Math.min(designedMinimum, Math.max(14, Math.floor(preferred * .34)))
-  const factor = ['Oswald', 'Bebas Neue', 'Anton'].includes(resolvedFont) ? .82 : ['Playfair Display', 'Dancing Script', 'Pacifico', 'Lobster'].includes(resolvedFont) ? 1.12 : 1
+  const factor = ['Oswald', 'Bebas Neue', 'Anton', 'Archivo Black'].includes(resolvedFont) ? .82 : ['Playfair Display', 'Dancing Script', 'Pacifico', 'Lobster', 'Caveat'].includes(resolvedFont) ? 1.12 : 1
   const width = node.width - (node.highlight === 'background' ? 28 : 8)
   for (let size = preferred; size >= minimum; size--) {
     let lines = 0
