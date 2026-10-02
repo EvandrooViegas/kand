@@ -1,4 +1,4 @@
-import { budgetedModels, budgetedCompletion, compactBrand, retrySeconds } from '@/lib/services/ai/requestBudget'
+import { resilientModels, resilientCompletion, compactBrand, retrySeconds } from '@/lib/services/ai/requestBudget'
 import { cleanCopy } from '@/lib/services/copyText'
 import { NextResponse } from 'next/server'
 import { corsify } from '@/lib/services/middleware'
@@ -155,7 +155,7 @@ Return ONLY valid JSON.`
 }
 
 async function getGroqModel(groq: Groq): Promise<string> {
-  const models = await budgetedModels(groq)
+  const models = await resilientModels(groq, { maxWaitMs: 120000 })
   const preferred = ['llama-3.3-70b-versatile', 'openai/gpt-oss-120b', 'openai/gpt-oss-20b', 'llama-3.1-8b-instant']
   const found = preferred.find(id => models.data.some((model: any) => model.id === id && model.active !== false))
   if (!found) throw new Error('No supported copywriting chat model is available in this Groq account. Check your project model permissions.')
@@ -190,7 +190,7 @@ export async function handleGenerateCopywriting(body: any, db: any) {
     for (let attempt = 0; attempt < 2; attempt++) {
       let response: any
       try {
-        response = await budgetedCompletion(groq, {
+        response = await resilientCompletion(groq, {
           model,
           messages: [
             { role: 'system', content: SYSTEM_PROMPT + '\n\n' + EXTRACTED_CONTEXT_RULES },
@@ -199,7 +199,7 @@ export async function handleGenerateCopywriting(body: any, db: any) {
           response_format: { type: 'json_object' },
           max_tokens: attempt ? 4800 : 2400,
           temperature: attempt ? 0.2 : 0.7,
-        })
+        }, { maxWaitMs: 180000 })
       } catch (error: any) {
         const code = error?.error?.error?.code || error?.error?.code || error?.code
         if (attempt === 0 && code === 'json_validate_failed') continue

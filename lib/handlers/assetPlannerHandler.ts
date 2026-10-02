@@ -250,7 +250,7 @@ export async function handlePlanAssets(db: any, body: any) {
     }
     const designs=Array.isArray(brandContext?.designs)?brandContext.designs:[]
     const globalSelection = await chooseBrandFamily(db, brandContext, copy, body.designId || body.layoutPlan?.designId)
-    const layoutPlan=globalSelection ? globalLayoutPlan(globalSelection.family, globalSelection.design.id, copy) : body.layoutPlan||planPostLayout(brandContext,copy,idea,body.designId,body.imageDisposition)
+    const layoutPlan=globalSelection ? globalLayoutPlan(globalSelection.family, globalSelection.design.id, copy, body.imageDisposition || brandContext.imageDisposition) : body.layoutPlan||planPostLayout(brandContext,copy,idea,body.designId,body.imageDisposition)
     if(body.phase==='canvas')return corsify(NextResponse.json(layoutPlan))
     const selectedDesign=designs.find((d:any)=>d.id===layoutPlan.designId)
     const imagery=selectedDesign?.blueprint?.imagery

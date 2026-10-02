@@ -7,6 +7,7 @@ import { listGlobalDesigns, getGlobalRecord, saveGlobalDraft, publishGlobalDesig
 import { familySchema, variantSchema } from '@/lib/designs/global/types'
 import { resolveVariant, SAMPLE_COPY, templateFromCanvas } from '@/lib/designs/global/resolve'
 import { analyzeDesignReferences } from '@/lib/designs/global/analyze'
+import { createAnalysisJob, readAnalysisJob, retryAnalysisJob, kickAnalysisJob } from '@/lib/designs/global/analysisJobs'
 import { retrySeconds } from '@/lib/services/ai/requestBudget'
 
 export async function handleGlobalDesignRequest(db: any, request: Request, path: string[]) {
@@ -48,6 +49,11 @@ export async function handleGlobalDesignRequest(db: any, request: Request, path:
       const id = randomUUID()
       await db.collection('uploads').insertOne({ id, bytes: new Binary(bytes), contentType: `image/${match[1]}`, purpose: 'design-reference', createdAt: new Date() })
       return NextResponse.json({ id, url: `/api/uploads/${id}`, name: String(body.name || 'Reference').slice(0, 200), width: meta.width, height: meta.height })
+    }
+    if (id === 'analysis-jobs') {
+      if (!action && method === 'POST') return NextResponse.json(await createAnalysisJob(db, await request.json()), { status: 202 })
+      if (action && method === 'GET') { const job = await readAnalysisJob(db, action); kickAnalysisJob(db, action); return NextResponse.json(job) }
+      if (action && method === 'POST') return NextResponse.json(await retryAnalysisJob(db, action), { status: 202 })
     }
     if (id === 'analyze' && method === 'POST') return NextResponse.json(await analyzeDesignReferences(db, await request.json()))
     if (!id && method === 'POST') return NextResponse.json(await saveGlobalDraft(db, await request.json()))

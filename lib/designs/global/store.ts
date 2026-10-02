@@ -77,7 +77,7 @@ export async function retireGlobalDesign(db: any, id: string, revision: number, 
 }
 export async function selectBrandFamilies(db: any, flowId: string, ids: string[]) {
   const selected = [...new Set(ids)]
-  if (selected.length < 3 || selected.length > 24) throw new DesignLibraryError('Select between 3 and 24 different Global Designs.')
+  if (selected.length < 1 || selected.length > 24) throw new DesignLibraryError('Select between 1 and 24 different Global Designs.')
   const flow = await db.collection('flows').findOne({ id: flowId })
   if (!flow) throw new DesignLibraryError('Brand not found', 404)
   const previous = (flow.brandContext?.designs || []).filter((d: any) => d.source === 'global')

@@ -83,6 +83,7 @@ export function CanvasPreview({ canvas, containerWidth, onClick }) {
             position: 'absolute', left: n.x, top: n.y, width: n.width, height: n.height,
             transform: n.rotation ? `rotate(${n.rotation}deg)` : undefined,
             boxSizing: 'border-box',
+            boxShadow: n.boxShadow,
             display: 'flex', alignItems: 'center',
             justifyContent: n.textAlign === 'center' ? 'center' : n.textAlign === 'right' ? 'flex-end' : 'flex-start',
             overflow: n.type === 'text' ? 'visible' : 'hidden',
@@ -118,7 +119,7 @@ export function CanvasPreview({ canvas, containerWidth, onClick }) {
           return (
             <div key={n.id} style={style}>
               {n.type === 'text' ? <div style={{width:'100%',display:'block'}}>{renderStyledText(parseStyledText(n.text || '',canvas.classes || {}),createElement,{canvasClasses:canvas.classes || {}})}</div> : n.type === 'image' && n.src ? (
-                <img src={n.src} alt="" style={{ width: '100%', height: '100%', objectFit: n.objectFit || 'cover', filter: buildFilterCssClient(n.filters) }} />
+                <img src={n.src} alt="" style={n.referenceCrop ? { position: 'absolute', maxWidth: 'none', width: `${100 / n.referenceCrop.width}%`, height: `${100 / n.referenceCrop.height}%`, left: `${-100 * n.referenceCrop.x / n.referenceCrop.width}%`, top: `${-100 * n.referenceCrop.y / n.referenceCrop.height}%` } : { width: '100%', height: '100%', objectFit: n.objectFit || 'cover', filter: buildFilterCssClient(n.filters) }} />
               ) : null}
             </div>
           )

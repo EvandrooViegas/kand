@@ -9,10 +9,10 @@ function load(file, names, dependencies = {}) {
   const source = fs.readFileSync(file, 'utf8').replace(/^import .*$/gm, '').replace(/export /g, '')
   return new Function(...Object.keys(dependencies), stripTypeScriptTypes(source, { mode: 'transform' }) + `;return {${names.join(',')}}`)(...Object.values(dependencies))
 }
-const types = load('lib/designs/global/types.ts', ['familySchema', 'variantSchema', 'referenceSchema', 'COLOR_TOKENS', 'FONT_TOKENS', 'SLOT_NAMES'], { z })
+const types = load('lib/designs/global/types.ts', ['familySchema', 'variantSchema', 'referenceSchema', 'COLOR_TOKENS', 'FONT_TOKENS', 'SLOT_NAMES', 'uniqueNodeIds'], { z })
 const { INITIAL_GLOBAL_FAMILIES: seeds } = load('lib/designs/global/seeds.ts', ['INITIAL_GLOBAL_FAMILIES'])
 const resolve = load('lib/designs/global/resolve.ts', ['resolveBrandTokens', 'resolveVariant', 'chooseVariant', 'composeVariant', 'contentSlots', 'templateFromCanvas', 'SAMPLE_COPY'])
-const variations = load('lib/designs/global/variations.ts', ['ensureFamilyVariations'])
+const variations = load('lib/designs/global/variations.ts', ['ensureFamilyVariations'], types)
 const store = load('lib/designs/global/store.ts', ['DesignLibraryError', 'ensureGlobalDesignLibrary', 'getGlobalVersion', 'listGlobalDesigns', 'getGlobalRecord', 'saveGlobalDraft', 'publishGlobalDesign', 'retireGlobalDesign', 'selectBrandFamilies', 'hydrateBrandFamilies'], { INITIAL_GLOBAL_FAMILIES: seeds, ...types, ...variations })
 const generation = load('lib/designs/global/generation.ts', ['chooseBrandFamily', 'globalLayoutPlan', 'renderGlobalPost'], { ...resolve, ...store, ...variations })
 const auth = load('lib/designs/global/admin.ts', ['validAdminKey', 'adminSession', 'isDesignAdmin', 'requireDesignAdmin'], { ...crypto })
@@ -166,21 +166,28 @@ test('publishing is versioned, stale edits conflict, and unpublishing preserves 
   assert.equal((await store.getGlobalVersion(db, first.id, seeds[1].version)).name, seeds[1].name)
 })
 
-test('brand selection enforces three distinct published families and stores references only', async () => {
+test('brands require one family and can select and generate from multiple families', async () => {
   const db = memoryDb(); await store.ensureGlobalDesignLibrary(db)
   await db.collection('flows').insertOne({ id: 'brand', brandContext: { colors: ['#123456'], designs: [{ id: 'legacy', baseId: 'editorial' }] } })
-  await assert.rejects(store.selectBrandFamilies(db, 'brand', [seeds[0].id, seeds[0].id]), /3 and 24/)
-  const result = await store.selectBrandFamilies(db, 'brand', seeds.map(f => f.id))
-  assert.equal(result.brandContext.designs.length, 4)
-  for (const design of result.brandContext.designs.filter(d => d.source === 'global')) { assert.equal(design.globalVersion, seeds[0].version); assert.equal(design.nodes, undefined); assert.equal(design.blueprint, undefined) }
-  await db.collection('canvases').insertOne({ id: 'one', flowId: 'brand', designSelection: { source: 'global', globalFamilyId: 'serif-escape' } })
-  await db.collection('canvases').insertOne({ id: 'two', flowId: 'brand', designSelection: { source: 'global', globalFamilyId: 'serif-escape' } })
-  await db.collection('canvases').insertOne({ id: 'three', flowId: 'brand', designSelection: { source: 'global', globalFamilyId: 'highlight-editorial' } })
-  const selected = await generation.chooseBrandFamily(db, { ...result.brandContext, id: 'brand', imageDisposition: 'background' }, { headline: 'A new beginning' })
-  assert.equal(selected.family.id, 'momentum-timeline')
+  await assert.rejects(store.selectBrandFamilies(db, 'brand', []), /between 1 and 24/)
+  const result = await store.selectBrandFamilies(db, 'brand', [seeds[0].id])
+  const imports = result.brandContext.designs.filter(d => d.source === 'global')
+  assert.equal(imports.length, 1)
+  assert.equal(imports[0].nodes, undefined)
+  assert.equal(imports[0].globalVersion, seeds[0].version)
+  const selected = await generation.chooseBrandFamily(db, { ...result.brandContext, id: 'brand' }, { headline: 'A new beginning' })
+  assert.equal(selected.family.id, seeds[0].id)
+  const replacement = await store.selectBrandFamilies(db, 'brand', [seeds[1].id])
+  assert.deepEqual(replacement.brandContext.designs.filter(d => d.source === 'global').map(d => d.globalFamilyId), [seeds[1].id])
+  assert.ok(replacement.brandContext.designs.some(d => d.id === 'legacy'))
+  const oldBrand = { designs: [...imports, ...replacement.brandContext.designs.filter(d => d.source === 'global')] }
+  assert.equal((await store.hydrateBrandFamilies(db, oldBrand)).length, 2)
+  assert.equal((await generation.chooseBrandFamily(db, oldBrand, {}, `global-${seeds[1].id}`)).family.id, seeds[1].id)
+  const multiple = await store.selectBrandFamilies(db, 'brand', seeds.map(f => f.id))
+  assert.equal((await store.hydrateBrandFamilies(db, multiple.brandContext)).length, 3)
+  await db.collection('canvases').insertOne({ id: 'used', flowId: 'brand', designSelection: { source: 'global', globalFamilyId: seeds[0].id } })
+  assert.notEqual((await generation.chooseBrandFamily(db, { ...multiple.brandContext, id: 'brand' }, {})).family.id, seeds[0].id)
   assert.equal(await generation.chooseBrandFamily(db, { id: 'empty', designs: [] }, {}), null)
-  const partial = { id: 'partial', designs: result.brandContext.designs.filter(d => d.source === 'global').slice(0, 2) }
-  await assert.rejects(generation.chooseBrandFamily(db, partial, {}), /at least 3/)
 })
 
 test('admin sessions require the configured key, expire, and reject cross-origin writes', () => {
@@ -196,36 +203,33 @@ test('admin sessions require the configured key, expire, and reject cross-origin
   } finally { if (previous === undefined) delete process.env.GLOBAL_DESIGN_ADMIN_KEY; else process.env.GLOBAL_DESIGN_ADMIN_KEY = previous }
 })
 
-test('reference analysis accepts 5 images without resending an anchor bitmap in every batch', async () => {
+test('reference analysis accepts 5 images with one target bitmap per request', async () => {
   const calls = []
   const oldKey = process.env.GROQ_API_KEY
   process.env.GROQ_API_KEY = 'test-only'
   const analyzer = load('lib/designs/global/analyze.ts', ['analyzeDesignReferences', 'normalizeReferenceVariant'], {
     ...types, ...variations, z,
     Groq: class {}, sharp: () => ({ rotate() { return this }, resize() { return this }, jpeg() { return this }, async toBuffer() { return Buffer.from('image') } }),
-    readFile: async () => Buffer.from('reference'), join: require('node:path').join, randomUUID: crypto.randomUUID,
+    readFile: async () => Buffer.from('reference'), join: require('node:path').join, randomUUID: crypto.randomUUID, createHash: crypto.createHash,
+    withDesignProviderFallback: primary => primary(),
+    availableGroqCompletion: async (_client, request) => { calls.push(request); return { choices: [{ message: { content: JSON.stringify(require('./identityResponse.fixture.cjs')(request)) } }] } },
     resilientCompletion: async (_client, request) => {
       calls.push(request)
-      if (request.messages[0].content.startsWith('Measure reference')) {
-        const count = Number(request.messages[0].content.match(/exactly (\d+) observations/)[1])
-        return { choices: [{ message: { content: JSON.stringify({ name: 'Golden Editorial', description: 'Measured typography and highlights.', tags: ['editorial'], typography: { headingFallback: 'DM Sans', bodyFallback: 'Inter' }, referenceStyle: { primary: '#ffffff', secondary: '#111111', accent: '#ffe05b', background: '#ffffff', textPrimary: '#111111' }, observations: Array.from({ length: count }, () => ({ measurements: 'Headline at x 108 y 360 width 860 height 640. Yellow highlights; generous whitespace.' })) }) } }] }
-      }
-      const count = Number(request.messages[0].content.match(/exactly (\d+) variants/)[1])
-      assert.match(request.messages[1].content.at(-1).text, /Headline at x 108/)
-      return { choices: [{ message: { content: JSON.stringify({ analysis: 'Shared margins and typography; cover and content use different hierarchy.', variants: Array.from({ length: count }, () => ({ ...seeds[1].variants[1], nodes: seeds[1].variants[1].nodes.map(n => ({ ...n, x: String(n.x), fontSize: n.fontSize ? `${n.fontSize}px` : undefined })) })) }) } }] }
+      return { choices: [{ message: { content: JSON.stringify(require('./identityResponse.fixture.cjs')(request)) } }] }
     },
   })
   try {
     const references = seeds.flatMap(f => f.referenceImages).slice(0, 5)
     const family = await analyzer.analyzeDesignReferences({}, { referenceImages: references })
-    assert.equal(family.referenceImages.length, 5); assert.equal(family.variants.length, 13)
-    assert.equal(calls.length, 6)
+    assert.equal(family.referenceImages.length, 5); assert.equal(family.variants.length, 9)
+    assert.equal(calls.length, 14)
     assert.equal(family.name, 'Golden Editorial')
+    assert.equal(family.identityVersion, 1)
     assert.equal(family.typography.headingFallback, 'DM Sans')
     assert.equal(family.referenceStyle.accent, '#ffe05b')
-    assert.ok(calls.every(call => call.messages[1].content.filter(item => item.type === 'image_url').length <= 2))
-    assert.deepEqual(family.variants.filter(v => v.role === 'cover').map(v => v.id), ['cover-1', 'cover-2', 'cover-3'])
-    assert.equal(family.variants.filter(v => v.role !== 'cover').length, 10)
+    assert.ok(calls.slice(0, 5).every(call => call.messages[1].content.filter(item => item.type === 'image_url').length === 1))
+    assert.deepEqual(family.variants.filter(v => v.role === 'cover').map(v => v.id), ['cutout-1', 'background-1', 'none-1'])
+    assert.equal(family.variants.filter(v => v.role !== 'cover').length, 6)
     assert.equal(typeof family.variants[0].nodes[0].x, 'number')
   } finally { if (oldKey === undefined) delete process.env.GROQ_API_KEY; else process.env.GROQ_API_KEY = oldKey }
 })
@@ -243,3 +247,23 @@ test('dense reference patterns expand into editable shapes without losing size p
 })
 
 module.exports = { load, seeds, resolve, types, store, generation }
+
+
+test('reconstruction repairs repeated and pattern-colliding IDs without dropping elements', () => {
+  const { expandReferencePatterns } = load('lib/designs/global/analyze.ts', ['expandReferencePatterns'], { ...types, z })
+  const headline = seeds[1].variants[0].nodes.find(n => n.id === 'headline')
+  const nodes = [headline, { ...headline, x: 200 }, { ...headline, id: 'headline-duplicate-2' }, { ...headline, id: 'dots-0-0' }]
+  const expanded = types.variantSchema.parse(expandReferencePatterns({ ...seeds[1].variants[0], nodes, patterns: [{ id: 'dots', shape: 'ellipse', x: 20, y: 20, rows: 1, columns: 1, stepX: 40, stepY: 40, size: 8, fill: 'brand.accent' }] }))
+  assert.equal(expanded.nodes.length, 5)
+  assert.equal(new Set(expanded.nodes.map(n => n.id)).size, 5)
+  assert.deepEqual(expanded.nodes.slice(1).map(({ id, ...node }) => node), nodes.map(({ id, ...node }) => node))
+  assert.deepEqual(types.uniqueNodeIds(expanded.nodes), expanded.nodes)
+})
+
+test('generated variants avoid collisions with inherited decorations', () => {
+  const input = structuredClone(seeds[1])
+  input.variants[0].nodes.push({ id: 'headline', type: 'shape', shape: 'rect', x: 20, y: 20, width: 30, height: 30, fill: 'brand.accent' })
+  const family = types.familySchema.parse(variations.ensureFamilyVariations(input))
+  for (const variant of family.variants) assert.equal(new Set(variant.nodes.map(n => n.id)).size, variant.nodes.length)
+  assert.ok(family.variants[0].nodes.some(n => n.type === 'shape' && n.x === 20 && n.y === 20))
+})

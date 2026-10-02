@@ -21,6 +21,10 @@ export const templateNodeSchema = z.object({
   fill: color.optional(), stroke: color.optional(), strokeWidth: z.number().min(0).max(40).optional(),
   fillAlpha: z.number().min(0).max(100).optional(),
   shape: z.enum(['rect', 'ellipse']).optional(), borderRadius: z.number().min(0).max(4096).optional(),
+  imageType: z.enum(['cutout', 'background']).optional(),
+  imageBrief: z.string().max(2000).optional(),
+  referenceText: z.string().max(4000).optional(),
+  referenceAsset: z.object({ src: z.string().regex(/^\/(?:api\/uploads\/[a-zA-Z0-9-]+|design-references\/[a-zA-Z0-9_.-]+)$/), x: z.number().min(0).max(1), y: z.number().min(0).max(1), width: z.number().positive().max(1), height: z.number().positive().max(1) }).optional(),
   src: z.enum(['{{image.primary}}', '{{brand.logo}}']).optional(), objectFit: z.enum(['cover', 'contain']).optional(),
   cropLeft: z.number().min(0).max(90).optional(), cropRight: z.number().min(0).max(90).optional(),
   cropTop: z.number().min(0).max(90).optional(), cropBottom: z.number().min(0).max(90).optional(),
@@ -30,6 +34,7 @@ export const templateNodeSchema = z.object({
   highlight: z.enum(['none', 'color', 'background']).optional(),
   highlightCount: z.number().int().min(1).max(2).optional(),
   optional: z.boolean().optional(),
+  shadow: z.object({ color, blur: z.number().min(0).max(100), offsetX: z.number().min(-100).max(100), offsetY: z.number().min(-100).max(100), opacity: z.number().min(0).max(1) }).optional(),
 }).superRefine((node, ctx) => {
   if (node.type === 'text' && (!node.text || !node.fontFamily || !node.color || !node.fontSize)) ctx.addIssue({ code: 'custom', message: 'Text requires text, fontFamily, color and fontSize' })
   if (node.type === 'image' && !node.src) ctx.addIssue({ code: 'custom', message: 'Images must use image.primary or brand.logo slots' })
@@ -38,6 +43,8 @@ export const templateNodeSchema = z.object({
 export const variantSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/).max(80), name: z.string().min(1).max(80), role: z.enum(VARIANT_ROLES),
   background: color, nodes: z.array(templateNodeSchema).min(1).max(1600),
+  imagery: z.enum(['cutout', 'background', 'none']).optional(),
+  rationale: z.string().max(1500).optional(),
 }).superRefine((v, ctx) => {
   if (new Set(v.nodes.map(n => n.id)).size !== v.nodes.length) ctx.addIssue({ code: 'custom', message: 'Node IDs must be unique within each variant' })
   if (!v.nodes.some(n => n.text?.includes('{{headline}}'))) ctx.addIssue({ code: 'custom', message: 'Every variant needs a headline slot' })
@@ -45,6 +52,9 @@ export const variantSchema = z.object({
 export const referenceSchema = z.object({ id: z.string().min(1).max(100), url: z.string().regex(/^\/(?:api\/uploads\/[a-zA-Z0-9-]+|design-references\/[a-zA-Z0-9_.-]+)$/), name: z.string().max(200), width: z.number().positive(), height: z.number().positive() })
 export const familySchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/).max(100), schemaVersion: z.literal(1), version: z.number().int().positive(),
+  designType: z.enum(['cutout', 'background', 'none']).optional(),
+  identityVersion: z.literal(1).optional(),
+  designIdentity: z.object({ typography: z.string(), placement: z.string(), colorUsage: z.string(), decoration: z.string(), shadows: z.string(), contrast: z.string(), imagery: z.string(), signature: z.string() }).optional(),
   name: z.string().trim().min(1).max(100), description: z.string().max(3000), tags: z.array(z.string().max(40)).max(12),
   width: z.number().int().min(320).max(4096), height: z.number().int().min(320).max(4096),
   typography: z.object({ headingFallback: z.string().max(80), bodyFallback: z.string().max(80), accentFallback: z.string().max(80).optional() }),
@@ -61,7 +71,10 @@ export const familySchema = z.object({
   for (const variant of family.variants) for (const node of variant.nodes) {
     if (node.type === 'text' && (node.x < 0 || node.y < 0 || node.x + node.width > family.width || node.y + node.height > family.height)) ctx.addIssue({ code: 'custom', message: `${variant.id}/${node.id}: text must stay inside the canvas` })
   }
-  if (!family.variants.some(v => v.nodes.some(n => n.text?.includes('{{body}}')) && v.nodes.some(n => n.text?.includes('{{cta}}')))) ctx.addIssue({ code: 'custom', message: 'Include a content variant with body and CTA slots so supplied copy is preserved' })
+  if (family.identityVersion === 1) for (const imagery of ['cutout', 'background', 'none']) {
+    const variants = family.variants.filter(v => v.imagery === imagery)
+    if (variants.length < 2 || !variants.some(v => v.role === 'cover') || !variants.some(v => v.role === 'content')) ctx.addIssue({ code: 'custom', message: `${imagery} needs distinct cover and content variations` })
+  }
 })
 export type TemplateNode = z.infer<typeof templateNodeSchema>
 export type DesignVariant = z.infer<typeof variantSchema>
@@ -69,3 +82,17 @@ export type GlobalDesignFamily = z.infer<typeof familySchema>
 export type ReferenceImage = z.infer<typeof referenceSchema>
 export interface BrandGlobalDesign { id: string; source: 'global'; globalFamilyId: string; globalVersion: number; name: string; tags: string[]; createdAt: string }
 export interface GlobalDesignRecord { id: string; status: 'draft' | 'published'; revision: number; draft: GlobalDesignFamily; publishedVersion?: number; deletedAt?: Date; updatedAt: Date }
+
+/** Keep every reconstructed element while repairing local ID collisions. */
+export function uniqueNodeIds<T extends { id: string }>(nodes: T[]): T[] {
+  const reserved = new Set(nodes.map(node => node.id))
+  const used = new Set<string>()
+  return nodes.map(node => {
+    if (!used.has(node.id)) { used.add(node.id); return node }
+    let suffix = 2
+    let id: string
+    do { id = `${node.id.slice(0, 80)}-duplicate-${suffix++}` } while (reserved.has(id) || used.has(id))
+    used.add(id)
+    return { ...node, id }
+  })
+}

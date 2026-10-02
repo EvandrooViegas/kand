@@ -20,11 +20,13 @@ export default function GlobalDesignPreview({ family, brand = {}, variantId, cop
       : { ...DEMO_BRAND, ...(family.referenceStyle ? { designTokens: family.referenceStyle } : {}) }
     const hasReplaceablePhoto = variant.nodes.some(n => n.src === '{{image.primary}}')
     const photoDoodle = hasReplaceablePhoto && /hand.drawn|doodle|scribble|script|neon/i.test(family.analysis || '')
-    const previewImage = image || (hasReplaceablePhoto ? '/design-photo-placeholder.webp' : '')
+    const referencePreview = family.identityVersion !== 1 && !Object.keys(brand).length && !copy && !image
+    const cutout = variant.imagery === 'cutout' || family.designType === 'cutout' || variant.nodes.some(n => n.imageType === 'cutout')
+    const previewImage = image || (hasReplaceablePhoto && !cutout ? '/design-photo-placeholder.webp' : '')
     const previewCopy = photoDoodle && variant.role === 'cover'
       ? { ...SAMPLE_COPY, headline: 'Highlights\nof my year', eyebrow: '(2030) Year end recap', body: 'as a content\ncreator', cta: '' }
       : { ...SAMPLE_COPY, ...(variant.role === 'cover' ? { body: 'Start with one practical step.', ...(hasReplaceablePhoto ? { headline: 'Live with purpose' } : {}) } : {}) }
-    return resolveVariant(family, variant, previewBrand, copy || previewCopy, 0, previewImage, { preview: true })
+    return resolveVariant(family, variant, previewBrand, copy || previewCopy, 0, previewImage, { preview: true, referencePreview })
   }, [family, variant, brand, copy, image, visible])
   useEffect(() => {
     if (!canvas) return

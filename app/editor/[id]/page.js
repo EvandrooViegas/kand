@@ -1646,6 +1646,7 @@ function Editor() {
     const base = {
       position: 'absolute', left: node.x, top: node.y, width: node.width, height: node.height,
       cursor: 'move', pointerEvents: 'auto',
+      boxShadow: node.boxShadow,
       outline: 'none',
       display: node.type === 'text' ? 'block' : 'flex', alignItems: node.type === 'text' ? 'normal' : 'center',
       justifyContent: node.textAlign === 'center' ? 'center' : node.textAlign === 'right' ? 'flex-end' : 'flex-start',

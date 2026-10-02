@@ -5,7 +5,7 @@ const source = stripTypeScriptTypes(require('node:fs').readFileSync('lib/handler
 const valid = {format:'single',headline:'Supported headline',caption:'Supported caption'}
 function setup(outputs, catalog = ['canopylabs/orpheus-v1-english','llama-3.3-70b-versatile'], idea = {format:'single'}) {
  const requests=[]
- const run = new Function('Groq','process','loadGenerationBrandContext','EXTRACTED_CONTEXT_RULES','compactBrand','budgetedModels','budgetedCompletion','NextResponse','corsify','cleanCopy','retrySeconds',source+';return handleGenerateCopywriting')(
+ const run = new Function('Groq','process','loadGenerationBrandContext','EXTRACTED_CONTEXT_RULES','compactBrand','resilientModels','resilientCompletion','NextResponse','corsify','cleanCopy','retrySeconds',source+';return handleGenerateCopywriting')(
   class {}, {env:{GROQ_API_KEY:'test'}},async()=>({name:'Brand'}),'',x=>x,async()=>({data:catalog.map(id=>({id}))}),async(_,request)=>{requests.push(request);const output=outputs.shift();if(output instanceof Error)throw output;return {choices:[{message:{content:typeof output==='string'?output:JSON.stringify(output)},finish_reason:'stop'}]}}, {json:(body,options)=>({body,status:options?.status||200})},x=>x,x=>x,()=>60)
  return {requests,run:()=>run({idea},{})}
 }

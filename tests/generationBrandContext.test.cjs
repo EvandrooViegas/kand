@@ -24,7 +24,7 @@ for (const [file, handler] of [['contentIdeasHandler', 'handleGenerateContentIde
       requests.push(request)
       return { choices: [{ message: { content: JSON.stringify({ ideas: [{ topic: 'Facade restoration' }], format: 'single', headline: 'Restoration', caption: 'Project scope' }) } }] }
     }
-    const run = new Function('Groq', 'process', 'loadGenerationBrandContext', 'EXTRACTED_CONTEXT_RULES', 'compactBrand', 'budgetedModels', 'budgetedCompletion', 'NextResponse', 'corsify', 'randomUUID', 'cleanCopy', 'retrySeconds', 'availableGroqCompletion', load(`lib/handlers/${file}.ts`) + `;return ${handler}`)(
+    const run = new Function('Groq', 'process', 'loadGenerationBrandContext', 'EXTRACTED_CONTEXT_RULES', 'compactBrand', 'resilientModels', 'resilientCompletion', 'NextResponse', 'corsify', 'randomUUID', 'cleanCopy', 'retrySeconds', 'availableGroqCompletion', load(`lib/handlers/${file}.ts`) + `;return ${handler}`)(
       Groq, { env: { GROQ_API_KEY: 'test' } }, loadGenerationBrandContext, EXTRACTED_CONTEXT_RULES, compactBrand,
       async () => ({ data: [{ id: 'llama-3.3-70b-versatile' }] }), budgetedCompletion,
       { json: (body, options) => ({ body, status: options?.status || 200 }) }, result => result,

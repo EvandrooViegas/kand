@@ -975,7 +975,7 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
 
       {globalDesignCount === 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-200">
-          <span>Using your saved starter designs. To use the Global Design Library, select at least 3 designs for this brand.</span>
+          <span>Using your saved starter designs. To use the Global Design Library, select at least one design for this brand.</span>
           <a href={`/flow/${flowId}/brand-information`} className="font-semibold underline underline-offset-4">Choose designs</a>
         </div>
       )}

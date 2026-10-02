@@ -139,7 +139,7 @@ export function contentSlots(brand: any, slide: any, index = 0, image = ''): Rec
 }
 
 /** Compile template data into the application's existing editable Canvas node format. */
-export function resolveVariant(family: GlobalDesignFamily, variant: DesignVariant, brand: any = {}, slide: any = {}, index = 0, image = '', options: { preview?: boolean; placeholders?: boolean } = {}) {
+export function resolveVariant(family: GlobalDesignFamily, variant: DesignVariant, brand: any = {}, slide: any = {}, index = 0, image = '', options: { preview?: boolean; placeholders?: boolean; referencePreview?: boolean } = {}) {
   const tokens = resolveBrandTokens(brand, family), slots = contentSlots(brand, slide, index, image)
   const surface = tokens[variant.background]
   const contrast = (a: string, b: string) => (Math.max(lightness(a), lightness(b)) + .05) / (Math.min(lightness(a), lightness(b)) + .05)
@@ -150,14 +150,25 @@ export function resolveVariant(family: GlobalDesignFamily, variant: DesignVarian
     'family-highlight': { background: tokens['brand.accent'], color: tokens['brand.onAccent'], paddingX: 8, paddingY: 0 },
     'family-emphasis': { color: variant.background === 'brand.primary' ? (tokens['brand.onPrimary'] === tokens['brand.textPrimary'] && contrast(tokens['brand.accent'], surface) >= 3 ? tokens['brand.accent'] : tokens['brand.onPrimary']) : tokens['brand.accent'], fontWeight: 700 },
   }
-  const nodes = variant.nodes.flatMap(template => {
+  const nodes: any[] = variant.nodes.flatMap(template => {
     const n: any = { ...template }
     for (const key of ['color', 'fill', 'stroke', 'fontFamily']) if (n[key]) n[key] = tokens[n[key]] || n[key]
+    if (n.shadow) {
+      const s = n.shadow, color = (tokens[s.color] || s.color).slice(0, 7) + Math.round(s.opacity * 255).toString(16).padStart(2, '0')
+      if (n.type === 'text') n.textShadow = { enabled: true, color, blur: s.blur, offsetX: s.offsetX, offsetY: s.offsetY }
+      else n.boxShadow = `${s.offsetX}px ${s.offsetY}px ${s.blur}px ${color}`
+    }
     if (n.fillAlpha !== undefined && n.fill === surface) n.fill = tokens['brand.textPrimary']
     if (n.stops) n.stops = n.stops.map((stop: any) => ({ ...stop, color: tokens[stop.color] }))
     if (n.fillAlpha !== undefined && /^#[a-f\d]{6}$/i.test(n.fill)) n.fill += Math.round(n.fillAlpha * 2.55).toString(16).padStart(2, '0')
     if (n.type === 'image') {
       n.src = slots[template.src!.slice(2, -2)]
+      if (options.referencePreview && template.referenceAsset) {
+        n.src = template.referenceAsset.src
+        n.referenceCrop = template.referenceAsset
+        delete n.filters
+        delete n.cropLeft; delete n.cropRight; delete n.cropTop; delete n.cropBottom
+      }
       if (!n.src) {
         if (options.placeholders) { n.src = ''; return [{ ...n, templateBinding: { src: template.src } }] }
         if (template.optional) return []
@@ -168,6 +179,7 @@ export function resolveVariant(family: GlobalDesignFamily, variant: DesignVarian
     if (n.type === 'text') {
       if (!options.placeholders && template.id === 'brand-name' && slots['brand.logo'] && variant.nodes.some(v => v.src === '{{brand.logo}}')) return []
       n.text = template.text!.replace(/\{\{([^}]+)\}\}/g, (_match, key) => slots[key] || '').trim()
+      if (options.referencePreview) n.text = template.referenceText || (template.optional ? '' : n.text)
       if (!n.text && !options.placeholders) return []
       if (template.textTransform === 'uppercase') n.text = n.text.toUpperCase()
       if (template.textTransform === 'lowercase') n.text = n.text.toLowerCase()
@@ -187,7 +199,26 @@ export function resolveVariant(family: GlobalDesignFamily, variant: DesignVarian
     delete n.highlight; delete n.highlightCount; delete n.minFontSize; delete n.optional; delete n.fillAlpha
     return [n]
   })
-  return { width: family.width, height: family.height, background: tokens[variant.background], nodes, groups: [], classes }
+  // Photo pixels cannot be inferred from the canvas color. Give overlapping copy
+  // a known surface, unless an opaque rectangular panel already covers it.
+  const overlaps = (a: any, b: any) => a.x < b.x + b.width && a.x + a.width > b.x && a.y < b.y + b.height && a.y + a.height > b.y
+  const covers = (a: any, b: any) => !a.rotation && a.x <= b.x && a.y <= b.y && a.x + a.width >= b.x + b.width && a.y + a.height >= b.y + b.height
+  const readableNodes = nodes.flatMap((node, index) => {
+    if (node.type !== 'text') return [node]
+    const behind = nodes.slice(0, index)
+    const containingPanel = behind.findLast(n => n.type === 'shape' && (!n.shape || n.shape === 'rect') && (n.opacity === undefined || n.opacity === 100) && hex(n.fill) && covers(n, node))
+    if (containingPanel) return [{ ...node, color: contrast(node.color, containingPanel.fill) >= 4.5 ? node.color : on(containingPanel.fill) }]
+    if (options.referencePreview) return [node]
+    const photoIndex = behind.findLastIndex(n => n.type === 'image' && n.templateBinding?.src === '{{image.primary}}' && overlaps(n, node))
+    if (photoIndex < 0) return [node]
+    const panel = behind.slice(photoIndex + 1).findLast(n => n.type === 'shape' && (!n.shape || n.shape === 'rect') && !n.borderRadius && (n.opacity === undefined || n.opacity === 100) && hex(n.fill) && covers(n, node))
+    if (panel) return [{ ...node, color: contrast(node.color, panel.fill) >= 4.5 ? node.color : on(panel.fill) }]
+    const fill = lightness(node.color) > .179 ? '#101010' : '#ffffff'
+    const padding = 12
+    return [{ id: `contrast-backing-${node.id}`, type: 'shape', shape: 'rect', x: Math.max(0, node.x - padding), y: Math.max(0, node.y - padding), width: Math.min(family.width, node.x + node.width + padding) - Math.max(0, node.x - padding), height: Math.min(family.height, node.y + node.height + padding) - Math.max(0, node.y - padding), rotation: node.rotation, fill, contrastBacking: true },
+      { ...node, color: contrast(node.color, fill) >= 4.5 ? node.color : on(fill) }]
+  })
+  return { width: family.width, height: family.height, background: tokens[variant.background], nodes: readableNodes, groups: [], classes }
 }
 
 export const SAMPLE_COPY = { headline: 'Make your next move matter', body: 'A thoughtful approach turns a clear idea into meaningful progress. Start with one practical step and build from there.', cta: 'Explore more', eyebrow: 'Start here', author: 'Your name', steps: ['Decide', 'Start', 'Keep going', 'Finish'] }
@@ -197,7 +228,7 @@ export function templateFromCanvas(family: GlobalDesignFamily, variant: DesignVa
   const tokens = resolveBrandTokens({}, family)
   const previous = new Map(variant.nodes.map(n => [n.id, n]))
   const semantic = (value: string, fallback: string) => Object.entries(tokens).find(([key, resolved]) => resolved === value && key.startsWith('brand.'))?.[0] || fallback
-  const nodes = (canvas.nodes || []).map((n: any) => {
+  const nodes = (canvas.nodes || []).filter((n: any) => !n.contrastBacking).map((n: any) => {
     const old = previous.get(n.id)
     const bindingKeys = ['text', 'src', 'color', 'fill', 'stroke', 'fontFamily', 'stops', 'minFontSize', 'highlight', 'highlightCount', 'optional', 'fillAlpha']
     const bindings = n.templateBinding || Object.fromEntries(bindingKeys.filter(key => (old as any)?.[key] !== undefined).map(key => [key, (old as any)[key]]))

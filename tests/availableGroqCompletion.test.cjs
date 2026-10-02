@@ -2,7 +2,7 @@ const {test}=require('node:test')
 const assert=require('node:assert/strict')
 const {stripTypeScriptTypes}=require('node:module')
 const source=require('node:fs').readFileSync('lib/services/ai/availableGroqCompletion.ts','utf8').replace(/^import .*$/gm,'').replace(/export /g,'')
-const run=new Function('budgetedModels','budgetedCompletion','process',stripTypeScriptTypes(source)+';return availableGroqCompletion')(groq=>groq.models.list(),(groq,request)=>groq.chat.completions.create(request),{env:{}})
+const run=new Function('resilientModels','resilientCompletion','process',stripTypeScriptTypes(source)+';return availableGroqCompletion')(groq=>groq.models.list(),(groq,request)=>groq.chat.completions.create(request),{env:{}})
 test('uses available chat model instead of unavailable hardcoded model',async()=>{
  let chosen
  const groq={models:{list:async()=>({data:[{id:'openai/gpt-oss-20b'}]})},chat:{completions:{create:async r=>{chosen=r;return 'ok'}}}}
@@ -58,4 +58,17 @@ test('reports exhausted eligible models without retrying indefinitely',async()=>
  const groq={models:{list:async()=>({data:[{id:'openai/gpt-oss-20b'}]})},chat:{completions:{create:async()=>{calls++;throw {status:400,code:'model_terms_required'}}}}}
  await assert.rejects(run(groq,{}),/could not use any of the supported chat models/)
  assert.equal(calls,1)
+})
+
+test('capacity failure switches drafting to the next available chat model',async()=>{
+ const calls=[]
+ const groq={models:{list:async()=>({data:[{id:'openai/gpt-oss-120b'},{id:'openai/gpt-oss-20b'}]})},chat:{completions:{create:async request=>{calls.push(request.model);if(calls.length===1)throw {status:503,message:'over capacity'};return 'ok'}}}}
+ assert.equal(await run(groq,{messages:[]}), 'ok')
+ assert.deepEqual(calls,['openai/gpt-oss-120b','openai/gpt-oss-20b'])
+})
+test('all drafting models over capacity preserve the provider error',async()=>{
+ const error={status:503,message:'over capacity'};let calls=0
+ const groq={models:{list:async()=>({data:[{id:'openai/gpt-oss-120b'},{id:'openai/gpt-oss-20b'}]})},chat:{completions:{create:async()=>{calls++;throw error}}}}
+ await assert.rejects(run(groq,{}),e=>e===error)
+ assert.equal(calls,2)
 })

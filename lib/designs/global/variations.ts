@@ -1,3 +1,4 @@
+import { uniqueNodeIds } from './types'
 import type { DesignVariant, GlobalDesignFamily, TemplateNode } from './types'
 
 const clone = <T>(value: T): T => structuredClone(value)
@@ -154,6 +155,20 @@ function layoutFromSource(source: DesignVariant, family: GlobalDesignFamily, rol
 }
 
 function createVariant(family: GlobalDesignFamily, source: DesignVariant, texts: Record<string, TemplateNode>, id: string, name: string, role: DesignVariant['role'], layout: Layout): DesignVariant {
+  // List panels and their copy form a layout unit. Repositioning only the
+  // headline/body leaves the original rows behind and creates collisions.
+  const structured = source.nodes.some(n => /^step\./.test(slotOf(n) || '')) || source.nodes.filter(n => n.type === 'shape' && /(?:card|panel|row|bullet|step)/i.test(n.id) && n.width > 100 && n.height > 30).length >= 2
+  if (structured) {
+    const mirrored = layout.decor === 'mirror' || layout.decor === 'right-photo'
+    const inset = ['inset', 'top-photo', 'bottom-photo'].includes(layout.decor) ? .88 : 1
+    const dx = family.width * (1 - inset) / 2, dy = family.height * (1 - inset) / 2
+    return { ...clone(source), id, name, role, nodes: source.nodes.map(original => {
+      const node = clone(original)
+      return { ...node, x: dx + (mirrored ? family.width - node.x - node.width : node.x) * inset, y: dy + node.y * inset, width: node.width * inset, height: node.height * inset,
+        ...(node.fontSize ? { fontSize: node.fontSize * inset, minFontSize: Math.min(node.minFontSize || 14, node.fontSize * inset) } : {}),
+        ...(mirrored && node.type === 'text' ? { textAlign: node.textAlign === 'right' ? 'left' as const : node.textAlign === 'left' ? 'right' as const : node.textAlign } : {}) }
+    }) }
+  }
   const nodes = transformDecor(source, layout.decor, family.width, family.height)
   const photo = nodes.find(node => node.src === '{{image.primary}}')
   if (photo && layout.decor !== 'native' && layout.decor !== 'mirror') nodes.push({ id: `photo-outline-${id}`, type: 'shape', shape: 'rect', x: photo.x, y: photo.y, width: photo.width, height: photo.height, fill: 'transparent', stroke: 'brand.accent', strokeWidth: 3, borderRadius: photo.borderRadius })
@@ -166,7 +181,7 @@ function createVariant(family: GlobalDesignFamily, source: DesignVariant, texts:
   if (layout.accent === 'column') nodes.push({ id: `editorial-column-${id}`, type: 'shape', shape: 'rect', x: hx > family.width / 2 ? hx - 42 : hx + hw + 18, y: Math.max(150, hy - 28), width: 14, height: Math.min(family.height * .62, hh + layout.body[3] + 90), fill: 'brand.accent' })
   if (layout.accent === 'band') nodes.push({ id: `editorial-band-${id}`, type: 'shape', shape: 'rect', x: 0, y: Math.max(150, hy - 35), width: family.width, height: hh + 70, fill: 'brand.accent', fillAlpha: 16 })
   nodes.push(semanticText(texts.eyebrow, 'eyebrow', 'eyebrow', layout.eyebrow || [72, 180, family.width - 144, 44, 21]), semanticText(texts.headline, 'headline', 'headline', layout.headline), semanticText(texts.body, 'body', 'body', layout.body), semanticText(texts.cta, 'cta', 'cta', layout.cta || [72, family.height - 145, family.width - 144, 58, 24]))
-  return { id, name, role, background: source.background, nodes }
+  return { id, name, role, background: source.background, nodes: uniqueNodeIds(nodes) }
 }
 
 function layoutsFor(family: GlobalDesignFamily, cover: DesignVariant, content: DesignVariant) {
@@ -209,7 +224,9 @@ function layoutsFor(family: GlobalDesignFamily, cover: DesignVariant, content: D
 
 /** Build a family-specific set from its reconstructed cover and content references. */
 export function ensureFamilyVariations(input: GlobalDesignFamily): GlobalDesignFamily {
-  const family = refineReferenceFamily(input)
+  if (input.identityVersion === 1) return input
+  const refined = refineReferenceFamily(input)
+  const family = { ...refined, variants: refined.variants.map(variant => ({ ...variant, nodes: uniqueNodeIds(variant.nodes) })) }
   const existingCovers = family.variants.filter(variant => variant.role === 'cover'), existingContents = family.variants.filter(variant => variant.role !== 'cover')
   const oldGeneric = family.variants.some(variant => variant.name === 'Reference hero') && family.variants.some(variant => variant.name === 'Asymmetric split')
   if (!oldGeneric && existingCovers.length >= 3 && existingContents.length >= 10) return family
@@ -221,8 +238,12 @@ export function ensureFamilyVariations(input: GlobalDesignFamily): GlobalDesignF
   const all = [cover, content], texts = { headline: sourceForSlot(all, 'headline', fallbackHeadline), body: sourceForSlot(all, 'body', fallbackBody), eyebrow: sourceForSlot(all, 'eyebrow', { ...fallbackBody, id: 'eyebrow-source', text: '{{eyebrow}}', height: 48, fontSize: 22 }), cta: sourceForSlot(all, 'cta', { ...fallbackBody, id: 'cta-source', text: '{{cta}}', y: H - 145, height: 58, fontSize: 24 }) }
   const layouts = layoutsFor(family, cover, content)
   const coverVariants = layouts.covers.map((layout, index) => createVariant(family, index === 2 ? content : cover, texts, `cover-${index + 1}`, `${cover.name} · ${['reference', 'alternate', 'campaign'][index]}`, 'cover', layout))
+  // The reference variant is a reconstruction, not a new layout inspired by it.
+  coverVariants[0] = { ...clone(cover), id: 'cover-1', name: `${cover.name} · reference`, role: 'cover' }
   const roles: DesignVariant['role'][] = ['content', 'content', 'list', 'content', 'image-content', 'list', 'quote', 'content', 'image-content', 'cta']
   const labels = layouts.kind === 'photo' ? ['reference reading', 'reverse story', 'photo left', 'photo right', 'photo above', 'photo below', 'framed photograph', 'editorial overlay', 'closing photograph', 'focused invitation'] : layouts.kind === 'pattern' ? ['reference rhythm', 'reversed field', 'rising pattern', 'falling pattern', 'framed motif', 'wide explanation', 'centered milestone', 'two-column sequence', 'reverse sequence', 'focused invitation'] : ['reference editorial', 'reverse editorial', 'open statement', 'centered note', 'asymmetric note', 'counterpoint', 'centered quote', 'large statement', 'framed explanation', 'focused invitation']
-  const contentVariants = layouts.contents.map((layout, index) => createVariant(family, index === 1 ? cover : content, texts, `content-${index + 1}`, `${content.name} · ${labels[index]}`, roles[index], layout))
+  const hasRows = content.nodes.some(n => /^step\./.test(slotOf(n) || '')) || content.nodes.filter(n => n.type === 'shape' && /(?:card|panel|row|bullet|step)/i.test(n.id) && n.width > 100 && n.height > 30).length >= 2
+  const contentVariants = layouts.contents.map((layout, index) => createVariant(family, index === 1 && !hasRows ? cover : content, texts, `content-${index + 1}`, `${content.name} · ${labels[index]}`, roles[index], layout))
+  contentVariants[0] = { ...clone(content), id: 'content-1', name: `${content.name} · reference reading`, role: 'content' }
   return { ...family, variants: [...coverVariants, ...contentVariants] }
 }
