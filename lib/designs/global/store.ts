@@ -1,6 +1,8 @@
+import { createHash } from 'node:crypto'
 import { INITIAL_GLOBAL_FAMILIES } from './seeds'
 import { familySchema } from './types'
 import { ensureFamilyVariations } from './variations'
+import { designStudySchema } from './study'
 import type { GlobalDesignFamily, GlobalDesignRecord, BrandGlobalDesign } from './types'
 
 export class DesignLibraryError extends Error {
@@ -75,11 +77,22 @@ export async function retireGlobalDesign(db: any, id: string, revision: number, 
   // Published versions remain available to brands and previously generated posts.
   return { success: true }
 }
-export async function selectBrandFamilies(db: any, flowId: string, ids: string[]) {
+export async function selectBrandFamilies(db: any, flowId: string, ids: string[], studyIds?: string[]) {
   const selected = [...new Set(ids)]
-  if (selected.length < 1 || selected.length > 24) throw new DesignLibraryError('Select between 1 and 24 different Global Designs.')
   const flow = await db.collection('flows').findOne({ id: flowId })
   if (!flow) throw new DesignLibraryError('Brand not found', 404)
+  const previousStudies = (flow.brandContext?.designs || []).filter((d: any) => d.source === 'study')
+  const selectedStudies = [...new Set(studyIds ?? previousStudies.map((d: any) => d.studyId))] as string[]
+  if (selected.length + selectedStudies.length < 1 || selected.length + selectedStudies.length > 24) throw new DesignLibraryError('Select between 1 and 24 designs or saved identities.')
+  const studies = await Promise.all(selectedStudies.map(async studyId => {
+    const existing = previousStudies.find((d: any) => d.studyId === studyId)
+    if (existing) return existing
+    const { study } = await getDesignStudy(db, studyId)
+    const version = createHash('sha256').update(JSON.stringify(study)).digest('hex')
+    const snapshotId = `${flowId}:${studyId}:${version}`
+    await db.collection('brandDesignStudies').updateOne({ _id: snapshotId }, { $setOnInsert: { flowId, studyId, study, createdAt: new Date() } }, { upsert: true })
+    return { id: `study-${studyId}`, source: 'study', studyId, studySnapshotId: snapshotId, studyVersion: version, name: study.name, referenceUrl: study.referenceImages[0].url, createdAt: new Date().toISOString() }
+  }))
   const previous = (flow.brandContext?.designs || []).filter((d: any) => d.source === 'global')
   const designs: BrandGlobalDesign[] = await Promise.all(selected.map(async id => {
     const record = await getGlobalRecord(db, id).catch(error => {
@@ -92,12 +105,29 @@ export async function selectBrandFamilies(db: any, flowId: string, ids: string[]
     const family = await getGlobalVersion(db, id, record.publishedVersion!)
     return { id: `global-${id}`, source: 'global' as const, globalFamilyId: id, globalVersion: family.version, name: family.name, tags: family.tags, createdAt: new Date().toISOString() }
   }))
-  const legacy = (flow.brandContext?.designs || []).filter((d: any) => d.source !== 'global')
-  const result = await db.collection('flows').updateOne({ id: flowId, 'brandContext.designs': flow.brandContext?.designs === undefined ? { $exists: false } : flow.brandContext.designs }, { $set: { 'brandContext.designs': [...legacy, ...designs], 'brandContext.designLibraryVersion': 1, updatedAt: new Date() } })
+  const legacy = (flow.brandContext?.designs || []).filter((d: any) => d.source !== 'global' && d.source !== 'study')
+  const result = await db.collection('flows').updateOne({ id: flowId, 'brandContext.designs': flow.brandContext?.designs === undefined ? { $exists: false } : flow.brandContext.designs }, { $set: { 'brandContext.designs': [...legacy, ...designs, ...studies], 'brandContext.designLibraryVersion': 1, updatedAt: new Date() } })
   if (!result.matchedCount) throw new DesignLibraryError('Brand designs changed in another window. Reload and try again.', 409)
-  return { brandContext: { ...flow.brandContext, designs: [...legacy, ...designs], designLibraryVersion: 1 } }
+  return { brandContext: { ...flow.brandContext, designs: [...legacy, ...designs, ...studies], designLibraryVersion: 1 } }
 }
 export async function hydrateBrandFamilies(db: any, brand: any) {
   const designs = (brand?.designs || []).filter((d: any) => d.source === 'global')
   return Promise.all(designs.map(async (d: BrandGlobalDesign) => ({ design: d, family: await getGlobalVersion(db, d.globalFamilyId, d.globalVersion) })))
+}
+
+export async function listDesignStudies(db: any) {
+  return (await db.collection('globalDesignStudies').find({}, { projection: { study: 1, id: 1, savedAt: 1 } }).toArray()).map(plain)
+}
+export async function getDesignStudy(db: any, id: string) {
+  const record = await db.collection('globalDesignStudies').findOne({ _id: id })
+  if (!record) throw new DesignLibraryError('Design study not found.', 404)
+  return { ...plain(record), study: designStudySchema.parse(record.study) }
+}
+export async function saveDesignStudy(db: any, jobId: string) {
+  const job = await db.collection('globalDesignAnalysisJobs').findOne({ _id: jobId })
+  if (job?.workflow !== 'study' || job.status !== 'completed' || !job.result) throw new DesignLibraryError('Complete the visual analysis before saving its study.', 409)
+  const study = designStudySchema.parse(job.result)
+  // Saving the same reviewed result twice is harmless. No family or Canvas is created.
+  await db.collection('globalDesignStudies').updateOne({ _id: jobId }, { $setOnInsert: { id: jobId, study, savedAt: new Date() } }, { upsert: true })
+  return getDesignStudy(db, jobId)
 }

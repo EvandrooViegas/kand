@@ -3,12 +3,14 @@ import { randomUUID } from 'node:crypto'
 import { Binary } from 'mongodb'
 import sharp from 'sharp'
 import { ADMIN_COOKIE, adminConfigured, validAdminKey, adminSession, isDesignAdmin, requireDesignAdmin } from '@/lib/designs/global/admin'
-import { listGlobalDesigns, getGlobalRecord, saveGlobalDraft, publishGlobalDesign, retireGlobalDesign, hydrateBrandFamilies, DesignLibraryError } from '@/lib/designs/global/store'
+import { listGlobalDesigns, getGlobalRecord, saveGlobalDraft, publishGlobalDesign, retireGlobalDesign, hydrateBrandFamilies, listDesignStudies, getDesignStudy, saveDesignStudy, DesignLibraryError } from '@/lib/designs/global/store'
 import { familySchema, variantSchema } from '@/lib/designs/global/types'
 import { resolveVariant, SAMPLE_COPY, templateFromCanvas } from '@/lib/designs/global/resolve'
-import { analyzeDesignReferences } from '@/lib/designs/global/analyze'
+import { analyzeDesignStudy } from '@/lib/designs/global/studyAnalysis'
 import { createAnalysisJob, readAnalysisJob, retryAnalysisJob, kickAnalysisJob } from '@/lib/designs/global/analysisJobs'
 import { retrySeconds } from '@/lib/services/ai/requestBudget'
+import { createCarouselRun, readCarouselRun, retryCarouselRun, kickCarouselRun } from '@/lib/designs/global/carouselJobs'
+import { createCreativeDirection, readCreativeDirections } from '@/lib/designs/global/creativeDirector'
 
 export async function handleGlobalDesignRequest(db: any, request: Request, path: string[]) {
   try {
@@ -38,6 +40,21 @@ export async function handleGlobalDesignRequest(db: any, request: Request, path:
       return NextResponse.json(await hydrateBrandFamilies(db, { ...flow.brandContext, id: flow.id }))
     }
     requireDesignAdmin(request)
+    if (id === 'carousel-runs') {
+      if (!action && method === 'POST') return NextResponse.json(await createCarouselRun(db, await request.json()), { status: 202 })
+      if (action && method === 'GET') { const run = await readCarouselRun(db, action); kickCarouselRun(db, action); return NextResponse.json(run) }
+      if (action && method === 'POST') return NextResponse.json(await retryCarouselRun(db, action), { status: 202 })
+      throw new DesignLibraryError('Carousel action not found.', 404)
+    }
+    if (id === 'creative-directions') {
+      if (!action && method === 'POST') return NextResponse.json(await createCreativeDirection(db, await request.json()), { status: 201 })
+      if (!action && method === 'GET') {
+        const studyId = url.searchParams.get('studyId')
+        if (!studyId) throw new DesignLibraryError('A Design Study is required.')
+        return NextResponse.json(await readCreativeDirections(db, studyId))
+      }
+      throw new DesignLibraryError('Creative direction action not found.', 404)
+    }
     if (id === 'references' && method === 'POST') {
       const body = await request.json()
       const match = typeof body.data === 'string' && body.data.match(/^data:image\/(png|jpeg|webp);base64,([a-zA-Z0-9+/=\r\n]+)$/)
@@ -55,7 +72,15 @@ export async function handleGlobalDesignRequest(db: any, request: Request, path:
       if (action && method === 'GET') { const job = await readAnalysisJob(db, action); kickAnalysisJob(db, action); return NextResponse.json(job) }
       if (action && method === 'POST') return NextResponse.json(await retryAnalysisJob(db, action), { status: 202 })
     }
-    if (id === 'analyze' && method === 'POST') return NextResponse.json(await analyzeDesignReferences(db, await request.json()))
+    if (id === 'studies') {
+      if (method === 'GET') return NextResponse.json(action ? await getDesignStudy(db, action) : await listDesignStudies(db))
+      if (!action && method === 'POST') {
+        const body = await request.json()
+        if (typeof body.jobId !== 'string') throw new DesignLibraryError('A completed study job is required.')
+        return NextResponse.json(await saveDesignStudy(db, body.jobId))
+      }
+    }
+    if (id === 'analyze' && method === 'POST') return NextResponse.json(await analyzeDesignStudy(db, await request.json()))
     if (!id && method === 'POST') return NextResponse.json(await saveGlobalDraft(db, await request.json()))
     if (id && !action && method === 'GET') return NextResponse.json(await getGlobalRecord(db, id))
     if (id && method === 'PATCH') {

@@ -73,17 +73,16 @@ export function validateReferenceLayout(variant: any) {
   return variant
 }
 
-async function referenceData(db: any, ref: ReferenceImage) {
+export async function referenceData(db: any, ref: ReferenceImage, maxEdge = 640) {
   let bytes: Buffer
   if (ref.url.startsWith('/api/uploads/')) {
     const upload = await db.collection('uploads').findOne({ id: ref.url.split('/').pop() })
     if (!upload) throw new Error(`Reference ${ref.name} is missing. Upload it again.`)
     bytes = upload.bytes && typeof upload.bytes.value === 'function' ? Buffer.from(upload.bytes.value()) : Buffer.from(upload.bytes)
   } else bytes = await readFile(join(process.cwd(), 'public', ref.url.replace(/^\//, '')))
-  // Vision providers charge image patches as input tokens. A 1350px copy can
-  // exceed lower-tier ITPM limits before the model sees the prompt. 640px keeps
-  // layout geometry legible while leaving room for the reconstruction schema.
-  const resized = await sharp(bytes).rotate().resize({ width: 640, height: 640, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer()
+  // Bound vision input size. Existing callers retain their 640px budget;
+  // detailed studies request 1280px to preserve peripheral type and fine marks.
+  const resized = await sharp(bytes).rotate().resize({ width: maxEdge, height: maxEdge, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 82 }).toBuffer()
   return `data:image/jpeg;base64,${resized.toString('base64')}`
 }
 

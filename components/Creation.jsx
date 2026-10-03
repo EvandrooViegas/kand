@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import BrandStudyPost, { startBrandStudyPost, brandCarouselRequest } from '@/components/BrandStudyPost'
 import { toast } from 'sonner'
 import ResolvedImagePreview from '@/components/ResolvedImagePreview'
 import ImageDispositionPicker from '@/components/ImageDispositionPicker'
@@ -703,7 +704,12 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
   const [selectionMode, setSelectionMode] = useState(false)
 
   const hasBrand    = !!(brandContext?.name || brandContext?.about)
-  const globalDesignCount = (brandContext?.designs || []).filter(design => design.source === 'global').length
+  const [selectedIdentity, setSelectedIdentity] = useState(null)
+  const batchLock = useRef(false), [batchRunning, setBatchRunning] = useState(false)
+  useEffect(() => { setSelectedIdentity(localStorage.getItem('brand-post-identity-' + flowId)) }, [flowId])
+  const studyDesigns = (brandContext?.designs || []).filter(d => d.source === 'study')
+  const activeIdentity = studyDesigns.find(d => d.id === selectedIdentity) || (selectedIdentity !== '' ? studyDesigns[0] : null)
+  const globalDesignCount = (brandContext?.designs || []).filter(design => ['global', 'study'].includes(design.source)).length
   const selectedIdeas = ideas.filter(i => selectedIds.has(i.id))
   const brandId     = flowId ? `brand_${flowId}` : null
 
@@ -853,6 +859,7 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
   // ── Determine next action label for selection ─────────────────────────────
 
   const nextActionForSelection = (() => {
+    if (activeIdentity) return { label: batchRunning ? 'Generating carousels…' : 'Generate carousels', Icon: Sparkles }
     if (!selectedIdeas.length) return null
     // Find the earliest incomplete step across all selected
     const allHaveCopy    = selectedIdeas.every(i => copyResults[i.id]?.copy    && !copyResults[i.id]?.error)
@@ -867,9 +874,23 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
   })()
 
   const runAllSelected = async () => {
+    if (batchLock.current) return
     if (!selectedIdeas.length) { toast.error('Select at least one idea'); return }
+    batchLock.current = true; setBatchRunning(true)
+    try {
     toast.info(`Starting pipeline for ${selectedIdeas.length} post${selectedIdeas.length > 1 ? 's' : ''}…`)
     for (const idea of selectedIdeas) {
+      if (activeIdentity) {
+        try {
+          setDesignResults(prev => ({ ...prev, [idea.id]: { loading: true, error: null, canvas: null } }))
+          let job = await startBrandStudyPost({ flowId, designId: activeIdentity.id, idea, brandContext, copy: copyResults[idea.id]?.copy, requestId: 'carousel_' + crypto.randomUUID(), onCopy: copy => setCopyForIdea(idea.id, { loading: false, error: null, copy }) })
+          setDesignResults(prev => ({ ...prev, [idea.id]: { loading: true, error: null, canvas: null, runId: job.id } }))
+          while (!['completed', 'failed'].includes(job.status)) { await sleep(2000); job = await brandCarouselRequest({ flowId, designId: activeIdentity.id, ideaId: idea.id, runId: job.id }) }
+          if (job.status === 'failed') throw Error(job.error)
+          setDesignForIdea(idea.id, { loading: false, error: null, canvas: job.result.canvas })
+        } catch (error) { setDesignForIdea(idea.id, { loading: false, error: error.message, canvas: null }) }
+        continue
+      }
       // Copy
       let copyData = null
       setCopyResults(prev => ({ ...prev, [idea.id]: { loading: true, error: null, copy: null } }))
@@ -955,9 +976,11 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
       if (idea !== selectedIdeas[selectedIdeas.length - 1]) await sleep(1000)
     }
 
+    if (activeIdentity) { toast.success('Selected carousel runs finished.'); return }
     // Final persist
     setCopyResults(prev => { persistToFlow(ideas, prev, planResults, resolveResults, designResults); return prev })
     toast.success('Pipeline complete')
+    } finally { batchLock.current = false; setBatchRunning(false) }
   }
 
   // ─────────────────────────────────────────────────────────────────────────
@@ -972,6 +995,8 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
 
   return (
     <div className="space-y-6">
+
+      {studyDesigns.length > 0 && <label className="block rounded-xl border p-4 text-sm font-medium">Design identity for new posts<select aria-label="Post design identity" disabled={batchRunning} className="mt-2 block w-full rounded border bg-background p-2" value={activeIdentity?.id || ''} onChange={e => { setSelectedIdentity(e.target.value); localStorage.setItem('brand-post-identity-' + flowId, e.target.value) }}>{studyDesigns.map(design => <option key={design.id} value={design.id}>{design.name} · Design Study</option>)}<option value="">Use existing template designs</option></select><span className="mt-2 block text-xs font-normal text-muted-foreground">Saved identities generate new carousel artwork automatically from your post copy.</span></label>}
 
       {globalDesignCount === 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-200">
@@ -1067,7 +1092,7 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
 
                 {/* Pipeline card */}
                 <div className="flex-1 min-w-0">
-                  <PostPipelineCard
+                  {activeIdentity ? <BrandStudyPost key={`${idea.id}:${activeIdentity.id}:${designResults[idea.id]?.runId || ''}`} flowId={flowId} batchRunning={batchRunning} design={activeIdentity} idea={idea} brandContext={brandContext} copyState={copyResults[idea.id]} onCopyDone={setCopyForIdea} onDesignDone={setDesignForIdea} /> : <PostPipelineCard
                     idea={idea}
                     brandContext={brandContext}
                     brandId={brandId}
@@ -1079,7 +1104,7 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
                     onPlanDone={setPlanForIdea}
                     onResolveDone={setResolveForIdea}
                     onDesignDone={setDesignForIdea}
-                  />
+                  />}
                 </div>
               </div>
             ))}
@@ -1110,7 +1135,7 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
                 </Button>
                 {/* Next action */}
                 {nextActionForSelection && (
-                  <Button size="sm" onClick={runAllSelected} className="gap-1.5 flex-shrink-0">
+                  <Button size="sm" disabled={batchRunning} onClick={runAllSelected} className="gap-1.5 flex-shrink-0">
                     <nextActionForSelection.Icon className="w-3.5 h-3.5" />
                     {nextActionForSelection.label}
                   </Button>

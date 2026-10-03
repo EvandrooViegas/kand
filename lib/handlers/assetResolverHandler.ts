@@ -233,17 +233,17 @@ async function generateImageFal(
   }
 }
 
-async function generateImageOpenAI(prompt: string, transparent: boolean): Promise<ResolvedAsset> {
+export async function generateImageOpenAI(prompt: string, transparent: boolean, options: { model?: string; size?: string } = {}): Promise<ResolvedAsset> {
   const key = process.env.OPENAI_API_KEY
   if (!key) throw new Error('GPT Image 2.5 requires OPENAI_API_KEY in the server environment')
   const res = await fetch('https://api.openai.com/v1/images/generations', {
     method: 'POST', signal: AbortSignal.timeout(180000),
     headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: 'gpt-image-2.5-sunburst', prompt, n: 1,
-      size: '1024x1024', quality: 'high', output_format: 'png',
+    body: JSON.stringify({ model: options.model || process.env.OPENAI_IMAGE_MODEL || 'gpt-image-2.5-sunburst', prompt, n: 1,
+      size: options.size || '1024x1024', quality: 'high', output_format: 'png',
       background: transparent ? 'transparent' : 'opaque' }),
   })
-  if (!res.ok) { await res.body?.cancel(); throw new Error('GPT Image 2.5: HTTP ' + res.status + (res.status === 401 ? ' (invalid OpenAI key)' : res.status === 403 ? ' (model access denied)' : res.status === 429 ? ' (quota or rate limit)' : '')) }
+  if (!res.ok) { await res.body?.cancel(); throw Object.assign(new Error('Image provider: HTTP ' + res.status), { status: res.status }) }
   const reader = res.body!.getReader(), chunks: Uint8Array[] = []
   let size = 0
   try {

@@ -1,6 +1,7 @@
+import { handleBrandCarousel } from '@/lib/handlers/brandCarouselHandler'
 import { handleGlobalDesignRequest } from '@/lib/handlers/globalDesignHandler'
 import { requireDesignAdmin } from '@/lib/designs/global/admin'
-import { handleBrandDesigns, handleDeleteBrandDesign } from '@/lib/handlers/brandDesignHandler'
+import { handleBrandDesigns, handleDeleteBrandDesign, handleGetBrandDesignStudies } from '@/lib/handlers/brandDesignHandler'
 import { NextResponse } from 'next/server'
 import { connectToMongo } from '@/lib/services/db/mongo'
 import { corsify } from '@/lib/services/middleware'
@@ -34,6 +35,9 @@ async function handleRoute(request, { params }) {
     const db = await connectToMongo()
 
     if (path[0] === 'global-designs') return await handleGlobalDesignRequest(db, request, path.slice(1))
+
+    if (route === '/brand-carousel' && ['GET', 'POST'].includes(method)) return await handleBrandCarousel(db, request)
+    if (route === '/brand-designs' && method === 'GET') return await handleGetBrandDesignStudies(db, new URL(request.url).searchParams.get('flowId'))
 
     if (route === '/brand-designs' && method === 'POST') return await handleBrandDesigns(db, await request.json())
 
