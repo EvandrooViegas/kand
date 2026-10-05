@@ -5,6 +5,8 @@ import { corsify } from '@/lib/services/middleware'
 import Groq from 'groq-sdk'
 import { randomUUID } from 'node:crypto'
 import { loadGenerationBrandContext, EXTRACTED_CONTEXT_RULES } from '@/lib/services/generationBrandContext'
+import { contentLanguage, languageIssues } from '@/lib/services/contentLanguage'
+import { chooseAngle, ideaHistory, topicSimilarity } from '@/lib/services/contentAngles'
 
 const SYSTEM_PROMPT = `You are an expert Instagram content strategist.
 
@@ -24,7 +26,8 @@ IMPORTANT RULES:
 * Ideas should provide value to the company's target audience.
 * Ideas should help the company build authority, trust, awareness, engagement, or generate interest in its services.
 * Use the company's actual positioning and differentiators whenever possible.
-* If the brand language is Portuguese and the variant is pt-PT, write the content idea in European Portuguese.
+* Write every field in the OUTPUT LANGUAGE given below, never in the language of the research notes.
+* The brand's contentTopics are research suggestions, not a queue to work through. Build each idea on the ANGLE you are given.
 * Avoid excessive promotional content.
 * Create a balanced content strategy rather than making every post an advertisement.
 
@@ -79,7 +82,7 @@ Return ONLY valid JSON. Do not return Markdown. Do not return explanations. Do n
 function buildUserPrompt(brandJson: string): string {
   return `Analyze the following extracted brand information and generate exactly ONE Instagram content idea.
 
-BRAND INFORMATION:
+BRAND INFORMATION (English research notes; facts only):
 
 ${brandJson}
 
@@ -137,69 +140,99 @@ export async function handleGenerateContentIdeas(body: any, db: any) {
     const groq = new Groq({ apiKey,maxRetries:0 })
 
     const brandJson = JSON.stringify(compactBrand(brandContext))
-    const existingTopics=(Array.isArray(body.existingTopics)?body.existingTopics:[]).filter((t:any)=>typeof t==='string').slice(-30).map((t:string)=>t.slice(0,160))
-    const userPrompt = buildUserPrompt(brandJson)+'\nAvoid repeating these existing topics: '+JSON.stringify(existingTopics)
-
-    const response = await availableGroqCompletion(groq,{
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT + '\n\n' + EXTRACTED_CONTEXT_RULES },
-        { role: 'user', content: userPrompt },
-      ],
-      max_tokens: 1800,
-      temperature: 0.7,
-    }, 'GROQ_CONTENT_IDEAS_MODEL')
-
-    const raw = response.choices[0]?.message?.content?.trim()
-    if (!raw) {
-      return corsify(
-        NextResponse.json({ error: 'Empty response from AI' }, { status: 500 })
-      )
+    // History is the saved flow's ideas plus whatever the open page sends, so repetition is judged on everything.
+    let saved: any[] = []
+    if (brandContext.id && db) {
+      try { saved = (await db.collection('flows').findOne({ id: brandContext.id }, { projection: { 'creationState.ideas': 1 } }))?.creationState?.ideas || [] } catch {}
     }
+    const history = ideaHistory(body.existingIdeas, saved, body.existingTopics)
+    const language = contentLanguage(brandContext)
+    // The angle is chosen in code: least-used pillar on the least-covered service, project, differentiator or topic.
+    const angle = chooseAngle(brandContext, history)
+    const angleBlock = angle ? `\nANGLE FOR THIS IDEA (required):
+- Pillar: ${angle.pillar}
+- Build it on this ${angle.facet.kind === 'company' ? 'part of the company' : angle.facet.kind}: "${angle.facet.label}"${angle.facet.detail && angle.facet.detail !== angle.facet.label ? ` (${angle.facet.detail})` : ''}
+- Preferred format: ${angle.format} (change it only if the content clearly needs the other format)
+Use concrete details from the brand information about this ${angle.facet.kind}; do not drift to another service or topic.\n` : ''
+    const previous = history.slice(0, 30).map(i => `- [${i.angle?.pillar || i.pillar || '?'}] ${String(i.topic).slice(0, 160)}`).join('\n')
+    const userPrompt = buildUserPrompt(brandJson) + angleBlock
+      + (previous ? `\nPREVIOUS IDEAS (the new idea must cover a clearly different subject and angle, not a rewording):\n${previous}\n` : '')
+      + `\n${language.rules}`
 
-    // Strip markdown code fences if the model wrapped the JSON
-    const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
-
+    let raw = ''
+    let feedback = ''
     let parsed: any
-    try {
-      parsed = JSON.parse(cleaned)
-    } catch {
-      // Response was truncated — try to salvage complete ideas from the partial JSON.
-      // Find the last complete idea object (ends with "}" before the truncation point).
-      try {
-        const ideasStart = cleaned.indexOf('"ideas"')
-        const arrayStart = cleaned.indexOf('[', ideasStart)
-        if (arrayStart !== -1) {
-          // Walk backwards from the end to find the last complete "}" at depth 1
-          let depth = 0
-          let lastCompleteEnd = -1
-          for (let i = arrayStart; i < cleaned.length; i++) {
-            if (cleaned[i] === '{') depth++
-            if (cleaned[i] === '}') {
-              depth--
-              if (depth === 0) lastCompleteEnd = i
-            }
-          }
-          if (lastCompleteEnd !== -1) {
-            const repairedStr = `{"ideas": ${cleaned.slice(arrayStart, lastCompleteEnd + 1)}]}`
-            parsed = JSON.parse(repairedStr)
-            console.warn(`Truncated response repaired — recovered ${parsed.ideas?.length ?? 0} ideas`)
-          }
-        }
-      } catch {
-        // repair also failed
-      }
+    let idea: any
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const response = await availableGroqCompletion(groq,{
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT + '\n\n' + EXTRACTED_CONTEXT_RULES + '\n\n' + language.rules },
+          { role: 'user', content: userPrompt + (feedback ? `\nThe previous attempt was rejected: ${feedback}. Return a corrected idea.` : '') },
+        ],
+        max_tokens: 1800,
+        temperature: attempt ? 0.5 : 0.8,
+      }, 'GROQ_CONTENT_IDEAS_MODEL')
 
-      if (!parsed) {
-        console.error('Failed to parse AI response:', cleaned.slice(0, 500))
+      raw = response.choices[0]?.message?.content?.trim() || ''
+      if (!raw) {
+        if (attempt === 0) { feedback = 'the response was empty'; continue }
         return corsify(
-          NextResponse.json({ error: 'AI returned invalid JSON', raw: cleaned }, { status: 500 })
+          NextResponse.json({ error: 'Empty response from AI' }, { status: 500 })
         )
       }
-    }
 
-    const idea=Array.isArray(parsed.ideas)?parsed.ideas.find((i:any)=>i&&typeof i.topic==='string'&&i.topic.trim()):null
-    if(!idea)return corsify(NextResponse.json({error:'No usable idea returned'},{status:502}))
-    return corsify(NextResponse.json({ideas:[{...idea,id:'idea-'+randomUUID()}]}))
+      // Strip markdown code fences if the model wrapped the JSON
+      const cleaned = raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim()
+
+      parsed = undefined
+      try {
+        parsed = JSON.parse(cleaned)
+      } catch {
+        // Response was truncated — try to salvage complete ideas from the partial JSON.
+        // Find the last complete idea object (ends with "}" before the truncation point).
+        try {
+          const ideasStart = cleaned.indexOf('"ideas"')
+          const arrayStart = cleaned.indexOf('[', ideasStart)
+          if (arrayStart !== -1) {
+            // Walk backwards from the end to find the last complete "}" at depth 1
+            let depth = 0
+            let lastCompleteEnd = -1
+            for (let i = arrayStart; i < cleaned.length; i++) {
+              if (cleaned[i] === '{') depth++
+              if (cleaned[i] === '}') {
+                depth--
+                if (depth === 0) lastCompleteEnd = i
+              }
+            }
+            if (lastCompleteEnd !== -1) {
+              const repairedStr = `{"ideas": ${cleaned.slice(arrayStart, lastCompleteEnd + 1)}]}`
+              parsed = JSON.parse(repairedStr)
+              console.warn(`Truncated response repaired — recovered ${parsed.ideas?.length ?? 0} ideas`)
+            }
+          }
+        } catch {
+          // repair also failed
+        }
+
+        if (!parsed && attempt === 0) { feedback = 'the response was not valid JSON'; continue }
+        if (!parsed) {
+          console.error('Failed to parse AI response:', cleaned.slice(0, 500))
+          return corsify(
+            NextResponse.json({ error: 'AI returned invalid JSON', raw: cleaned }, { status: 500 })
+          )
+        }
+      }
+
+      idea=Array.isArray(parsed.ideas)?parsed.ideas.find((i:any)=>i&&typeof i.topic==='string'&&i.topic.trim()):null
+      if(!idea){ if(attempt===0){feedback='no idea with a topic was returned';continue} return corsify(NextResponse.json({error:'No usable idea returned'},{status:502})) }
+      // Code-level checks: one language, and a subject that is not a rewording of an existing idea.
+      const problems=[...languageIssues([idea.topic,idea.hook,idea.coreMessage],language)]
+      const duplicate=history.find(i=>topicSimilarity(String(i.topic),idea.topic)>=.5)
+      if(duplicate)problems.push(`the topic repeats an existing idea ("${String(duplicate.topic).slice(0,120)}"); choose a different subject within the angle`)
+      if(!problems.length||attempt===1){ if(problems.length)console.warn('[content-ideas] accepted after retry with:',problems.join('; ')); break }
+      feedback=problems.join('; ')
+    }
+    return corsify(NextResponse.json({ideas:[{...idea,id:'idea-'+randomUUID(),...(angle?{angle:{pillar:angle.pillar,facet:angle.facet.label,kind:angle.facet.kind}}:{})}]}))
   } catch (error: any) {
     console.error('Content ideas generation error:', error)
     return corsify(

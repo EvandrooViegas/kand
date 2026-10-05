@@ -9,10 +9,10 @@ function load(file, names, dependencies = {}) {
   const source = fs.readFileSync(file, 'utf8').replace(/^import .*$/gm, '').replace(/export /g, '')
   return new Function(...Object.keys(dependencies), stripTypeScriptTypes(source, { mode: 'transform' }) + `;return {${names.join(',')}}`)(...Object.values(dependencies))
 }
-const types = load('lib/designs/global/types.ts', ['familySchema', 'variantSchema', 'referenceSchema', 'studySchema', 'imageryStrategySchema', 'grammarSchema', 'COMPOSITIONS', 'DECORATION_KINDS', 'COLOR_TOKENS', 'SLOT_NAMES'], { z })
+const types = load('lib/designs/global/types.ts', ['familySchema', 'variantSchema', 'referenceSchema', 'studySchema', 'imageryStrategySchema', 'grammarSchema', 'COMPOSITIONS', 'DECORATION_KINDS', 'COLOR_TOKENS', 'COLOR_ROLES', 'SLOT_NAMES'], { z })
 const { INITIAL_GLOBAL_FAMILIES: seeds } = load('lib/designs/global/seeds.ts', ['INITIAL_GLOBAL_FAMILIES'])
 const resolve = load('lib/designs/global/resolve.ts', ['resolveBrandTokens', 'resolveVariant', 'referencePreviewBrand', 'contentSlots', 'countLines', 'clean', 'lightness', 'on', 'hex', 'SAMPLE_COPY'])
-const study = load('lib/designs/global/study.ts', ['variantImageMode', 'familyImagery', 'familyGrammar', 'deriveGrammar', 'reconcileStudy', 'studyForPlanning'], { ...types })
+const study = load('lib/designs/global/study.ts', ['variantImageMode', 'familyImagery', 'familyCutouts', 'familyGrammar', 'deriveGrammar', 'reconcileStudy', 'studyForPlanning'], { ...types })
 const compose = load('lib/designs/global/compose.ts', ['planSlides', 'composeSlide', 'imageFrame', 'brandPalette', 'listItems', 'previewSlide', 'SAMPLE_DECK'], { ...resolve, ...study })
 const validate = load('lib/designs/global/validate.ts', ['validatePost', 'validatePage'])
 const store = load('lib/designs/global/store.ts', ['DesignLibraryError', 'ensureGlobalDesignLibrary', 'getGlobalVersion', 'listGlobalDesigns', 'getGlobalRecord', 'saveGlobalDraft', 'publishGlobalDesign', 'retireGlobalDesign', 'selectBrandFamilies', 'hydrateBrandFamilies'], { INITIAL_GLOBAL_FAMILIES: seeds, ...types, ...study })

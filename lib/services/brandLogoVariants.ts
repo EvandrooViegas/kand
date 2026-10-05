@@ -5,7 +5,8 @@ export async function ensureBrandLogoVariants(db:any,brand:any){
  const source=brand?.logo
  if(!source)return null
  const existing=brand.logoVariants
- if(existing?.source===source&&existing.blackTransparent&&existing.whiteTransparent)return existing
+ // Variants saved before the ink and bounds measurements are regenerated once, so layouts can keep the logo legible and aligned.
+ if(existing?.source===source&&existing.blackTransparent&&existing.whiteTransparent&&'inkLightness' in existing&&'bounds' in existing)return existing
  let input=source
  const local=source.match(/^\/api\/uploads\/([^/?]+)$/)
  if(local){

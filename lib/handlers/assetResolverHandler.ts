@@ -16,9 +16,13 @@ import { findGeneratedAsset, saveGeneratedAsset } from '@/lib/services/generated
  *
  *   unsplash       → legacy stock preference: search Unsplash and Pexels,
  *                    compare relevance and resolution, and reserve the winner.
+ *                    Global-design photo slots marked cutout_fallback use a
+ *                    transparent cutout when no gallery or stock photo fits.
  *
- *   ai_generated   → call the image-generation API (fal.ai fast-sdxl).
- *                    Falls back gracefully when the key is absent.
+ *   ai_generated   → transparent PNG cutouts only: the gallery cutout the plan
+ *                    chose, else a matching saved cutout, else one OpenAI
+ *                    generation with a transparent background. New cutouts are
+ *                    saved to the brand gallery for reuse.
  *
  *   none           → resolvedAsset: null (typography-only slot)
  */
@@ -234,16 +238,17 @@ async function generateImageFal(
   }
 }
 
-async function generateImageOpenAI(prompt: string, transparent: boolean): Promise<ResolvedAsset> {
+/** AI images are always transparent PNG cutouts. `aspect` (width / height of the target area) picks the canvas shape. */
+async function generateImageOpenAI(prompt: string, aspect?: number): Promise<ResolvedAsset> {
   const key = process.env.OPENAI_API_KEY
   if (!key) throw new Error('GPT Image 2.5 requires OPENAI_API_KEY in the server environment')
-  console.info(`[ai-call] service=openai purpose=image-generation transparent=${transparent} referenceImages=false`)
+  const dimensions = typeof aspect === 'number' && aspect > 1.25 ? '1536x1024' : typeof aspect === 'number' && aspect < .8 ? '1024x1536' : '1024x1024'
+  console.info(`[ai-call] service=openai purpose=image-generation transparent=true size=${dimensions} referenceImages=false`)
   const res = await fetch('https://api.openai.com/v1/images/generations', {
     method: 'POST', signal: AbortSignal.timeout(180000),
     headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: 'gpt-image-2.5-sunburst', prompt, n: 1,
-      size: '1024x1024', quality: 'high', output_format: 'png',
-      background: transparent ? 'transparent' : 'opaque' }),
+      size: dimensions, quality: 'high', output_format: 'png', background: 'transparent' }),
   })
   if (!res.ok) { await res.body?.cancel(); throw new Error('GPT Image 2.5: HTTP ' + res.status + (res.status === 401 ? ' (invalid OpenAI key)' : res.status === 403 ? ' (model access denied)' : res.status === 429 ? ' (quota or rate limit)' : '')) }
   const reader = res.body!.getReader(), chunks: Uint8Array[] = []
@@ -313,14 +318,43 @@ function buildGenerationBrief(slot: VisualSlot, nativeTransparency = false): str
   ].join('\n') + (nativeTransparency && slot.treatment === 'isolated_subject' ? '\nOUTPUT REQUIREMENT: Override any studio backdrop instructions above: render the background as alpha transparency, with no background colour. Keep every solid foreground surface opaque.' : '')
 }
 
-async function generateImage(
-  visualPurpose: string,
-  keywords: string[],
-  falKey: string | null,
-  transparent = false,
-): Promise<ResolvedAsset | null> {
-  return generateImageOpenAI(visualPurpose, transparent)
+async function generateImage(prompt: string, aspect?: number): Promise<ResolvedAsset | null> {
+  return generateImageOpenAI(prompt, aspect)
+}
 
+/** The gallery cutout the copy plan chose for this slide, unless this post already used it. */
+async function plannedGalleryCutout(db: any, brand_id: string, id: string | undefined, used: Set<string>) {
+  if (!id) return null
+  const asset = await db.collection('assets').findOne({ id, brand_id, status: 'ready' })
+  const keys = [asset?.id, asset?.url, asset?.subject?.url].filter(Boolean)
+  if (!asset?.url || keys.some((key: string) => used.has(key))) return null
+  keys.forEach((key: string) => used.add(key))
+  await db.collection('assets').updateOne({ id, brand_id }, { $inc: { usage_count: 1 }, $set: { last_used_at: new Date() } })
+  return { url: asset.url, width: asset.width, height: asset.height, subject: asset.subject, asset_id: asset.id, reused: true, match_score: 1 }
+}
+
+/**
+ * AI images are only ever transparent cutouts. Order: the planned gallery cutout, a saved cutout that matches the
+ * subject, then exactly one generation (saved to the gallery afterwards). `note` explains a photo-slot fallback.
+ */
+async function resolveCutout(db: any, slot: VisualSlot, brand_id: string | null, usedPhotoIds: Set<string>, base: Omit<ResolvedSlot, 'resolvedAsset' | 'warning'>, note: string | null = null): Promise<ResolvedSlot> {
+  const cutoutBase = { ...base, treatment: 'isolated_subject' as const, source: 'ai_generated' as const }
+  const subjectSlot = { ...slot, treatment: 'isolated_subject' as const }
+  if (brand_id && db) {
+    try {
+      const reused = await plannedGalleryCutout(db, brand_id, slot.reuse_asset_id, usedPhotoIds) || await findGeneratedAsset(db, brand_id, subjectSlot, usedPhotoIds)
+      if (reused) return { ...cutoutBase, resolvedAsset: { ...reused, source: 'ai_generated', thumbnail_url: reused.subject?.url || reused.url, unsplash_id: null, alt: slot.subject_description || slot.visual_purpose }, warning: note }
+    } catch (error) { console.warn('[resolver] Generated library search unavailable:', (error as Error).message) }
+  }
+  // One generation only. Never retry or change the selected image source automatically.
+  try {
+    const asset = await generateImage(buildGenerationBrief(subjectSlot, true), slot.frame_aspect)
+    if (asset) {
+      if (usedPhotoIds.has(asset.url)) return { ...cutoutBase, resolvedAsset: null, warning: 'Duplicate image omitted; no additional generation was requested.' }
+      usedPhotoIds.add(asset.url)
+    }
+    return { ...cutoutBase, resolvedAsset: asset, warning: asset ? note : 'AI image generation returned no image' }
+  } catch (error) { return { ...cutoutBase, resolvedAsset: null, warning: [note, (error as Error).message].filter(Boolean).join('; ') } }
 }
 
 // ─── Uploaded-asset lookup ────────────────────────────────────────────────────
@@ -430,28 +464,19 @@ async function resolveSlot(
       } catch(error) {galleryWarning='Gallery lookup unavailable: '+(error as Error).message}
     }
     if(slot.treatment!=='environmental' && slot.preferred_source==='uploaded_asset')return {...base,resolvedAsset:null,warning:galleryWarning||'No matching unused gallery photo found'}
+    // A photo is never generated. Global-design slots that allow it use a transparent cutout when no photo fits.
+    const missing=async(warning:string):Promise<ResolvedSlot>=>slot.cutout_fallback
+      ? resolveCutout(db,slot,brand_id,usedPhotoIds,base,warning+'; used a transparent cutout instead')
+      : {...base,resolvedAsset:null,warning}
     const pexelsKey=process.env.PEXELS_API_KEY?.trim()||null
-    if(!unsplashKey && !pexelsKey)return {...base,resolvedAsset:null,warning:galleryWarning||'No matching gallery photo; configure PEXELS_API_KEY or UNSPLASH_ACCESS_KEY'}
+    if(!unsplashKey && !pexelsKey)return missing(galleryWarning||'No matching gallery photo; configure PEXELS_API_KEY or UNSPLASH_ACCESS_KEY')
     try {
       const asset=await searchStock(slot,unsplashKey,pexelsKey,usedPhotoIds)
-      return {...base,source:asset?.source||'unsplash',resolvedAsset:asset,warning:asset?galleryWarning:'No relevant unused high-resolution stock photo found'}
-    }catch(error){return {...base,resolvedAsset:null,warning:(error as Error).message}}
+      if(!asset)return missing('No relevant unused high-resolution stock photo found')
+      return {...base,source:asset.source,resolvedAsset:asset,warning:galleryWarning}
+    }catch(error){return missing((error as Error).message)}
   }
-  // One generation only. Never retry or change the selected image source automatically.
-  try {
-    if(brand_id){
-      try{
-        const cached=await findGeneratedAsset(db,brand_id,slot,usedPhotoIds)
-        if(cached)return {...base,source:'ai_generated',resolvedAsset:{...cached,source:'ai_generated',thumbnail_url:cached.subject?.url||cached.url,unsplash_id:null,alt:slot.subject_description||slot.visual_purpose},warning:null}
-      }catch(error){console.warn('[resolver] Generated library search unavailable:',(error as Error).message)}
-    }
-    const asset=await generateImage(buildGenerationBrief(slot,true),slot.search_keywords??[],falKey,slot.treatment==='isolated_subject')
-    if(asset){
-      if(usedPhotoIds.has(asset.url))return {...base,resolvedAsset:null,warning:'Duplicate image omitted; no additional generation was requested.'}
-      usedPhotoIds.add(asset.url)
-    }
-    return {...base,source:'ai_generated',resolvedAsset:asset,warning:asset?null:'AI image generation returned no image'}
-  }catch(error){return {...base,resolvedAsset:null,warning:(error as Error).message}}
+  return resolveCutout(db,slot,brand_id,usedPhotoIds,base)
 }
 // ─── HTTP handler ─────────────────────────────────────────────────────────────
 
@@ -495,7 +520,8 @@ export async function handleResolveAssets(db: any, body: any) {
     for(const slot of prepared.slots){
       if(slot.source!=='ai_generated'||!slot.resolvedAsset)continue
       const request=plan.slots.find(s=>s.slot_id===slot.slot_id)
-      try{await saveGeneratedAsset(db,brand_id||null,request,slot.resolvedAsset)}
+      // Every generated image is a transparent cutout, including photo-slot fallbacks.
+      try{await saveGeneratedAsset(db,brand_id||null,{...request,treatment:'isolated_subject'},slot.resolvedAsset)}
       catch(error){slot.warning=[slot.warning,'Generated image could not be saved to the brand gallery'].filter(Boolean).join('; ');console.warn('[resolver] Gallery save failed:',(error as Error).message)}
     }
     return corsify(NextResponse.json(prepared))

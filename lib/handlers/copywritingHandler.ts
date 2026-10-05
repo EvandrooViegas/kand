@@ -4,6 +4,7 @@ import { NextResponse } from 'next/server'
 import { corsify } from '@/lib/services/middleware'
 import Groq from 'groq-sdk'
 import { loadGenerationBrandContext, EXTRACTED_CONTEXT_RULES } from '@/lib/services/generationBrandContext'
+import { contentLanguage, languageIssues, copyTexts, type ContentLanguage } from '@/lib/services/contentLanguage'
 
 const SYSTEM_PROMPT = `You are an expert Instagram copywriter specialized in creating high-quality social media content for businesses.
 
@@ -29,8 +30,8 @@ IMPORTANT RULES:
 * Use ONLY information provided in the Brand Profile and Content Brief.
 * Never invent facts, statistics, clients, awards, certifications, results, services, products or company history.
 * Never make claims that cannot be supported by the provided information.
-* Follow the company's language and language variant.
-* If the language is Portuguese (pt-PT), use European Portuguese.
+* Write in the OUTPUT LANGUAGE given at the end of these instructions, exactly. Never mix languages or regional variants.
+* Ground the post in the brief: build it on the specific service, project, audience problem or differentiator the brief names, using concrete details from the Brand Profile (scope, process, who it serves, named projects when relevant). Avoid generic advice that could fit any company.
 * Match the company's positioning and tone.
 * Write naturally and humanly.
 * Avoid generic AI-sounding phrases.
@@ -64,7 +65,7 @@ Each slide should have:
 
 The first slide is a cover with a short hook and one brief teaser. Use 3–8 words for the headline when possible and never exceed 10 words. Make it instantly understandable, concrete and curiosity-driving without clickbait. Add a 2–14 word body that invites the reader into the carousel without explaining the whole topic. Set its cta to an empty string; put detailed explanations on subsequent slides.
 The middle slides should develop the idea logically.
-The final slide should summarize the message or provide a natural CTA.
+The final slide closes the idea with its takeaway. Give it a cta only when the post's objective calls for an action; otherwise leave the cta empty and let the caption carry the next step.
 Do not put too much text on a slide.
 
 FIELD DEFINITIONS:
@@ -77,7 +78,7 @@ FIELD DEFINITIONS:
 
 "supportingText": Short supporting copy that explains or reinforces the main message. Concise enough to appear on a graphic. Do not write a long paragraph.
 
-"cta": A short call to action appropriate to the post. Should feel natural and match the objective. Do not force a sales CTA into educational content.
+"cta": Optional. A short call to action appropriate to the post, or an empty string when the slide does not need one. Do not force a sales CTA into educational content. The graphic is an image, not a web page: nothing on it can be clicked. Write an action the reader can take on Instagram (save the post, share it, comment a word, send a message, follow the account, use the link in the bio), never button wording such as "Click here", "Learn more", "Explore more", "Saiba mais" or "Clique aqui".
 
 "slides": An array containing the content of every carousel slide. Use as many slides as the content requires, usually 3–10, without padding or a fixed default.
 
@@ -110,7 +111,7 @@ Return ONLY valid JSON. Do not return Markdown. Do not return explanations. Do n
 function buildUserPrompt(brandJson: string, briefJson: string): string {
   return `Create the complete written content for the Instagram post using the following information.
 
-BRAND PROFILE:
+BRAND PROFILE (English research notes: use them for facts only and translate every idea into the output language):
 
 ${brandJson}
 
@@ -145,13 +146,22 @@ If the format is "single", populate:
 and return an empty "slides" array.
 
 If the format is "carousel", populate:
-* slides (content-driven slide count, first is hook, last is conclusion/CTA)
+* slides (content-driven slide count, first is hook, last is the conclusion)
 * caption
 * hashtags
 * visualNotes
 and return empty strings for headline, subheadline, supportingText and cta.
 
 Return ONLY valid JSON.`
+}
+
+// Web-button wording promises a click that an Instagram image cannot give. A link-in-bio instruction is fine.
+const BUTTON_CTA = /\b(click|tap here|learn more|read more|find out more|discover more|explore more|see more|shop now|buy now|order now|sign up|get started)\b|(?<!\p{L})(saiba mais|clique|carregue aqui|toque aqui|ver mais|veja mais|leia mais|descubra mais|explore mais|compre j[áa]|compre agora|inscreva-se|haz clic|más información|saber más|descubre más|compra ya|cliquez|en savoir plus)(?!\p{L})/iu
+// "Visit the website" without an address asks for a click the image cannot give.
+const SITE_CTA = /(?<!\p{L})(visite|visita|visit|acesse|aceda|acede|aceder|acessar|veja|explore|go to)\s+(?:(?:o|a|ao|à|our|the|nosso|nossa|el|nuestro)\s+)*(site|website|página|pagina|page|loja online|online store|web)(?!\p{L})/iu
+export function isButtonCta(cta: any): boolean {
+  if (typeof cta !== 'string' || /link (?:na|in|en la|dans la) bio/i.test(cta)) return false
+  return BUTTON_CTA.test(cta) || (SITE_CTA.test(cta) && !/\w\.[a-z]{2,}\b/i.test(cta))
 }
 
 async function getGroqModel(groq: Groq): Promise<string> {
@@ -165,17 +175,36 @@ async function getGroqModel(groq: Groq): Promise<string> {
 /** Optional design context for the combined copy + composition plan call. */
 export interface PlanningDesign { prompt: string; validate: (parsed: any) => void }
 
+/** Style problems are worth one corrective retry but never worth failing a post that is otherwise complete. */
+function styleIssues(parsed: any, language: ContentLanguage): string[] {
+  const issues: string[] = []
+  if (parsed.format === 'carousel') {
+    const cover = parsed.slides[0]
+    const coverWords = cover.headline.trim().split(/\s+/u).filter(Boolean).length
+    const teaserWords = String(cover.body || '').trim().split(/\s+/u).filter(Boolean).length
+    if (coverWords > 10) issues.push(`Carousel cover has ${coverWords} words; maximum is 10`)
+    if (teaserWords < 2 || teaserWords > 14) issues.push(`Carousel cover teaser must contain 2–14 words; received ${teaserWords}`)
+  }
+  const mixed = languageIssues(copyTexts(parsed), language)
+  if (mixed.length) issues.push(`Language: the copy ${mixed.join('; ')}`)
+  return issues
+}
+
 /**
  * The single text-model call for a post. With `design`, the same call also returns the composition plan,
- * so the copy context is sent once. A second attempt is made only when the output fails validation.
+ * so the copy context is sent once. A second attempt is made only when the output fails validation;
+ * if that retry cannot run (per-minute quota) or comes back worse, a complete first draft is used instead.
  */
 export async function writeCopy(brandContext: any, idea: any, design?: PlanningDesign) {
   const apiKey = (process.env.GROQ_API_KEY || process.env.GROQ_API_KEY_2)
   if (!apiKey) throw Object.assign(new Error('GROQ_API_KEY is not configured'), { status: 500 })
   const groq = new Groq({ apiKey,maxRetries:0 })
   const model = await getGroqModel(groq)
+  const language = contentLanguage(brandContext)
   const userPrompt = buildUserPrompt(JSON.stringify(compactBrand(brandContext)), JSON.stringify(idea, null, 2)) + (design ? '\n\n' + design.prompt : '')
+    + `\n\nOUTPUT LANGUAGE: ${language.label}. Every reader-facing field (headline, body, cta, caption, hashtags) in it; the design study above is internal and in English, never copy its words.`
   let parsed: any
+  let draft: any
   let validationFeedback = ''
   for (let attempt = 0; attempt < 2; attempt++) {
     let response: any
@@ -184,7 +213,7 @@ export async function writeCopy(brandContext: any, idea: any, design?: PlanningD
       response = await budgetedCompletion(groq, {
         model,
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT + '\n\n' + EXTRACTED_CONTEXT_RULES },
+          { role: 'system', content: SYSTEM_PROMPT + '\n\n' + EXTRACTED_CONTEXT_RULES + '\n\n' + language.rules },
           { role: 'user', content: userPrompt + (attempt ? `\nThe previous attempt failed output validation: ${validationFeedback}. Correct that issue and generate a complete JSON object with the requested fields and no commentary.` : '') },
         ],
         response_format: { type: 'json_object' },
@@ -193,7 +222,8 @@ export async function writeCopy(brandContext: any, idea: any, design?: PlanningD
       })
     } catch (error: any) {
       const code = error?.error?.error?.code || error?.error?.code || error?.code
-      if (attempt === 0 && code === 'json_validate_failed') continue
+      if (attempt === 0 && code === 'json_validate_failed') { validationFeedback = 'the response was not valid JSON'; continue }
+      if (draft) { console.warn(`[copywriting] retry unavailable (${error?.status || code || error?.message}); using the first draft`); parsed = draft; break }
       throw error
     }
     const choice = response.choices?.[0]
@@ -207,19 +237,24 @@ export async function writeCopy(brandContext: any, idea: any, design?: PlanningD
       if (parsed.format === 'single' && (typeof parsed.headline !== 'string' || !parsed.headline.trim())) throw new Error('Missing headline')
       if (parsed.format === 'carousel') {
         if (!Array.isArray(parsed.slides) || parsed.slides.length < 2 || parsed.slides.some((slide: any) => !slide || typeof slide.headline !== 'string' || !slide.headline.trim())) throw new Error('Missing carousel slides')
-        const cover = parsed.slides[0]
-        const coverWords = cover.headline.trim().split(/\s+/u).filter(Boolean).length
-        const teaserWords = String(cover.body || '').trim().split(/\s+/u).filter(Boolean).length
-        if (coverWords > 10) throw new Error(`Carousel cover has ${coverWords} words; maximum is 10`)
-        if (teaserWords < 2 || teaserWords > 14) throw new Error(`Carousel cover teaser must contain 2–14 words; received ${teaserWords}`)
-        if (String(cover.cta || '').trim()) throw new Error('Carousel cover CTA must be empty')
+        // The cover carries no CTA; clearing it is exact, so it never costs a retry.
+        parsed.slides[0].cta = ''
       }
+      // Nothing on an Instagram graphic is clickable: web-button wording is removed, never retried.
+      for (const item of parsed.format === 'carousel' ? parsed.slides : [parsed]) if (item && isButtonCta(item.cta)) item.cta = ''
       design?.validate(parsed)
+      // Cover length and one language per post are checked in code. The first complete draft is kept,
+      // so a retry that cannot run or does no better never turns a usable post into a failure.
+      const issues = styleIssues(parsed, language)
+      if (issues.length && attempt === 0) { draft = parsed; throw new Error(issues.join('; ')) }
+      if (issues.length) console.warn('[copywriting] style issues after retry:', issues.join('; '))
       break
     } catch (error: any) {
       validationFeedback = error?.message || 'invalid output'
+      console.warn(`[copywriting] attempt ${attempt + 1} rejected: ${validationFeedback}`)
       if (attempt === 0) continue
-      throw Object.assign(new Error('AI could not generate complete, valid copywriting. Please retry; your saved content is unchanged.'), { status: 502 })
+      if (draft) { console.warn('[copywriting] using the first draft'); parsed = draft; break }
+      throw Object.assign(new Error(`AI could not generate complete, valid copywriting (${validationFeedback}). Please retry; your saved content is unchanged.`), { status: 502 })
     }
   }
   return { copy: cleanCopy(parsed), raw: parsed }

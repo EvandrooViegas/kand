@@ -11,7 +11,17 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
-import { Loader2, Plus, Workflow, Wand2, Images, Sparkles } from 'lucide-react'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { Loader2, Plus, Trash2, Workflow, Wand2, Images, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 
 const TABS = [
@@ -32,6 +42,8 @@ export default function FlowShell({ flows: initialFlows, currentFlow, children }
 
   const [flows, setFlows]       = useState(initialFlows)
   const [creating, setCreating] = useState(false)
+  const [confirmDelete, setConfirmDelete] = useState(false)
+  const [deleting, setDeleting] = useState(false)
 
   // Derive the active tab slug from the URL so it's always in sync.
   // pathname looks like /flow/<brandId>/<slug>
@@ -65,6 +77,25 @@ export default function FlowShell({ flows: initialFlows, currentFlow, children }
       toast.error('Failed to create flow')
     } finally {
       setCreating(false)
+    }
+  }
+
+  // Removes the brand record only; posts already created keep their embedded brand and stay in Studio.
+  const deleteFlow = async () => {
+    setDeleting(true)
+    try {
+      const res = await fetch(`/api/flows/${currentBrandId}`, { method: 'DELETE' })
+      if (!res.ok && res.status !== 404) throw new Error((await res.json().catch(() => ({}))).error || 'Failed to delete brand')
+      const remaining = flows.filter(f => f.id !== currentBrandId)
+      setFlows(remaining)
+      setConfirmDelete(false)
+      toast.success(`${displayName} deleted`)
+      router.replace(remaining.length ? `/flow/${remaining[0].id}/${activeSlug}` : '/flow')
+      router.refresh()
+    } catch (error) {
+      toast.error(error.message || 'Failed to delete brand')
+    } finally {
+      setDeleting(false)
     }
   }
 
@@ -125,6 +156,40 @@ export default function FlowShell({ flows: initialFlows, currentFlow, children }
             ? <Loader2 className="w-4 h-4 animate-spin" />
             : <Plus className="w-4 h-4" />}
         </Button>
+
+        {/* delete current brand */}
+        <Button
+          onClick={() => setConfirmDelete(true)}
+          disabled={deleting}
+          size="sm"
+          variant="ghost"
+          className="h-8 px-2 text-slate-500 hover:text-red-600 dark:hover:text-red-400"
+          title="Delete brand"
+          aria-label="Delete brand"
+        >
+          <Trash2 className="w-4 h-4" />
+        </Button>
+        <AlertDialog open={confirmDelete} onOpenChange={open => !deleting && setConfirmDelete(open)}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete “{displayName}”?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This permanently removes the brand profile, its research, content ideas and design settings. Posts already created stay in Studio. This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel disabled={deleting}>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={e => { e.preventDefault(); deleteFlow() }}
+                disabled={deleting}
+                className="bg-red-600 text-white hover:bg-red-700"
+              >
+                {deleting && <Loader2 className="w-4 h-4 animate-spin" />}
+                Delete brand
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         {/* tab nav */}
         <nav className="order-last flex w-full items-center overflow-x-auto overflow-y-hidden [scrollbar-width:none] [&::-webkit-scrollbar]:hidden md:order-none md:w-auto md:h-full md:ml-2 md:border-l border-slate-200 dark:border-slate-800 md:pl-2">

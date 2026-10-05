@@ -74,8 +74,11 @@ export async function createLogoVariants(input: Buffer) {
     for (let i = 0; i < count; i++) if (seen[i]) data[i * 4 + 3] = 0
   }
   if (!data.some((v, i) => i % 4 === 3 && v > 0)) throw new Error('No visible logo found.')
+  // Variants are cropped to the visible mark: padding inside a logo file would make it look small and misaligned.
+  let crop: { left: number; top: number; width: number; height: number } | null = null
   const encode = async (pixels: Buffer, background?: string) => {
     let image = sharp(pixels, { raw: { width, height, channels: 4 } })
+    if (crop) image = sharp(await image.extract(crop).png().toBuffer())
     if (background) image = image.flatten({ background })
     return 'data:image/png;base64,' + (await image.png().toBuffer()).toString('base64')
   }
@@ -103,8 +106,26 @@ export async function createLogoVariants(input: Buffer) {
   // Validate the extracted mark, not the badge before its background is removed.
   const markCoverage=Array.from({length:count},(_,i)=>black[i*4+3]>220?1:0).reduce((a,b)=>a+b,0)/count
   if(markCoverage>.94)throw new Error('Logo artwork could not be separated from its background.')
+  // Relative luminance of the original artwork's ink, so a layout can tell whether it reads on a given surface.
+  let inkSum = 0, inkCount = 0
+  // The visible mark's box. Variants are cropped to it, so `bounds` (where the mark sits in the stored file) is the
+  // whole image and `imageAspect` is the mark's own proportion.
+  let left = width, top = height, right = -1, bottom = -1
+  for (let i = 0; i < count; i++) if (data[i * 4 + 3] > 12) {
+    const x = i % width, y = Math.floor(i / width)
+    if (x < left) left = x; if (x > right) right = x; if (y < top) top = y; if (y > bottom) bottom = y
+  }
+  const round = (v: number) => Math.round(v * 10000) / 10000
+  if (right >= 0) crop = { left, top, width: right - left + 1, height: bottom - top + 1 }
+  const bounds = { x: 0, y: 0, width: 1, height: 1 }
+  for (let i = 0; i < data.length; i += 4) {
+    if (data[i + 3] < 128) continue
+    const [r, g, b] = [0, 1, 2].map(c => { const v = data[i + c] / 255; return v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4 })
+    inkSum += r * .2126 + g * .7152 + b * .0722; inkCount++
+  }
   for (let i = 0; i < data.length; i += 4) for (let c = 0; c < 3; c++) { black[i + c] = 0; white[i + c] = 255 }
   return {
+    inkLightness: inkCount ? Math.round(inkSum / inkCount * 1000) / 1000 : null, imageAspect: round(crop ? crop.width / crop.height : width / height), bounds,
     originalTransparent: await encode(data), blackTransparent: await encode(black), whiteTransparent: await encode(white),
     blackOnWhite: await encode(black, '#ffffff'), whiteOnBlack: await encode(white, '#000000'),
     originalOnWhite: await encode(data, '#ffffff'), originalOnBlack: await encode(data, '#000000'),

@@ -51,6 +51,12 @@ export interface VisualSlot {
   source_reason:    string   // why this source was chosen
   candidates:       AssetCandidate[]  // uploaded assets ranked by relevance (may be empty)
   selected:         AssetCandidate | null  // top candidate, or null
+  /** Gallery cutout the copy plan chose to reuse for this slide. */
+  reuse_asset_id?:  string
+  /** Width / height of the area the image will fill. */
+  frame_aspect?:    number
+  /** A photo slot that may use a generated transparent cutout when no gallery or stock photo fits. */
+  cutout_fallback?: boolean
 }
 
 export interface AssetPlan {
@@ -93,7 +99,7 @@ For each visual slot return:
 "preferred_source"— one of: "uploaded_asset", "unsplash", "ai_generated", "none"
 "source_reason"   — one sentence explaining why this source is preferred
 
-Follow planned frames. Background frames prefer Unsplash stock photography with broad searches; preserve the environment. AI may be used for specific backgrounds without transparency. Foreground subjects prefer ai_generated. Use uploaded_asset when a real brand asset is needed. For foreground subjects Unsplash is a resolver fallback after AI failure; still provide broad search_queries for that fallback. Use none for intentional text-only slides.
+Follow planned frames. Background frames prefer Unsplash stock photography with broad searches; preserve the environment. AI generation is only for isolated foreground subjects delivered as transparent PNGs, never for backgrounds or scenes. Foreground subjects prefer ai_generated. Use uploaded_asset when a real brand asset is needed. For foreground subjects Unsplash is a resolver fallback after AI failure; still provide broad search_queries for that fallback. Use none for intentional text-only slides.
 
 Rules for preferred_source:
 - "uploaded_asset": the slot needs a real brand/company image (team photos, product shots, office, events)
@@ -245,10 +251,13 @@ function plannedAssetBrief(layout:any,slide:any,idea:any,usedScenes:Set<string>)
   const planned=layout.planned
   const clean=(values:any,limit:number)=>Array.isArray(values)?values.filter((v:any)=>typeof v==='string'&&v.trim()).map((v:string)=>v.trim().slice(0,100)).slice(0,limit):[]
   const queries=clean(planned?.queries,3)
-  if(!layout.needs_visual||!planned?.subject||!queries.length)return local
+  // Cutouts are reused or generated from the subject alone; photos also need stock searches.
+  const cutout=layout.treatment==='isolated_subject'
+  if(!layout.needs_visual||!planned?.subject||(!queries.length&&!cutout))return local
   const subject=String(planned.subject).slice(0,500)
-  return {...local,needs_visual:true,subject_description:subject,search_queries:queries,search_keywords:[...new Set(queries.join(' ').toLowerCase().split(/\s+/))].slice(0,8),
-    generation_prompt:`${subject}. ${local.generation_prompt||''}`.slice(0,4000)}
+  const terms=(queries.length?queries.join(' '):subject).toLowerCase().match(/[\p{L}\p{N}]{3,}/gu)||[]
+  return {...local,needs_visual:true,subject_description:subject,search_queries:queries.length?queries:local.search_queries||[],search_keywords:[...new Set(terms)].slice(0,8),
+    generation_prompt:cutout?subject:`${subject}. ${local.generation_prompt||''}`.slice(0,4000)}
 }
 
 export async function handlePlanAssets(db: any, body: any) {
@@ -320,6 +329,9 @@ export async function planAssets(db: any, body: any) {
         slide_context: {headline:bounded(slide.headline),body:bounded(slide.body || slide.supportingText),purpose:bounded(slide.purpose,200),post_topic:bounded(idea.topic || idea.title)},
         brand_context: {name:bounded(brandContext?.name,200),industry:bounded(brandContext?.industry,300),audience:bounded(brandContext?.targetAudience || brandContext?.audience,500),colors:Array.isArray(brandContext?.colors)?brandContext.colors.filter((c:any)=>typeof c==='string').slice(0,8):[]},
         generation_prompt: (typeof s.generation_prompt === 'string' ? s.generation_prompt.slice(0, 2000) : '') + '\n'+layout.brief + (imagery ? '\nRequired design art direction: '+JSON.stringify(imagery) : ''),
+        ...(needsVisual && typeof layout.planned?.reuse === 'string' ? { reuse_asset_id: layout.planned.reuse } : {}),
+        ...(needsVisual && layout.frame?.width && layout.frame?.height ? { frame_aspect: Math.round(layout.frame.width / layout.frame.height * 100) / 100 } : {}),
+        ...(needsVisual && layout.cutoutFallback ? { cutout_fallback: true } : {}),
         visual_purpose:   s.visual_purpose ?? '',
         search_keywords:  keywords,
         search_queries:   needsVisual ? cleanTerms(s.search_queries).slice(0, 3) : [],

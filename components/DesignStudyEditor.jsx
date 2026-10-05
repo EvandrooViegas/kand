@@ -80,7 +80,9 @@ export default function DesignStudyEditor({ family, onChange }) {
           <Choice title="Shape" value={g.imagery.shape} options={['rect', 'rounded', 'circle', 'pill', 'arch']} onChange={v => setGrammar({ imagery: { ...g.imagery, shape: v } })} />
           <Choice title="Overlap" value={g.imagery.overlap} options={['none', 'text', 'edge']} onChange={v => setGrammar({ imagery: { ...g.imagery, overlap: v } })} />
           <Choice title="Overlay" value={g.imagery.overlay} options={['none', 'gradient', 'solid']} onChange={v => setGrammar({ imagery: { ...g.imagery, overlay: v } })} />
+          <Choice title="Subjects" value={g.imagery.cutout || 'never'} options={['never', 'some', 'always']} labels={{ never: 'Photographs', some: 'Photos and cutouts', always: 'Transparent cutouts' }} onChange={v => setGrammar({ imagery: { ...g.imagery, cutout: v } })} />
         </div>
+        {g.imagery.cutout && g.imagery.cutout !== 'never' && <p className="text-xs text-muted-foreground">Cutouts are transparent PNGs. A post reuses a fitting cutout from the brand gallery, otherwise one is generated with AI and saved to the gallery. Photographs always come from the gallery or stock, never from AI.</p>}
         <Multi title="Positions" value={g.imagery.positions} options={['full', 'top', 'bottom', 'left', 'right', 'center']} onChange={v => setGrammar({ imagery: { ...g.imagery, positions: v } })} />
         <div className="grid gap-3 sm:grid-cols-2">{[['usage', 'Usage'], ['placement', 'Placement'], ['cropBehavior', 'Crop'], ['textRelationship', 'Text relationship'], ['overlayTreatment', 'Overlay treatment'], ['frequency', 'Frequency notes']].map(([key, title]) => <Text key={key} title={title} rows={1} value={study.imagery[key]} onChange={v => setImagery({ [key]: v })} />)}</div>
       </>}
@@ -107,7 +109,6 @@ export default function DesignStudyEditor({ family, onChange }) {
         <Choice title="Logo" value={g.branding.logo} options={POSITIONS} onChange={v => setGrammar({ branding: { ...g.branding, logo: v } })} />
         <Choice title="Slide number" value={g.branding.slideNumber} options={POSITIONS} onChange={v => setGrammar({ branding: { ...g.branding, slideNumber: v } })} />
         <Choice title="Website" value={g.branding.handle} options={POSITIONS} onChange={v => setGrammar({ branding: { ...g.branding, handle: v } })} />
-        <Choice title="Call to action" value={g.cta} options={['text', 'pill', 'underline', 'arrow']} onChange={v => setGrammar({ cta: v })} />
       </div>
     </Section>
     <Section title="Rules">

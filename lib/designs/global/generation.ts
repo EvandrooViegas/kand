@@ -37,13 +37,20 @@ export function globalLayoutPlan(family: GlobalDesignFamily, designId: string, c
   const behaviour = [imagery.usage, imagery.cropBehavior, imagery.subjectPlacement, imagery.textRelationship].filter(Boolean).join(' ')
   const slots = slides.map((slide: any, index: number) => {
     const plan = plans[index], frame = imageFrame(family, plan)
-    const mode = imagery.mode === 'cutout' ? 'cutout' : frame ? (frame.width * frame.height >= family.width * family.height * .8 ? 'background' : 'contained') : 'none'
+    const mode = !frame ? 'none' : plan.cutout ? 'cutout' : frame.width * frame.height >= family.width * family.height * .8 ? 'background' : 'contained'
+    const role = `Imagery ${grammar.imagery.dominance === 'dominates' ? 'dominates the composition' : grammar.imagery.dominance === 'supports' ? 'supports the typography' : 'shares the composition with typography'}.`
+    const grounded = !!frame && frame.y + frame.height >= family.height - 1 && plan.imagePos !== 'top'
+    const brief = !frame ? '' : mode === 'cutout'
+      ? `Transparent PNG cutout for a ${family.width}×${family.height} composition: one isolated subject with no background, placed in a ${frame.width}×${frame.height} area (${Math.round(frame.width / frame.height * 100) / 100}:1) ${grounded ? 'standing on the bottom edge of the design' : 'beside the copy'}. ${grounded ? 'The subject may be cut off by the bottom edge of the image (a person from the waist up, a hand or object rising from below), but its top, left and right contours stay complete. ' : ''}${role} ${behaviour} No text, frame, backdrop or scenery.`
+      : `Photograph for a ${family.width}×${family.height} composition, filling a ${frame.width}×${frame.height} area (${Math.round(frame.width / frame.height * 100) / 100}:1). ${role} ${behaviour} Keep the areas behind text quiet; do not put typography in the image.`
     return {
       slot_id: slides.length > 1 ? `slide_${index + 1}` : 'single_main', composition: plan.composition, plan, imageMode: mode,
       needs_visual: !!frame, background: mode === 'background', frame,
       treatment: mode === 'cutout' ? 'isolated_subject' : 'environmental',
+      // AI images exist only as transparent cutouts: a photo slot with no fitting gallery or stock photo may use one instead.
+      cutoutFallback: mode === 'background' || mode === 'contained',
       planned: frame ? slide.design?.image || null : null,
-      brief: frame ? `${mode === 'cutout' ? 'Isolated subject for' : 'Photograph for'} a ${family.width}×${family.height} composition, filling a ${frame.width}×${frame.height} area (${Math.round(frame.width / frame.height * 100) / 100}:1). Imagery ${grammar.imagery.dominance === 'dominates' ? 'dominates the composition' : grammar.imagery.dominance === 'supports' ? 'supports the typography' : 'shares the composition with typography'}. ${behaviour} Keep the areas behind text quiet; do not put typography in the image.`.slice(0, 1400) : '',
+      brief: brief.slice(0, 1400),
       spec: { composition: plan.composition, background: { type: mode === 'background' ? 'image' : 'solid', color: 'bg' }, elements: frame ? [{ type: 'image', ...frame }] : [] },
     }
   })
@@ -54,18 +61,30 @@ export function globalLayoutPlan(family: GlobalDesignFamily, designId: string, c
 export function renderGlobalPost(family: GlobalDesignFamily, brand: any, copy: any, resolvedPlan: any, design: any, id: () => string, name?: string) {
   const layout = globalLayoutPlan(family, design.id, copy)
   const slides = slidesOf(copy)
+  const grammar = familyGrammar(family)
+  const notes: string[] = []
   const pages = slides.map((slide: any, index: number) => {
     const slot = layout.slots[index]
     const resolved = resolvedPlan.slots?.find((s: any) => s.slot_id === slot.slot_id) || resolvedPlan.slots?.[index]
     const asset = resolved?.resolvedAsset
-    const image = slot.needs_visual ? (slot.imageMode === 'cutout' && asset?.subject?.url) || asset?.url || '' : ''
-    const content = { ...slide, cta: slide.cta || (index === slides.length - 1 ? copy.cta : '') }
-    // Fallbacks keep the slide's imagery decision, so the study's image behaviour is never swapped.
-    const attempts = [slot.plan, { ...slot.plan, composition: slot.plan.withImage ? 'image-led' : 'statement', anchor: 'center' }]
+    // A photo slot the resolver filled with a generated cutout is composed as a cutout.
+    const cutout = slot.imageMode === 'cutout' || (slot.needs_visual && resolved?.treatment === 'isolated_subject')
+    const image = slot.needs_visual ? (cutout && asset?.subject?.url) || asset?.url || '' : ''
+    const imageSize = cutout && asset ? (asset.subject?.url ? asset.subject : asset.width && asset.height ? asset : undefined) : undefined
+    // A slide shows only its own CTA; the post-level CTA belongs to the caption, not to every last slide.
+    const content = { ...slide, cta: slide.cta || '' }
+    // No image could be found or generated: the slide keeps the study's typography instead of failing the whole post.
+    const textOnly = (['statement', 'closing', 'backdrop-type', 'stacked'] as const).find(c => (grammar.compositions as string[]).includes(c)) || 'statement'
+    if (slot.needs_visual && !image) notes.push(`${slides.length > 1 ? `Slide ${index + 1}: ` : ''}no fitting image was available${resolved?.warning ? ` (${resolved.warning})` : ''}, so it was composed without imagery.`)
+    const base = slot.needs_visual && !image ? { ...slot.plan, withImage: false, cutout: false, composition: textOnly } : { ...slot.plan, cutout }
+    // Fallbacks keep the slide's imagery decision, so the study's image behaviour is never swapped:
+    // optional ornaments (logo badge, callout card) give way first, then a calmer composition.
+    const plain = { ...base, badge: false, callout: false }
+    const attempts = [base, ...(base.badge || base.callout ? [plain] : []), { ...plain, composition: base.withImage ? 'image-led' : 'statement', anchor: 'center' }]
     let lastError: any
     for (const plan of attempts) {
       try {
-        const page = composeSlide(family, brand, content, plan, index, slides.length, { image })
+        const page = composeSlide(family, brand, content, plan, index, slides.length, { image, imageSize })
         return { ...page, nodes: page.nodes.map(n => ({ ...n, id: id() })), id: id(), name: `${index + 1}. ${page.composition}`, order: index, type: index === 0 ? 'top_peer' : index === slides.length - 1 ? 'bottom_peer' : 'content', globalComposition: page.composition }
       } catch (error: any) { if (error.status !== 422) throw error; lastError = error }
     }
@@ -83,6 +102,6 @@ export function renderGlobalPost(family: GlobalDesignFamily, brand: any, copy: a
   }
   const validation = validatePost(canvas)
   if (!validation.passed) throw Object.assign(new Error(validation.errors.join('; ')), { status: 422 })
-  canvas.validation = validation
+  canvas.validation = notes.length ? { ...validation, warnings: [...(validation.warnings || []), ...notes] } : validation
   return canvas
 }

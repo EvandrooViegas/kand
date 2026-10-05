@@ -191,7 +191,7 @@ export default function RendersPage() {
       <header className="border-b-2 border-foreground/90 bg-[#FAF7F2] dark:bg-[#0E0D0B] sticky top-0 z-20">
         <div className="container max-w-7xl mx-auto py-3 flex items-center justify-between px-4">
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="icon" onClick={() => router.push('/')}><ArrowLeft className="w-4 h-4" /></Button>
+            <Button variant="ghost" size="icon" onClick={() => router.push('/studio')}><ArrowLeft className="w-4 h-4" /></Button>
             <KandLogo size={28} />
             <span className="text-xl font-bold" style={BEBAS}>RENDERS</span>
           </div>

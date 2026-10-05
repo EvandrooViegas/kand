@@ -106,7 +106,7 @@ test('GPT Image 2.5 requests native transparent PNG and reads real dimensions', 
   const png=await require('sharp')({create:{width:64,height:80,channels:4,background:'#00000000'}}).png().toBuffer()
   let request
   const e=engine(async (url,options)=>{request=JSON.parse(options.body);assert.equal(url,'https://api.openai.com/v1/images/generations');return new Response(JSON.stringify({data:[{b64_json:png.toString('base64')}]}))},null,{OPENAI_API_KEY:'test-only'})
-  const image=await e.generateImageOpenAI('person holding complete laptop',true)
+  const image=await e.generateImageOpenAI('person holding complete laptop')
   assert.equal(request.model,'gpt-image-2.5-sunburst')
   assert.equal(request.background,'transparent')
   assert.equal(request.output_format,'png')
@@ -247,4 +247,40 @@ test('concurrent combined searches reserve distinct winners, not losing candidat
  const results=await Promise.all([e.searchStock({...slot,search_keywords:['garden','soil']},'key','key',used),e.searchStock({...slot,search_keywords:['garden','soil']},'key','key',used)])
  assert.equal(new Set(results.map(r=>r.pexels_id)).size,2)
  assert.equal(used.has('unsplash:u'),false)
+})
+
+test('a photo slot with no fitting stock photo may use one transparent AI cutout, shaped to its area',async()=>{
+ const calls=[]
+ const e=engine(async()=>({ok:true,json:async()=>({results:[]})}),async(...args)=>{calls.push(args);return {source:'ai_generated',url:'data:image/png;base64,cut',width:1024,height:1536}})
+ const result=await e.resolveSlot(null,{...slot,slot_id:'a',needs_visual:true,preferred_source:'unsplash',treatment:'environmental',cutout_fallback:true,frame_aspect:.5,subject_description:'hand holding a smartphone'},null,'key',null,new Set())
+ assert.equal(calls.length,1);assert.equal(calls[0][1],.5)
+ assert.match(calls[0][0],/alpha transparency/,'the generation brief asks for a transparent background')
+ assert.equal(result.source,'ai_generated');assert.equal(result.treatment,'isolated_subject')
+ assert.match(result.warning,/No relevant unused high-resolution stock photo found; used a transparent cutout instead/)
+ const plain=engine(async()=>({ok:true,json:async()=>({results:[]})}),async()=>{throw Error('A photo is never generated')})
+ const photo=await plain.resolveSlot(null,{...slot,slot_id:'b',needs_visual:true,preferred_source:'unsplash',treatment:'environmental'},null,'key',null,new Set())
+ assert.equal(photo.resolvedAsset,null);assert.equal(photo.treatment,'environmental')
+})
+
+test('the gallery cutout chosen by the copy plan is reused without generating, once per post',async()=>{
+ const asset={id:'generated-phone',brand_id:'brand-a',status:'ready',source:'ai_generated',url:'/api/uploads/gen',width:1024,height:1024,subject:{url:'/api/uploads/cut',width:500,height:800}}
+ const updates=[]
+ const db={collection:()=>({findOne:async q=>q.id===asset.id&&q.brand_id==='brand-a'?asset:null,updateOne:async(q,u)=>updates.push([q,u]),find:()=>({toArray:async()=>[]})})}
+ let generations=0
+ const e=engine(async()=>{throw Error('No stock')},async()=>{generations++;return {source:'ai_generated',url:'data:image/png;base64,new',width:1024,height:1024}})
+ const used=new Set(),request={...slot,needs_visual:true,preferred_source:'ai_generated',treatment:'isolated_subject',reuse_asset_id:'generated-phone',subject_description:'hand holding a smartphone'}
+ const first=await e.resolveSlot(db,{...request,slot_id:'a'},'brand-a',null,null,used)
+ assert.equal(generations,0);assert.equal(first.resolvedAsset.url,asset.url);assert.equal(first.resolvedAsset.subject.url,'/api/uploads/cut');assert.equal(first.resolvedAsset.reused,true)
+ assert.equal(updates[0][1].$inc.usage_count,1)
+ const second=await e.resolveSlot(db,{...request,slot_id:'b'},'brand-a',null,null,used)
+ assert.equal(generations,1,'the same cutout is not placed twice in one post');assert.equal(second.resolvedAsset.url,'data:image/png;base64,new')
+})
+
+test('every OpenAI image is a transparent PNG whose canvas follows the target area',async()=>{
+ const png=await require('sharp')({create:{width:32,height:32,channels:4,background:'#00000000'}}).png().toBuffer()
+ const requests=[]
+ const e=engine(async(_url,options)=>{requests.push(JSON.parse(options.body));return new Response(JSON.stringify({data:[{b64_json:png.toString('base64')}]}))},null,{OPENAI_API_KEY:'test-only'})
+ for(const aspect of [.45,2,1,undefined])await e.generateImageOpenAI('subject',aspect)
+ assert.deepEqual(requests.map(r=>r.size),['1024x1536','1536x1024','1024x1024','1024x1024'])
+ assert.ok(requests.every(r=>r.background==='transparent'&&r.output_format==='png'))
 })

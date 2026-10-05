@@ -17,7 +17,31 @@ module.exports = {
     		}
     	},
     	extend: {
+    		fontFamily: {
+    			'bk-display': ['var(--font-bk-display)', 'ui-sans-serif', 'system-ui', 'sans-serif'],
+    			'bk-body': ['var(--font-bk-body)', 'ui-sans-serif', 'system-ui', 'sans-serif']
+    		},
+    		boxShadow: {
+    			'bk-card': 'var(--bk-shadow-card)',
+    			'bk-pop': 'var(--bk-shadow-pop)'
+    		},
     		colors: {
+    			// Batkle landing page. Themed tokens are set in components/landing/landing.css.
+    			bk: {
+    				bg: 'rgb(var(--bk-bg) / <alpha-value>)',
+    				alt: 'rgb(var(--bk-alt) / <alpha-value>)',
+    				surface: 'rgb(var(--bk-surface) / <alpha-value>)',
+    				chip: 'rgb(var(--bk-chip) / <alpha-value>)',
+    				fg: 'rgb(var(--bk-fg) / <alpha-value>)',
+    				muted: 'rgb(var(--bk-muted) / <alpha-value>)',
+    				line: 'rgb(var(--bk-line) / <alpha-value>)',
+    				field: 'rgb(var(--bk-field) / <alpha-value>)',
+    				ink: '#14131A',
+    				butter: '#FFD84D',
+    				cream: '#F6F3EA',
+    				coral: '#FF7A59',
+    				lilac: '#CFC8F5'
+    			},
     			border: 'hsl(var(--border))',
     			input: 'hsl(var(--input))',
     			ring: 'hsl(var(--ring))',
@@ -90,13 +114,35 @@ module.exports = {
     				to: {
     					height: '0'
     				}
+    			},
+    			'bk-swing': {
+    				'0%, 100%': { transform: 'rotate(-3deg)' },
+    				'50%': { transform: 'rotate(2.5deg)' }
+    			},
+    			'bk-blink': {
+    				'0%, 49%': { opacity: '1' },
+    				'50%, 100%': { opacity: '0' }
+    			},
+    			'bk-rise': {
+    				from: { opacity: '0', transform: 'translateY(14px)' },
+    				to: { opacity: '1', transform: 'translateY(0)' }
     			}
     		},
     		animation: {
     			'accordion-down': 'accordion-down 0.2s ease-out',
-    			'accordion-up': 'accordion-up 0.2s ease-out'
+    			'accordion-up': 'accordion-up 0.2s ease-out',
+    			'bk-swing': 'bk-swing 5.5s ease-in-out infinite',
+    			'bk-blink': 'bk-blink 1.05s step-end infinite',
+    			'bk-rise': 'bk-rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both',
+    			'bk-enter': 'bk-rise 0.8s cubic-bezier(0.2, 0.7, 0.2, 1) both'
     		}
     	}
     },
-    plugins: [require("tailwindcss-animate")],
+    plugins: [
+    	require("tailwindcss-animate"),
+    	// `can-hover:` applies hover styles only on devices with a real pointer, so taps on touch screens don't leave them stuck.
+    	require("tailwindcss/plugin")(({ addVariant }) => {
+    		addVariant('can-hover', '@media (hover: hover) and (pointer: fine) { &:hover }')
+    	})
+    ],
   }

@@ -65,7 +65,7 @@ Families saved before grammars existed (and the bundled seeds before version 3) 
 | Stage | Request | Model calls |
 |---|---|---|
 | Plan | `POST /api/plan-post` | 1 Groq completion for copy and composition plan together (a 2nd only if the output fails validation). Zero when existing copy is re-planned. |
-| Visuals | `POST /api/resolve-assets` | Only for slides whose composition carries imagery. |
+| Visuals | `POST /api/resolve-assets` | Only for slides whose composition carries imagery. At most one OpenAI image generation per cutout slide, and none when a saved cutout fits. |
 | Compose + validate | `POST /api/design-canvas` | None. |
 
 ### Plan
@@ -75,12 +75,28 @@ Families saved before grammars existed (and the bundled seeds before version 3) 
 For each slide the model returns:
 - a `composition`
 - emphasis words
-- an image subject plus stock queries
+- an image subject plus stock queries (photos), or an isolated subject (cutouts)
+- for cutout studies, optionally `reuse`: a saved gallery cutout that fits the slide
 
 `sanitizeDesignPlan` removes invalid choices:
 - compositions the study does not allow
 - images on typographic compositions or no-imagery studies
 - emphasis words that are not in the headline
+- `reuse` refs that were not offered, or a cutout reused twice in one post
+
+### Imagery: photographs and AI cutouts
+
+`familyCutouts` reads how often a study's subjects are transparent cutouts: `never`, `some` or `always`.
+- The study model states it as `grammar.imagery.cutout`, and the Design Study editor exposes it as *Subjects*.
+- Older studies are read from their imagery prose, because the mode label often says `fullBleed` or `mixed` for what the prose calls a cutout.
+- With `some`, the plan chooses `kind: "cutout" | "photo"` per slide.
+
+AI images are only ever transparent PNG cutouts:
+- **Cutout slides:** the resolver uses the gallery cutout the plan chose, else a saved cutout that matches the subject (`findGeneratedAsset`), else exactly one OpenAI generation with `background: "transparent"`. The canvas shape follows the target area (portrait, landscape or square).
+- **Photo slides:** gallery photos, then Unsplash/Pexels. A photograph is never generated. When no photo fits, a global-design slot (`cutout_fallback`) uses a transparent cutout instead and is composed as one.
+- **Saving:** every new cutout is saved to the brand's `assets` (Gallery → *AI cutouts (PNG)*) with its description and tags. The next plan lists up to 24 of them so the copy model can reuse one with no extra call. The editor's *Gallery* source inserts or replaces images from the same gallery.
+- **Composition:** a cutout keeps its proportions and stands on the lower edge of its area. It never sits behind the copy like a background photo; a full-frame position becomes the lower band. No overlay or mask is applied.
+- **No image at all:** if nothing could be found or generated, the slide is composed with the study's typography and the reason is added to the canvas warnings, instead of failing the post.
 
 ### Compose (`lib/designs/global/compose.ts`, deterministic)
 
@@ -94,13 +110,14 @@ For each slide the model returns:
 - **Text:** copy is measured and fitted as a group. Complete copy is never cut; text that cannot fit fails with a clear error.
 - **Images:** placed in a deterministic frame (`imageFrame`). The asset planner uses the same frame for its briefs.
 - **Decorations:** placed on the sides the copy leaves free.
-- **Branding:** logo (a light or dark variant when the brand has them), slide number and handle go where the study puts them.
+- **Branding:** slide number and logo go where the study puts them. A brand with a logo shows the logo instead of its website link (in the link's place when the study has no logo position). The logo version is chosen by contrast with the slide: the original artwork when it reads, otherwise its white or black silhouette (`inkLightness` is measured when the variants are generated). Brands without a logo show their name and website link.
+- **CTA:** a slide shows only its own CTA, and the copy leaves it empty unless the post calls for an action. Nothing on an Instagram graphic is clickable, so CTAs are Instagram actions (save, share, comment, message, follow, link in bio); web-button wording such as "Saiba mais" or "Learn more" is removed in code.
 
 Every output node is an independent, editable Canvas node (`text`, `shape`, `image`, `gradient`) with a `designRole`.
 
 ### Build fallback
 
-If copy does not fit, a calmer composition with the same imagery decision is tried before failing (`renderGlobalPost`).
+If copy does not fit, optional ornaments (logo badge, callout card) are dropped first, then a calmer composition with the same imagery decision is tried before failing (`renderGlobalPost`).
 
 ### Validate
 

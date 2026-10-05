@@ -2451,6 +2451,8 @@ export async function handleDesignCanvas(db: any, body: any, persist = true) {
     if (!copy || !Array.isArray(inputPlan?.slots) || !inputPlan.slots.length) return corsify(NextResponse.json({ error: 'copy and resolvedPlan.slots are required' }, { status: 400 }))
     const globalSelection = await chooseBrandFamily(db, brandContext, copy, body.designId || inputPlan.designId || inputPlan.layoutPlan?.designId)
     if (globalSelection) {
+      // Logo variants let the composer pick the version that reads on each surface; a logo that cannot be processed keeps its original file.
+      if (brandContext?.logo) try { await ensureBrandLogoVariants(db, brandContext) } catch (error) { console.warn('[canvas] logo variants unavailable:', (error as Error).message) }
       const canvas = renderGlobalPost(globalSelection.family, brandContext, copy, inputPlan, globalSelection.design, uuidv4, canvasName)
       const saved = await persistInlineImages(db, canvas)
       if (persist) await db.collection('canvases').insertOne(saved)

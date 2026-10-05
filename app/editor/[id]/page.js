@@ -1,6 +1,7 @@
 'use client'
 import { DEFAULT_TEXT_GRADIENT, buildTextGradientCss, textGradientStyle } from '@/lib/textGradient'
 import DesignLibrary from '@/components/DesignLibrary'
+import GalleryPicker from '@/components/GalleryPicker'
 import { useEffect, useState, useRef, useLayoutEffect, useCallback } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { useTheme } from 'next-themes'
@@ -670,7 +671,7 @@ function Editor() {
     // Embedded slides come from the parent's current draft, including unsaved edits.
     if (window.parent !== window) return
     fetch(`/api/canvases/${id}`).then((r) => r.json()).then((data) => {
-      if (data.error) { toast.error(data.error); router.push('/') } else {
+      if (data.error) { toast.error(data.error); router.push('/studio') } else {
         // If editing a specific carousel page, use that page's design data
         const pageId = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('page') : null
         if (pageId && data.pages) {
@@ -1896,7 +1897,7 @@ function Editor() {
       <header className="border-b-2 border-foreground/90 bg-[#FAF7F2] dark:bg-[#0E0D0B] px-4 py-3 flex items-center justify-between shrink-0 z-20">
         <div className="flex items-center gap-3 min-w-0">
           <Button variant="ghost" size="icon" className="hover:bg-[#D4FF00] hover:text-foreground shrink-0"
-            onClick={() => canvas._carouselPageId ? router.push(`/carousel/${id}`) : router.push('/')}
+            onClick={() => canvas._carouselPageId ? router.push(`/carousel/${id}`) : router.push('/studio')}
             title={canvas._carouselPageId ? 'Back to carousel' : 'Back to studio'}>
             <ArrowLeft className="w-4 h-4" />
           </Button>
@@ -2491,7 +2492,7 @@ function Editor() {
                   <TextProperties node={selected} updateNode={updateNode} meta={fontMeta} canvas={canvas} editorRef={editorRef} savedRangeRef={savedRangeRef} htmlToTags={htmlToTags} editingId={editingId} />
                 )}
                 {selected.type === 'image' && (
-                  <ImageProperties node={selected} updateNode={updateNode} setCropModeNodeId={setCropModeNodeId}
+                  <ImageProperties node={selected} updateNode={updateNode} setCropModeNodeId={setCropModeNodeId} flowId={canvas?.flowId}
                     onReplace={(src) => updateNode(selected.id, { src })}
                     onReplaceUpload={async (file) => {
                       if (!file) return
@@ -2580,13 +2581,17 @@ function Editor() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add Image</DialogTitle>
-            <DialogDescription>From a URL or upload a file</DialogDescription>
+            <DialogDescription>From the brand gallery, a URL or an uploaded file</DialogDescription>
           </DialogHeader>
-          <Tabs defaultValue="url">
-            <TabsList className="grid grid-cols-2 w-full">
+          <Tabs defaultValue={canvas?.flowId ? 'gallery' : 'url'}>
+            <TabsList className="grid grid-cols-3 w-full">
+              <TabsTrigger value="gallery"><ImageIcon className="w-3.5 h-3.5 mr-2" />Gallery</TabsTrigger>
               <TabsTrigger value="url"><LinkIcon className="w-3.5 h-3.5 mr-2" />URL</TabsTrigger>
               <TabsTrigger value="upload"><Upload className="w-3.5 h-3.5 mr-2" />Upload</TabsTrigger>
             </TabsList>
+            <TabsContent value="gallery" className="pt-3">
+              {imageDialog && <GalleryPicker flowId={canvas?.flowId} onPick={src => insertImageNode(src)} />}
+            </TabsContent>
             <TabsContent value="url" className="space-y-3 pt-3">
               <Label className="text-xs">Image URL</Label>
               <Input placeholder="https://example.com/image.png" value={imageUrl} onChange={(e) => setImageUrl(e.target.value)} autoFocus onKeyDown={(e) => e.key === 'Enter' && addImageByUrl()} />
@@ -2990,13 +2995,14 @@ function TextProperties({ node, updateNode, meta, canvas, editorRef, savedRangeR
   )
 }
 
-function ImageProperties({ node, updateNode, setCropModeNodeId, onReplace, onReplaceUpload }) {
+function ImageProperties({ node, updateNode, setCropModeNodeId, onReplace, onReplaceUpload, flowId }) {
   const f = { ...DEFAULT_FILTERS, ...(node.filters || {}) }
   const setFilter = (key, value) => updateNode(node.id, { filters: { ...f, [key]: value } })
   const resetFilters = () => updateNode(node.id, { filters: { ...DEFAULT_FILTERS } })
   const replaceFileRef = useRef(null)
   const [replaceUrlInput, setReplaceUrlInput] = useState('')
   const [showReplaceUrl, setShowReplaceUrl] = useState(false)
+  const [showGallery, setShowGallery] = useState(false)
 
   const FilterSlider = ({ name, label, min, max, step = 1, suffix = '' }) => (
     <div>
@@ -3036,12 +3042,17 @@ function ImageProperties({ node, updateNode, setCropModeNodeId, onReplace, onRep
             <Upload className="w-3 h-3 mr-1.5" />Replace
           </Button>
           <Button size="sm" variant="outline" className={`flex-1 border-2 text-xs h-8 ${showReplaceUrl ? 'border-foreground' : ''}`}
-            onClick={() => setShowReplaceUrl(v => !v)}>
+            onClick={() => { setShowReplaceUrl(v => !v); setShowGallery(false) }}>
             <LinkIcon className="w-3 h-3 mr-1.5" />URL
           </Button>
+          {flowId && <Button size="sm" variant="outline" className={`flex-1 border-2 text-xs h-8 ${showGallery ? 'border-foreground' : ''}`}
+            onClick={() => { setShowGallery(v => !v); setShowReplaceUrl(false) }}>
+            <ImageIcon className="w-3 h-3 mr-1.5" />Gallery
+          </Button>}
           <input ref={replaceFileRef} type="file" accept="image/*" className="hidden"
             onChange={(e) => { const f = e.target.files?.[0]; if (f) { onReplaceUpload?.(f); e.target.value = '' } }} />
         </div>
+        {showGallery && <GalleryPicker flowId={flowId} onPick={src => { onReplace?.(src); setShowGallery(false) }} />}
         {showReplaceUrl && (
           <div className="flex gap-1.5">
             <Input className="h-8 text-xs flex-1" placeholder="https://..." value={replaceUrlInput}

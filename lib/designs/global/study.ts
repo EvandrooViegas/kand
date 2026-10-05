@@ -24,10 +24,36 @@ const BLANK_IMAGERY = { usage: '', placement: '', cropBehavior: '', subjectPlace
 /** Imagery comes from the study. Families saved without a study derive it from their reference reconstructions. */
 export function familyImagery(family: GlobalDesignFamily): DesignStudy['imagery'] {
   const studied = family.study?.imagery
+  const pictured = ((family.study as any)?.grammar?.references || []).some((r: any) => r?.image === true || r?.image === 'true')
+  if (studied?.mode === 'none' && pictured) {
+    const prose = Object.values(studied).join(' ')
+    const mode = /cut-?out|isolated|transparent/i.test(prose) ? 'cutout' : /fills? the (?:whole )?canvas|full.?bleed background|behind (?:the )?text/i.test(prose) ? 'background' : 'contained'
+    return { ...BLANK_IMAGERY, ...studied, mode, usage: studied.usage || IMAGERY_DEFAULTS[mode] }
+  }
   if (studied?.mode) return { ...BLANK_IMAGERY, ...studied, usage: studied.usage || IMAGERY_DEFAULTS[studied.mode] || '' }
   const modes = [...new Set((family.variants || []).map(v => variantImageMode(family, v)))]
   const mode = !modes.length ? 'none' : modes.length === 1 ? modes[0] : 'mixed'
   return { ...BLANK_IMAGERY, mode, usage: mode === 'mixed' ? `References use different treatments (${modes.join(', ')}).` : IMAGERY_DEFAULTS[mode] || '' }
+}
+
+const CUTOUT_PROSE = /cut-?outs?\b|isolated (?:subject|person|people|object|product|hand)|silhouett|transparent background|(?:without|no) background|background(?:s)? removed/i
+const NO_CUTOUTS = /(?:no|never|avoid|without)\s+(?:\w+\s+){0,2}cut-?outs?/i
+const PHOTO_PROSE = /full.?bleed photo|photo(?:graph)?s? (?:fill|cover)|background photo|framed photo|photos? inside|inside (?:a |the )?frames?/i
+
+/**
+ * How often the study's subjects are transparent cutouts rather than photographs. A stated grammar value wins;
+ * older studies are read from their imagery prose, because the mode label alone often says "fullBleed" or "mixed"
+ * for what the prose describes as a cutout.
+ */
+export function familyCutouts(family: GlobalDesignFamily): 'never' | 'some' | 'always' {
+  const imagery = familyImagery(family)
+  if (imagery.mode === 'none') return 'never'
+  const stated = (family.study as any)?.grammar?.imagery?.cutout
+  if (stated === 'never' || stated === 'some' || stated === 'always') return stated
+  if (imagery.mode === 'cutout') return 'always'
+  const prose = [imagery.usage, imagery.placement, imagery.cropBehavior, imagery.subjectPlacement, imagery.textRelationship, imagery.overlayTreatment, imagery.notes].join(' ')
+  if (!CUTOUT_PROSE.test(prose) || NO_CUTOUTS.test(prose)) return 'never'
+  return imagery.mode === 'mixed' && PHOTO_PROSE.test(prose) ? 'some' : 'always'
 }
 
 const IMAGE_COMPOSITIONS: Composition[] = ['image-led', 'split', 'stacked']
@@ -110,7 +136,7 @@ export function familyGrammar(family: GlobalDesignFamily): DesignGrammar {
   }
   // An image family needs at least one composition that can hold its imagery.
   const compositions = grammar.compositions.some(c => IMAGE_COMPOSITIONS.includes(c)) ? grammar.compositions : [...grammar.compositions, fullFrame ? 'image-led' as const : 'stacked' as const]
-  return { ...grammar, compositions, imagery: image }
+  return { ...grammar, compositions, imagery: { ...image, cutout: familyCutouts(family) } }
 }
 
 const HEX = /#[0-9a-f]{6}\b|#[0-9a-f]{3}\b/gi
@@ -136,8 +162,9 @@ export function studyForPlanning(family: GlobalDesignFamily) {
   return {
     name: family.name,
     study: s ? { personality: s.personality, composition: s.composition, hierarchy: s.hierarchy, typography: s.typography, spaceDensity: s.spaceDensity, recurringRules: s.familyRules, flexibleRules: s.variantRules, antiPatterns: s.avoid } : { description: family.description },
-    imagery: { ...familyImagery(family), scale: grammar.imagery.scale, frequency: grammar.imagery.frequency, dominance: grammar.imagery.dominance },
+    imagery: { ...familyImagery(family), scale: grammar.imagery.scale, frequency: grammar.imagery.frequency, dominance: grammar.imagery.dominance, cutouts: familyCutouts(family) },
     compositions: grammar.compositions.filter(c => (COMPOSITIONS as readonly string[]).includes(c)),
+    referenceArrangements: grammar.references.map(r => r.composition),
     headlineScale: grammar.headline.scale, density: grammar.density, emphasis: grammar.emphasis,
   }
 }

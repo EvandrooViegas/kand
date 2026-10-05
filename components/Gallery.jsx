@@ -24,6 +24,11 @@ function fileToDataUrl(file) {
   })
 }
 
+// Transparent PNG cutouts are shown whole, on a checkerboard, so their missing background is visible.
+const CHECKERBOARD = { backgroundImage: 'repeating-conic-gradient(#e2e8f0 0% 25%, #ffffff 0% 50%)', backgroundSize: '16px 16px' }
+const isCutout = asset => asset.source === 'ai_generated' || !!asset.subject?.url
+const previewUrl = asset => asset.subject?.url || asset.thumbnail_url || asset.url
+
 function formatBytes(w, h) {
   if (!w || !h) return ''
   return `${w} × ${h}`
@@ -78,7 +83,8 @@ function AssetDetail({ asset, onClose, onDelete, onSaved }) {
   const rows = [
     { icon: Eye,       label: 'Orientation', value: asset.orientation },
     { icon: ImageIcon, label: 'Dimensions',  value: formatBytes(asset.width, asset.height) },
-    { icon: Palette,   label: 'Format',      value: asset.mime_type },
+    { icon: Palette,   label: 'Format',      value: isCutout(asset) ? 'Transparent PNG' : asset.mime_type },
+    { icon: RefreshCw, label: 'Used in posts', value: asset.source === 'ai_generated' ? `${asset.usage_count || 1}×` : null },
   ].filter(r => r.value)
 
   return (
@@ -100,8 +106,8 @@ function AssetDetail({ asset, onClose, onDelete, onSaved }) {
 
         {/* Image */}
         <div className="px-6 pt-5">
-          <div className="rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center max-h-72">
-            <img src={asset.url} alt={asset.filename}
+          <div className="rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 flex items-center justify-center max-h-72" style={isCutout(asset) ? CHECKERBOARD : undefined}>
+            <img src={isCutout(asset) ? previewUrl(asset) : asset.url} alt={asset.filename}
               className="max-w-full max-h-72 object-contain" />
           </div>
         </div>
@@ -123,7 +129,7 @@ function AssetDetail({ asset, onClose, onDelete, onSaved }) {
 
         {asset.source_page && <div className="px-6 pt-4 text-sm"><a href={asset.source_page} target="_blank" rel="noreferrer" className="underline">View original website page</a></div>}
         {/* Tags */}
-        <div className="px-6 pt-4"><label htmlFor="asset-description" className="text-sm font-semibold">Image description</label><textarea id="asset-description" value={description} onChange={e=>setDescription(e.target.value)} maxLength={2000} rows={4} className="w-full border rounded-lg p-3 mt-2 bg-transparent" placeholder="Describe the subject, activity and setting in any language."/><p className="text-xs text-muted-foreground mb-2">Used to match this image to relevant background-photo slides. Your original language is preserved.</p><Button size="sm" disabled={savingDescription||description===(asset.description||'')} onClick={saveDescription}>{savingDescription?'Saving…':'Save description'}</Button></div>
+        <div className="px-6 pt-4"><label htmlFor="asset-description" className="text-sm font-semibold">Image description</label><textarea id="asset-description" value={description} onChange={e=>setDescription(e.target.value)} maxLength={2000} rows={4} className="w-full border rounded-lg p-3 mt-2 bg-transparent" placeholder="Describe the subject, activity and setting in any language."/><p className="text-xs text-muted-foreground mb-2">{asset.source === 'ai_generated' ? 'Used to decide when this cutout fits a new slide: posts reuse it instead of generating a new image.' : 'Used to match this image to relevant background-photo slides. Your original language is preserved.'}</p><Button size="sm" disabled={savingDescription||description===(asset.description||'')} onClick={saveDescription}>{savingDescription?'Saving…':'Save description'}</Button></div>
         {asset.tags?.length > 0 && (
           <div className="px-6 pt-4">
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-2 flex items-center gap-1.5">
@@ -159,12 +165,14 @@ function AssetDetail({ asset, onClose, onDelete, onSaved }) {
 function AssetCard({ asset, onClick }) {
   return (
     <button onClick={onClick}
-      className="group relative rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 border-2 border-transparent hover:border-primary transition-all aspect-square focus:outline-none focus:border-primary">
+      className="group relative rounded-xl overflow-hidden bg-slate-100 dark:bg-slate-800 border-2 border-transparent hover:border-primary transition-all aspect-square focus:outline-none focus:border-primary"
+      style={isCutout(asset) ? CHECKERBOARD : undefined}>
       <img
-        src={asset.thumbnail_url || asset.url}
+        src={previewUrl(asset)}
         alt={asset.description || asset.filename}
-        className="w-full h-full object-cover"
+        className={isCutout(asset) ? 'w-full h-full object-contain p-2' : 'w-full h-full object-cover'}
       />
+      {isCutout(asset) && <span className="absolute top-2 left-2 rounded-md bg-black/70 px-1.5 py-0.5 text-[10px] font-semibold text-white">PNG{asset.usage_count > 1 ? ` · ${asset.usage_count}×` : ''}</span>}
 
       {/* Status overlay for processing/failed */}
       {asset.status !== 'ready' && (
@@ -389,7 +397,7 @@ export default function Gallery({ flowId, brandContext }) {
       <UploadZone onFiles={files=>{setPendingFiles(Array.from(files));setUploadDescriptions({})}} uploading={uploading} />
       {pendingFiles.length>0&&<div className="border rounded-xl p-4 space-y-3"><p className="font-semibold">Describe your images (optional)</p>{pendingFiles.map((file,index)=><label key={file.name+index} className="block text-sm">{file.name}<textarea rows={3} maxLength={2000} disabled={uploading} value={uploadDescriptions[uploadKey(file)]||''} onChange={e=>setUploadDescriptions(prev=>({...prev,[uploadKey(file)]:e.target.value}))} placeholder="What does this image show? Any language is welcome." className="block w-full border rounded-lg p-2 mt-1 bg-transparent"/></label>)}<Button disabled={uploading} onClick={()=>handleFiles([...pendingFiles])}>{uploading?'Uploading…':'Upload images'}</Button><Button variant="ghost" disabled={uploading} onClick={()=>setPendingFiles([])}>Cancel</Button></div>}
       <div className="flex gap-2" role="tablist" aria-label="Image source">
-        {[['uploaded','Brand images'],['generated','AI generated']].map(([key,label])=>(
+        {[['uploaded','Brand images'],['generated','AI cutouts (PNG)']].map(([key,label])=>(
           <button key={key} role="tab" aria-selected={assetTab===key} onClick={()=>setAssetTab(key)} className={`px-4 py-2 rounded-lg text-sm font-semibold ${assetTab===key?'bg-primary text-primary-foreground':'bg-slate-100 dark:bg-slate-800'}`}>{label} ({assets.filter(a=>key==='generated'?a.source==='ai_generated':a.source!=='ai_generated').length})</button>
         ))}
       </div>
@@ -438,7 +446,7 @@ export default function Gallery({ flowId, brandContext }) {
             <ImageIcon className="w-8 h-8 text-slate-300" />
           </div>
           <p className="font-semibold text-slate-500">No images yet</p>
-          <p className="text-sm text-slate-400 mt-1">{assetTab==='generated'?'Images generated for this brand will be saved here automatically.':'Upload images above to build your brand asset library'}</p>
+          <p className="text-sm text-slate-400 mt-1">{assetTab==='generated'?'Transparent PNG cutouts generated for this brand’s posts are saved here and reused when they fit a new slide.':'Upload images above to build your brand asset library'}</p>
         </div>
       )}
 
@@ -461,7 +469,7 @@ export default function Gallery({ flowId, brandContext }) {
       {/* No results */}
       {!loading && assets.length > 0 && filtered.length === 0 && (
         <div className="text-center py-12">
-          <p className="text-slate-500 text-sm">{search?`No images match “${search}” in this tab.`:assetTab==='generated'?'Generated images will appear here with their description and tags.':'No uploaded images yet.'}</p>
+          <p className="text-slate-500 text-sm">{search?`No images match “${search}” in this tab.`:assetTab==='generated'?'Transparent PNG cutouts generated for posts will appear here with their description and tags.':'No uploaded images yet.'}</p>
           <button onClick={() => setSearch('')} className="text-primary text-sm hover:underline mt-1">Clear search</button>
         </div>
       )}

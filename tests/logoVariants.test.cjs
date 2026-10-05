@@ -5,19 +5,23 @@ const { stripTypeScriptTypes } = require('node:module')
 const source = require('node:fs').readFileSync(require('node:path').join(__dirname, '../lib/services/logoVariants.ts'), 'utf8').replace(/^import .*$/gm, '').replace(/export /g, '')
 const { createLogoVariants, generateLogoVariants } = require('node:vm').runInNewContext(stripTypeScriptTypes(source) + '\n({createLogoVariants,generateLogoVariants})', { sharp, Buffer, Uint8Array, Int32Array })
 const decode = src => sharp(Buffer.from(src.split(',')[1], 'base64')).ensureAlpha().raw().toBuffer()
+const size = async src => { const { width, height } = await sharp(Buffer.from(src.split(',')[1], 'base64')).metadata(); return { width, height } }
 
 test('removes colored flat backgrounds and generates contrasting opaque and transparent variants', async () => {
   const input = await sharp(Buffer.from('<svg width="80" height="40"><rect width="80" height="40" fill="red"/><rect x="20" y="10" width="40" height="20" fill="blue"/></svg>')).png().toBuffer()
   const variants = await createLogoVariants(input)
-  assert.equal(Object.keys(variants).length, 7)
-  for (const key of ['originalTransparent', 'blackTransparent', 'whiteTransparent']) {
-    const pixels = await decode(variants[key])
-    assert.equal(pixels[3], 0)
-    assert.equal(pixels[(15 * 80 + 25) * 4 + 3], 255)
+  assert.equal(Object.keys(variants).length, 10)
+  // The red background is removed and every variant is cropped to the 40×20 blue mark.
+  assert.deepEqual({ ...variants.bounds }, { x: 0, y: 0, width: 1, height: 1 })
+  assert.equal(variants.imageAspect, 2)
+  assert.ok(Math.abs(variants.inkLightness - .0722) < .005, 'ink lightness is the relative luminance of the remaining blue artwork')
+  for (const key of ['originalTransparent', 'blackTransparent', 'whiteTransparent', 'whiteOnBlack', 'blackOnWhite']) {
+    assert.deepEqual(await size(variants[key]), { width: 40, height: 20 }, key)
+    assert.equal((await decode(variants[key]))[(5 * 40 + 5) * 4 + 3], 255)
   }
-  assert.deepEqual([...((await decode(variants.blackTransparent)).subarray((15 * 80 + 25) * 4, (15 * 80 + 25) * 4 + 4))], [0, 0, 0, 255])
-  assert.deepEqual([...(await decode(variants.whiteOnBlack)).subarray(0, 4)], [0, 0, 0, 255])
-  assert.deepEqual([...(await decode(variants.blackOnWhite)).subarray(0, 4)], [255, 255, 255, 255])
+  assert.deepEqual([...((await decode(variants.blackTransparent)).subarray((5 * 40 + 5) * 4, (5 * 40 + 5) * 4 + 4))], [0, 0, 0, 255])
+  assert.deepEqual([...(await decode(variants.whiteOnBlack)).subarray(0, 4)], [255, 255, 255, 255])
+  assert.deepEqual([...(await decode(variants.blackOnWhite)).subarray(0, 4)], [0, 0, 0, 255])
 })
 
 test('preserves partial alpha and aspect ratio of transparent artwork', async () => {
@@ -66,7 +70,9 @@ test('badge variants retain the lettering instead of a solid circle',async()=>{
  const input=await sharp(Buffer.from('<svg width="100" height="100"><circle cx="50" cy="50" r="48" fill="black"/><path d="M35 70 V30 L65 70 V30" fill="none" stroke="white" stroke-width="7"/></svg>')).png().toBuffer()
  const result=await createLogoVariants(input)
  const black=await decode(result.blackTransparent),white=await decode(result.whiteTransparent),original=await decode(result.originalTransparent)
- const badge=(50*100+15)*4,ink=(40*100+35)*4
+ // Variants are cropped to the circle; points are taken relative to its centre.
+ const {width:w,height:h}=await size(result.originalTransparent),dx=50-Math.round(w/2),dy=50-Math.round(h/2)
+ const at=(x,y)=>((y-dy)*w+(x-dx))*4,badge=at(15,50),ink=at(35,40)
  assert.equal(original[badge+3],255)
  assert.equal(black[badge+3],0)
  assert.equal(white[badge+3],0)
@@ -77,9 +83,10 @@ test('badge variants retain the lettering instead of a solid circle',async()=>{
 
 test('edge-touching black logo loses its white background',async()=>{
  const input=await sharp(Buffer.from('<svg width="100" height="50"><rect width="100" height="50" fill="white"/><rect x="30" width="35" height="50" fill="black"/></svg>')).png().toBuffer()
- const result=await createLogoVariants(input),white=await decode(result.whiteTransparent),black=await decode(result.blackTransparent)
- assert.equal(white[3],0);assert.equal(black[3],0)
- assert.equal(white[(25*100+45)*4],255);assert.equal(white[(25*100+45)*4+3],255)
+ const result=await createLogoVariants(input),white=await decode(result.whiteTransparent)
+ // Only the 35px black bar remains: the white background was removed and cropped away.
+ assert.deepEqual(await size(result.whiteTransparent),{width:35,height:50})
+ assert.equal(white[(25*35+15)*4],255);assert.equal(white[(25*35+15)*4+3],255)
 })
 
 test('almost opaque logo with transparent corners still has its background removed',async()=>{
@@ -88,9 +95,10 @@ test('almost opaque logo with transparent corners still has its background remov
  for(let y=0;y<height;y++)for(let x=35;x<65;x++){const i=(y*width+x)*4;pixels[i]=pixels[i+1]=pixels[i+2]=0}
  const png=await sharp(pixels,{raw:{width,height,channels:4}}).png().toBuffer()
  const variants=await createLogoVariants(png),white=await decode(variants.whiteTransparent)
- assert.equal(white[(25*width+10)*4+3],0)
- assert.equal(white[(25*width+50)*4+3],255)
- assert.equal(white[(25*width+50)*4],255)
+ // The white field is removed, leaving only the 30px black bar.
+ assert.deepEqual(await size(variants.whiteTransparent),{width:30,height})
+ assert.equal(white[(25*30+15)*4+3],255)
+ assert.equal(white[(25*30+15)*4],255)
 })
 
 test('uploaded photo pixels determine black or white logo independently of page color',async()=>{

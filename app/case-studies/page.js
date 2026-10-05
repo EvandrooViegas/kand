@@ -78,7 +78,7 @@ export default function CaseStudiesPage() {
       <header className="border-b-2 border-foreground/90 bg-[#FAF7F2] dark:bg-[#0E0D0B] sticky top-0 z-20">
         <div className="container max-w-6xl mx-auto py-4 flex items-center justify-between px-4">
           <div className="flex items-center gap-3">
-            <Button variant="ghost" size="icon" onClick={() => router.push('/')}>
+            <Button variant="ghost" size="icon" onClick={() => router.push('/studio')}>
               <ArrowLeft className="w-4 h-4" />
             </Button>
             <KandLogo size={28} />

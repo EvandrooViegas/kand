@@ -75,7 +75,7 @@ export default function CarouselManager() {
   const load = useCallback(async () => {
     const res  = await fetch(`/api/canvases/${id}`)
     const data = await res.json()
-    if (data.error) { toast.error(data.error); router.push('/'); return }
+    if (data.error) { toast.error(data.error); router.push('/studio'); return }
     if (data.pages) data.pages = [...data.pages].sort((a, b) => a.order - b.order)
     setCanvas(data)
     savedStr.current = JSON.stringify(data)
@@ -403,7 +403,7 @@ export default function CarouselManager() {
       {/* ── Header ─────────────────────────────────────────────────── */}
       <header className="border-b-2 border-foreground/90 bg-[#FAF7F2] dark:bg-[#0E0D0B] px-4 py-3 flex items-center justify-between shrink-0">
         <div className="flex items-center gap-3 min-w-0">
-          <Button variant="ghost" size="icon" className="hover:bg-[#D4FF00] hover:text-foreground shrink-0" onClick={() => router.push('/')}><ArrowLeft className="w-4 h-4" /></Button>
+          <Button variant="ghost" size="icon" className="hover:bg-[#D4FF00] hover:text-foreground shrink-0" onClick={() => router.push('/studio')}><ArrowLeft className="w-4 h-4" /></Button>
           <KandLogo size={30} />
           <div className="hidden sm:inline-flex items-center gap-2 px-2.5 py-0.5 border border-indigo-400 rounded-full text-[10px] font-semibold uppercase tracking-widest shrink-0 text-indigo-400">
             <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />

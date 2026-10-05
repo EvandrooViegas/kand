@@ -385,7 +385,7 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
       const res  = await fetch('/api/generate-content-ideas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brandContext,existingTopics:ideas.slice(0,30).map(i=>i.topic) }),
+        body: JSON.stringify({ brandContext,existingTopics:ideas.slice(0,30).map(i=>i.topic),existingIdeas:ideas.slice(0,30).map(i=>({topic:i.topic,pillar:i.pillar,format:i.format,angle:i.angle})) }),
       })
       const data = await res.json()
       if (!res.ok) throw new Error(data.error || 'Failed')

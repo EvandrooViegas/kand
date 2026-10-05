@@ -55,6 +55,11 @@ const someOf = <T extends readonly [string, ...string[]]>(values: T, fallback: T
 export const COMPOSITIONS = ['statement', 'stacked', 'split', 'image-led', 'backdrop-type', 'list', 'closing'] as const
 export const DECORATION_KINDS = ['oversizedType', 'ring', 'circle', 'arc', 'line', 'dotGrid', 'pill', 'cornerBlock', 'frame', 'glow'] as const
 const POSITIONS = ['top-left', 'top-right', 'top-center', 'bottom-left', 'bottom-right', 'bottom-center', 'none'] as const
+/** Color roles a study may use; each resolves to the current brand at generation time. */
+export const COLOR_ROLES = ['surface', 'tint', 'light', 'dark', 'primary', 'accent', 'foreground', 'white'] as const
+const flag = z.preprocess(v => v === true || v === 'true', z.boolean()).catch(false)
+const FLAT_BACKGROUND = { type: 'flat' as const, angle: 180, from: 'surface' as const, to: 'light' as const, intensity: 'subtle' as const }
+const HEADLINE_GRADIENT = { from: 'foreground' as const, to: 'primary' as const, angle: 90 }
 const decorationSchema = z.object({
   kind: z.enum(DECORATION_KINDS),
   placement: oneOf(['behind', 'edge', 'corner', 'around-text', 'background'] as const, 'edge'),
@@ -71,7 +76,9 @@ export const grammarSchema = z.object({
     case: oneOf(['none', 'uppercase'] as const, 'none'),
     tracking: oneOf(['tight', 'normal', 'wide'] as const, 'normal'),
     leading: oneOf(['tight', 'normal', 'loose'] as const, 'tight'),
-  }).catch({ scale: 'large', weight: 'bold', case: 'none', tracking: 'normal', leading: 'tight' }),
+    fill: oneOf(['solid', 'gradient'] as const, 'solid'),
+    gradient: z.object({ from: oneOf(COLOR_ROLES, 'foreground'), to: oneOf(COLOR_ROLES, 'primary'), angle: z.coerce.number().min(0).max(360).catch(90) }).catch(HEADLINE_GRADIENT),
+  }).catch({ scale: 'large', weight: 'bold', case: 'none', tracking: 'normal', leading: 'tight', fill: 'solid', gradient: HEADLINE_GRADIENT }),
   body: z.object({ scale: oneOf(['small', 'medium', 'large'] as const, 'medium') }).catch({ scale: 'medium' }),
   emphasis: oneOf(['none', 'color', 'background', 'underline'] as const, 'color'),
   alignment: someOf(['left', 'center', 'right'] as const, ['left']),
@@ -88,10 +95,41 @@ export const grammarSchema = z.object({
     dominance: oneOf(['supports', 'balanced', 'dominates'] as const, 'balanced'),
     overlay: oneOf(['none', 'gradient', 'solid'] as const, 'none'),
     frequency: oneOf(['every', 'most', 'some', 'rare', 'never'] as const, 'never'),
-  }).catch({ scale: 'none', positions: ['full'], shape: 'rect', overlap: 'none', dominance: 'balanced', overlay: 'none', frequency: 'never' }),
+    tone: oneOf(['color', 'monochrome'] as const, 'color'),
+    // How often subjects are cut out with no background (transparent PNGs on the design surface).
+    // Absent on older studies: it is then read from the imagery prose (see familyCutouts).
+    cutout: z.enum(['never', 'some', 'always']).optional().catch(undefined),
+  }).catch({ scale: 'none', positions: ['full'], shape: 'rect', overlap: 'none', dominance: 'balanced', overlay: 'none', frequency: 'never', tone: 'color' }),
   branding: z.object({ logo: oneOf(POSITIONS, 'top-left'), slideNumber: oneOf(POSITIONS, 'none'), handle: oneOf(POSITIONS, 'none') })
     .catch({ logo: 'top-left', slideNumber: 'none', handle: 'none' }),
   cta: oneOf(['text', 'pill', 'underline', 'arrow'] as const, 'text'),
+  // Surface treatment: flat, or a gradient between two color roles.
+  background: z.object({
+    type: oneOf(['flat', 'linear', 'radial'] as const, 'flat'), angle: z.coerce.number().min(0).max(360).catch(180),
+    from: oneOf(COLOR_ROLES, 'surface'), to: oneOf(COLOR_ROLES, 'light'), intensity: oneOf(['subtle', 'medium', 'strong'] as const, 'subtle'),
+  }).catch(FLAT_BACKGROUND),
+  // Cards and panels: how the language groups content (list rows, a callout, labels, the website handle).
+  containers: z.object({
+    style: oneOf(['none', 'card', 'outline', 'glass'] as const, 'none'), radius: oneOf(['small', 'medium', 'large', 'pill'] as const, 'medium'),
+    fill: oneOf(COLOR_ROLES, 'tint'),
+    use: z.preprocess(v => Array.isArray(v) ? [...new Set(v.filter(x => ['list', 'callout', 'label', 'handle'].includes(x)))] : [], z.array(z.enum(['list', 'callout', 'label', 'handle']))).catch([]),
+  }).catch({ style: 'none', radius: 'medium', fill: 'tint', use: [] }),
+  list: z.object({
+    marker: oneOf(['number', 'check', 'arrow', 'dot'] as const, 'number'), shape: oneOf(['circle', 'square', 'none'] as const, 'circle'),
+    fill: oneOf(['solid', 'outline'] as const, 'solid'), color: oneOf(COLOR_ROLES, 'accent'),
+  }).catch({ marker: 'number', shape: 'circle', fill: 'solid', color: 'accent' }),
+  icons: z.object({
+    header: oneOf(['none', 'arrow', 'plus', 'check'] as const, 'none'), scattered: oneOf(['none', 'link', 'plus', 'spark', 'arrow'] as const, 'none'),
+    opacity: z.coerce.number().min(0).max(100).catch(18),
+  }).catch({ header: 'none', scattered: 'none', opacity: 18 }),
+  // A brand mark inside a solid shape, used as a hero element (e.g. an app-icon style logo tile).
+  badge: oneOf(['none', 'logo'] as const, 'none'),
+  // How each reference is arranged, in order. Generation follows these arrangements first, sized to the real copy.
+  references: z.preprocess(v => Array.isArray(v) ? v.filter(r => r && typeof r === 'object') : [], z.array(z.object({
+    composition: z.enum(COMPOSITIONS).catch('statement'), align: oneOf(['left', 'center', 'right'] as const, 'left'),
+    anchor: oneOf(['top', 'center', 'bottom'] as const, 'center'), image: flag,
+    imagePos: oneOf(['full', 'top', 'bottom', 'left', 'right', 'center'] as const, 'bottom'), callout: flag, badge: flag,
+  })).max(30)).catch([]),
 })
 /**
  * Brand-agnostic design DNA: relationships, roles and behaviour. No hex colors, font names, logos or reference copy.

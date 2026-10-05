@@ -3,10 +3,12 @@ const assert = require('node:assert/strict')
 const {stripTypeScriptTypes} = require('node:module')
 const source = stripTypeScriptTypes(require('node:fs').readFileSync('lib/handlers/copywritingHandler.ts','utf8').replace(/^import .*$/gm,'').replace(/export /g,''))
 const valid = {format:'single',headline:'Supported headline',caption:'Supported caption'}
+const strategyLoad = p => stripTypeScriptTypes(require('node:fs').readFileSync(p,'utf8').replace(/^import .*$/gm,'').replace(/export /g,''))
+const strategy = new Function(strategyLoad('lib/services/contentLanguage.ts') + ';return {contentLanguage,languageIssues,copyTexts}')()
 function setup(outputs, catalog = ['canopylabs/orpheus-v1-english','llama-3.3-70b-versatile'], idea = {format:'single'}) {
  const requests=[]
- const run = new Function('Groq','process','loadGenerationBrandContext','EXTRACTED_CONTEXT_RULES','compactBrand','budgetedModels','budgetedCompletion','NextResponse','corsify','cleanCopy','retrySeconds',source+';return handleGenerateCopywriting')(
-  class {}, {env:{GROQ_API_KEY:'test'}},async()=>({name:'Brand'}),'',x=>x,async()=>({data:catalog.map(id=>({id}))}),async(_,request)=>{requests.push(request);const output=outputs.shift();if(output instanceof Error)throw output;return {choices:[{message:{content:typeof output==='string'?output:JSON.stringify(output)},finish_reason:'stop'}]}}, {json:(body,options)=>({body,status:options?.status||200})},x=>x,x=>x,()=>60)
+ const run = new Function('Groq','process','loadGenerationBrandContext','EXTRACTED_CONTEXT_RULES','compactBrand','budgetedModels','budgetedCompletion','NextResponse','corsify','cleanCopy','retrySeconds',...Object.keys(strategy),source+';return handleGenerateCopywriting')(
+  class {}, {env:{GROQ_API_KEY:'test'}},async()=>({name:'Brand'}),'',x=>x,async()=>({data:catalog.map(id=>({id}))}),async(_,request)=>{requests.push(request);const output=outputs.shift();if(output instanceof Error)throw output;return {choices:[{message:{content:typeof output==='string'?output:JSON.stringify(output)},finish_reason:'stop'}]}}, {json:(body,options)=>({body,status:options?.status||200})},x=>x,x=>x,()=>60,...Object.values(strategy))
  return {requests,run:()=>run({idea},{})}
 }
 test('requests JSON mode with a chat model, excluding speech models',async()=>{
@@ -25,6 +27,21 @@ test('regenerates a wordy carousel cover as a short hook and teaser',async()=>{
 })
 test('rejects invalid output after a bounded retry without returning raw model text',async()=>{
  const {run,requests}=setup(['invalid','null']);const result=await run();assert.equal(result.status,502);assert.equal(requests.length,2);assert.equal(result.body.raw,undefined)
+ assert.match(result.body.error,/\(Expected a copywriting object\)/,'the reason is reported')
+})
+const wordyCover={format:'carousel',slides:[{headline:'A civil construction company can and should also win the digital game',body:'See why',cta:''},{headline:'Start here',body:'Details',cta:''}],caption:'Caption'}
+test('keeps the complete first draft when the corrective retry is rate limited',async()=>{
+ const {run,requests}=setup([wordyCover,Object.assign(new Error('quota'),{status:429})],undefined,{format:'carousel'})
+ const result=await run();assert.equal(result.status,200);assert.equal(requests.length,2);assert.equal(result.body.slides[0].headline,wordyCover.slides[0].headline)
+})
+test('keeps the complete first draft when the corrective retry is malformed',async()=>{
+ const {run,requests}=setup([wordyCover,'invalid'],undefined,{format:'carousel'})
+ const result=await run();assert.equal(result.status,200);assert.equal(requests.length,2);assert.equal(result.body.slides[0].headline,wordyCover.slides[0].headline)
+})
+test('clears a carousel cover CTA without spending a retry',async()=>{
+ const withCta={format:'carousel',slides:[{headline:'Build beyond the jobsite',body:'See what holds growth back.',cta:'Swipe'},{headline:'Start here',body:'Details',cta:''}],caption:'Caption'}
+ const {run,requests}=setup([withCta],undefined,{format:'carousel'})
+ const result=await run();assert.equal(result.status,200);assert.equal(requests.length,1);assert.equal(result.body.slides[0].cta,'')
 })
 test('retries provider JSON validation failures',async()=>{
  const error=Object.assign(new Error('invalid JSON'),{status:400,code:'json_validate_failed'});const {run,requests}=setup([error,valid]);assert.equal((await run()).status,200);assert.equal(requests.length,2)
