@@ -166,7 +166,9 @@ test('admin sessions require the configured key, expire, and reject cross-origin
 })
 
 const STUDY = { personality: 'Calm editorial', composition: 'Headline dominates the upper half', spaceDensity: 'Generous margins', typography: 'Heavy headline, body about a third of its size', colorContrast: 'Light surface with a bright accent highlight on #ffe05b', colorRoles: { background: 'light brand background', foreground: 'dark text', accent: 'bright accent', decoration: 'low-opacity secondary' }, imagery: { mode: 'none', usage: 'Typography only' }, decorative: 'Fine rules', hierarchy: 'Headline, body, CTA', logoPlacement: 'Small anchor top-left', distinctive: ['Highlighted keyword'], familyRules: ['Left aligned text'], variantRules: [], avoid: ['Photography'] }
+const resetVisionBudget = () => { delete globalThis[Symbol.for('kand.vision.input-budget.v2')] }
 function analyzerWith(handler) {
+  resetVisionBudget()
   return load('lib/designs/global/analyze.ts', ['analyzeDesignReferences', 'normalizeReferenceVariant'], {
     ...types, z, ...study,
     Groq: class {}, sharp: () => ({ rotate() { return this }, resize() { return this }, jpeg() { return this }, async toBuffer() { return Buffer.from('image') } }),
@@ -175,7 +177,7 @@ function analyzerWith(handler) {
   })
 }
 const studyResponse = (request, overrides = {}) => {
-  const count = Number(request.messages[0].content.match(/exactly (\d+) reconstructions/)[1])
+  const count = Number(request.messages[0].content.match(/exactly (\d+) reconstructions/)?.[1] || 0)
   return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ name: 'Golden Editorial', description: 'Measured typography and highlights.', tags: ['editorial'], typography: { headingFallback: 'DM Sans', bodyFallback: 'Inter' }, referenceStyle: { primary: '#ffffff', secondary: '#111111', accent: '#ffe05b', background: '#ffffff', textPrimary: '#111111' }, study: STUDY, variants: Array.from({ length: count }, () => ({ observations: 'Headline at x 108 y 360 width 860 height 640.', ...seeds[1].variants[1], imageMode: 'none', nodes: seeds[1].variants[1].nodes.map(n => ({ ...n, x: String(n.x), fontSize: n.fontSize ? `${n.fontSize}px` : undefined })) })), ...overrides }) } }] }
 }
 
@@ -188,7 +190,7 @@ test('design study makes one multimodal call per batch, persists a structured br
     const references = seeds.flatMap(f => f.referenceImages).slice(0, 5)
     const family = await analyzer.analyzeDesignReferences({}, { referenceImages: references })
     assert.equal(family.referenceImages.length, 5); assert.equal(family.variants.length, 5)
-    assert.equal(calls.length, 2, '5 references at 3 per call')
+    assert.equal(calls.length, 3, 'two references per call fit the default 7000-token limit at ~1,800 tokens per image')
     assert.equal(calls.reduce((n, c) => n + c.messages[1].content.filter(item => item.type === 'image_url').length, 0), 5, 'each reference is sent exactly once')
     assert.match(calls[1].messages[1].content[0].text, /Study so far/)
     assert.equal(family.name, 'Golden Editorial')
@@ -213,8 +215,71 @@ test('invalid study output gets one text-only repair without the reference image
     assert.equal(calls.length, 2)
     assert.equal(typeof calls[1].messages[1].content, 'string')
     assert.ok(!calls[1].messages[1].content.includes('data:image'))
+    assert.ok(!calls[1].messages[1].content.includes('"nodes"'), 'reconstructions are not resent in the repair')
+    assert.ok(calls[1].messages[0].content.length + calls[1].messages[1].content.length < calls[0].messages[0].content.length * 1.5, 'the repair is a small request')
     assert.equal(family.study.imagery.mode, 'none')
+    assert.equal(family.variants.length, 2, 'reconstructions from the first answer are kept')
   } finally { if (oldKey === undefined) delete process.env.GROQ_API_KEY; else process.env.GROQ_API_KEY = oldKey }
+})
+
+// Measured on qwen/qwen3.8-27b: ~1,800 input tokens per image regardless of size; instructions ~4 characters per token.
+const IMAGE_TOKENS = 1800
+const estimateInput = request => request.messages.reduce((n, m) => n + (typeof m.content === 'string' ? Math.ceil(m.content.length / 3.5) : m.content.reduce((t, item) => t + (item.type === 'text' ? Math.ceil(item.text.length / 3.5) : IMAGE_TOKENS + 12), 0)), 0)
+const imagesIn = request => request.messages[1].content.filter(item => item.type === 'image_url').length
+const studyAnalyzer = (budgetedCompletion, sides = []) => load('lib/designs/global/analyze.ts', ['analyzeDesignReferences'], {
+  ...types, z, ...study, Groq: class {}, readFile: async () => Buffer.from('reference'), join: require('node:path').join, randomUUID: crypto.randomUUID, retrySeconds: () => 1,
+  sharp: () => ({ rotate() { return this }, resize(o) { sides.push(o.width); return this }, jpeg() { return this }, async toBuffer() { return Buffer.from('image') } }),
+  budgetedCompletion,
+})
+
+test('study requests fit the input-token limit by batching references, and images keep full quality', async () => {
+  const calls = [], sides = []
+  const oldKey = process.env.GROQ_API_KEY, oldLimit = process.env.GROQ_DESIGN_VISION_INPUT_LIMIT
+  process.env.GROQ_API_KEY = 'test-only'; process.env.GROQ_DESIGN_VISION_INPUT_LIMIT = '7000'
+  resetVisionBudget()
+  const analyzer = studyAnalyzer(async (_client, request) => { calls.push(request); return studyResponse(request) }, sides)
+  try {
+    const references = seeds.flatMap(f => f.referenceImages).slice(0, 5)
+    const family = await analyzer.analyzeDesignReferences({}, { referenceImages: references })
+    assert.equal(family.referenceImages.length, 5)
+    assert.equal(calls.reduce((n, c) => n + imagesIn(c), 0), 5, 'every reference is studied exactly once')
+    assert.ok(calls.every(c => imagesIn(c) <= 2), 'three images would exceed 7000 tokens, so at most two share a request')
+    assert.ok(calls.every(c => estimateInput(c) <= 7000 * .95), 'each request fits the limit')
+    assert.ok(sides.every(side => side === 1350), 'images are not downscaled: it would cost the same and lose detail')
+  } finally {
+    resetVisionBudget()
+    if (oldKey === undefined) delete process.env.GROQ_API_KEY; else process.env.GROQ_API_KEY = oldKey
+    if (oldLimit === undefined) delete process.env.GROQ_DESIGN_VISION_INPUT_LIMIT; else process.env.GROQ_DESIGN_VISION_INPUT_LIMIT = oldLimit
+  }
+})
+
+test('a "request too large" answer teaches the real limit, retries once with fewer references, and never inflates without bound', async () => {
+  const calls = []
+  const oldKey = process.env.GROQ_API_KEY
+  process.env.GROQ_API_KEY = 'test-only'
+  resetVisionBudget()
+  const analyzer = studyAnalyzer(async (_client, request) => {
+    calls.push(request)
+    // The exact rejection reported for qwen/qwen3.8-27b on the on_demand tier.
+    if (calls.length === 1) throw Object.assign(new Error('too large'), { status: 413, limitTokens: 7000, requestedTokens: 7850 })
+    return { ...studyResponse(request), usage: { prompt_tokens: 3500 } }
+  })
+  try {
+    const family = await analyzer.analyzeDesignReferences({}, { referenceImages: seeds[0].referenceImages })
+    assert.ok(family.study)
+    assert.ok(imagesIn(calls[1]) < imagesIn(calls[0]), 'the retry carries fewer references')
+    // A huge reported size is capped: one reference must still fit afterwards instead of failing every study.
+    resetVisionBudget()
+    let first = true
+    const recovering = studyAnalyzer(async (_client, request) => {
+      if (first) { first = false; throw Object.assign(new Error('too large'), { status: 413, limitTokens: 7000, requestedTokens: 60000 }) }
+      return studyResponse(request)
+    })
+    assert.ok((await recovering.analyzeDesignReferences({}, { referenceImages: seeds[0].referenceImages })).study)
+    // A second rejection is not retried again.
+    const stubborn = studyAnalyzer(async () => { throw Object.assign(new Error('The request is larger than your Groq plan allows'), { status: 413, limitTokens: 7000, requestedTokens: 7100 }) })
+    await assert.rejects(stubborn.analyzeDesignReferences({}, { referenceImages: seeds[0].referenceImages }), /larger than your Groq plan allows/)
+  } finally { resetVisionBudget(); if (oldKey === undefined) delete process.env.GROQ_API_KEY; else process.env.GROQ_API_KEY = oldKey }
 })
 
 test('a single reference becomes a complete study that composes a whole carousel', async () => {

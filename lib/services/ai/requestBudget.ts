@@ -13,6 +13,14 @@ export function retrySeconds(error:any) {
  const seconds=[...duration.matchAll(/([\d.]+)([hms])/g)].reduce((n,m)=>n+Number(m[1])*({h:3600,m:60,s:1}[m[2]]||1),0)
  return Math.max(1,Math.ceil(header||seconds||60))
 }
+/** A request above the per-minute input cap is rejected outright; waiting never helps, so say what to change. */
+export function tooLarge(error:any,model?:string) {
+ const message=error.error?.error?.message||error.message||''
+ const match=message.match(/Limit\s+(\d+),\s*Requested\s+(\d+)/i)
+ const limitTokens=match?Number(match[1]):undefined,requestedTokens=match?Number(match[2]):undefined
+ const detail=match?` (this request needed about ${requestedTokens} input tokens; the limit is ${limitTokens} per minute)`:''
+ return Object.assign(new Error(`The request is larger than your Groq plan allows for ${model||'this model'}${detail}. Use fewer or smaller inputs, choose a model with a higher limit, or upgrade the Groq plan.`),{status:413,limitTokens,requestedTokens,cause:error})
+}
 export async function budgetedCompletion(groq:any,request:any,backups?:any[],operation='completion') {
  const run=async()=>{
   const keys=groqKeys()
@@ -35,6 +43,7 @@ export async function budgetedCompletion(groq:any,request:any,backups?:any[],ope
    catch(error:any){
     if(error.status===429){state.cooldowns.set(id,Date.now()+retrySeconds(error)*1000);continue}
     if(error.status===401){authError=error;state.cooldowns.set(id,Date.now()+60000);continue}
+    if(error.status===413)throw tooLarge(error,request?.model)
     throw error
    }
   }

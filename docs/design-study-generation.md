@@ -50,9 +50,12 @@ Families saved before grammars existed (and the bundled seeds before version 3) 
 
 ## Study creation (`lib/designs/global/analyze.ts`)
 
-- **One Groq multimodal call per batch** of references (`GROQ_DESIGN_VISION_MAX_IMAGES`, default 3). One or more references are accepted.
-  - References in a call are studied together. Later batches receive the study so far and revise it.
-  - Repeating characteristics become recurring rules. Differences become flexible rules or grammar options, never separate templates.
+- **One Groq multimodal call per batch** of references (at most `GROQ_DESIGN_VISION_MAX_IMAGES`, default 3). One or more references are accepted.
+- **Every request fits the model's input-token limit** (`GROQ_DESIGN_VISION_INPUT_LIMIT`, default 7000, the on-demand limit for `qwen/qwen3.8-27b`).
+  - Measured on that model: each image costs ~1,794 input tokens regardless of its size (the model rescales internally), and the instructions are ~1,650 tokens. Downscaling saves nothing, so images are sent at full quality and the batch size is the only lever: two references per request fit 7000 (a measured two-reference request is 5,281 tokens).
+  - Estimates use 3.5 characters per text token and `GROQ_DESIGN_VISION_IMAGE_TOKENS` (default 1800) per image. Each successful call refines a bounded correction from the token count Groq reports.
+  - If Groq still answers 413 "Request too large", its reported limit is learned and the batch is retried once with fewer references. A 413 is rejected before processing, so nothing is spent.
+  - Limits apply per Groq organization, so a second API key from the same organization does not raise them; keys from separate accounts only help with per-minute waits between batches.
 - **At most one text-only repair** when the output is invalid. Images are never resent.
 - `reconcileStudy` then completes the grammar and removes literal hex colours from the study text.
 - `referenceStyle` and `typography.*Fallback` are used only for unbranded library previews.

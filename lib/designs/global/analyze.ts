@@ -103,16 +103,31 @@ export function assignMissingSlots(variant: any, role: string, width: number, he
   return { ...variant, nodes }
 }
 
-async function referenceData(db: any, ref: ReferenceImage) {
-  let bytes: Buffer
+async function referenceBytes(db: any, ref: ReferenceImage): Promise<Buffer> {
   if (ref.url.startsWith('/api/uploads/')) {
     const upload = await db.collection('uploads').findOne({ id: ref.url.split('/').pop() })
     if (!upload) throw new Error(`Reference ${ref.name} is missing. Upload it again.`)
-    bytes = upload.bytes && typeof upload.bytes.value === 'function' ? Buffer.from(upload.bytes.value()) : Buffer.from(upload.bytes)
-  } else bytes = await readFile(join(process.cwd(), 'public', ref.url.replace(/^\//, '')))
+    return upload.bytes && typeof upload.bytes.value === 'function' ? Buffer.from(upload.bytes.value()) : Buffer.from(upload.bytes)
+  }
+  return readFile(join(process.cwd(), 'public', ref.url.replace(/^\//, '')))
+}
+async function encodeReference(bytes: Buffer) {
   const resized = await sharp(bytes).rotate().resize({ width: 1350, height: 1350, fit: 'inside', withoutEnlargement: true }).jpeg({ quality: 88 }).toBuffer()
   return `data:image/jpeg;base64,${resized.toString('base64')}`
 }
+
+// Input-token budgeting. Providers cap input tokens per minute per model; a request above the cap is rejected
+// outright (413), so waiting never helps. Measured on qwen/qwen3.8-27b: every image costs the same ~1,794 tokens
+// whatever its size (the model rescales internally), and the instructions run ~4 characters per token. Downscaling
+// therefore saves nothing; the only lever is how many references share a request.
+const TEXT_CHARS_PER_TOKEN = 3.5
+const textTokens = (text: string) => Math.ceil(text.length / TEXT_CHARS_PER_TOKEN)
+const imageTokens = () => Number(process.env.GROQ_DESIGN_VISION_IMAGE_TOKENS) || 1800
+const budgetState = ((globalThis as any)[Symbol.for('kand.vision.input-budget.v2')] ||= { ratio: {} as Record<string, number>, limits: {} as Record<string, number> })
+const inputLimit = (model: string) => budgetState.limits[model] || Number(process.env.GROQ_DESIGN_VISION_INPUT_LIMIT) || 7000
+// Learned corrections are bounded so one odd answer can never make every later request look too large.
+const learnRatio = (model: string, actual: number, estimate: number) => { if (actual > 0 && estimate > 0) budgetState.ratio[model] = Math.min(1.5, Math.max(.75, actual / estimate)) }
+const ratioFor = (model: string) => budgetState.ratio[model] || 1
 
 const GRAMMAR_SHAPE = `grammar:{compositions:[${COMPOSITIONS.map(c => `"${c}"`).join('|')}],headline:{scale:"medium"|"large"|"veryLarge"|"oversized",weight:"regular"|"bold"|"black",case:"none"|"uppercase",tracking:"tight"|"normal"|"wide",leading:"tight"|"normal"|"loose"},body:{scale:"small"|"medium"|"large"},emphasis:"none"|"color"|"background"|"underline",alignment:["left"|"center"|"right"],anchors:["top"|"center"|"bottom"],margin:"tight"|"standard"|"generous",density:"airy"|"balanced"|"dense",surfaces:["dark"|"light"|"brand"],decorations:[{kind:${DECORATION_KINDS.map(k => `"${k}"`).join('|')},placement:"behind"|"edge"|"corner"|"around-text"|"background",scale:"small"|"medium"|"large"|"oversized",opacity:0-100,color:"accent"|"foreground"|"surfaceTone",frequency:"every"|"some"}],imagery:{scale:"none"|"small"|"medium"|"large"|"dominant",positions:["full"|"top"|"bottom"|"left"|"right"|"center"],shape:"rect"|"rounded"|"circle"|"pill"|"arch",overlap:"none"|"text"|"edge",dominance:"supports"|"balanced"|"dominates",overlay:"none"|"gradient"|"solid",frequency:"every"|"most"|"some"|"rare"|"never"},branding:{logo,slideNumber,handle each "top-left"|"top-right"|"top-center"|"bottom-left"|"bottom-right"|"bottom-center"|"none"},cta:"text"|"pill"|"underline"|"arrow"}`
 const STUDY_SHAPE = `study:{personality,composition,spaceDensity,typography,colorContrast,colorRoles:{background,foreground,accent,decoration},imagery:{mode:"none"|"background"|"fullBleed"|"cutout"|"contained"|"collage"|"mixed"|"other",usage,placement,cropBehavior,subjectPlacement,textRelationship,overlayTreatment,frequency,notes},decorative,hierarchy,logoPlacement,distinctive:[string],familyRules:[string],variantRules:[string],avoid:[string],${GRAMMAR_SHAPE}}`
@@ -138,7 +153,8 @@ Nodes: id,type ("text"|"shape"|"image"|"gradient"),x,y,width,height (JSON number
 Return JSON {${first ? 'name (short distinctive style name, not from filenames or image text),description,tags:[string],typography:{headingFallback,bodyFallback} (closest Google fonts, preview only),referenceStyle:{primary,secondary,accent,background,textPrimary} (six-digit hex, preview only),' : ''}${STUDY_SHAPE},reconstructions:[{observations,name,role:"cover"|"content"|"list"|"quote"|"cta",background,nodes,patterns}]} with exactly ${count} reconstructions. No Markdown.`
 
 /**
- * One multimodal call per batch of references (default: all of up to 3 references in one call).
+ * One multimodal call per batch of references. The batch size is chosen so every request fits the model's
+ * input-token limit (GROQ_DESIGN_VISION_INPUT_LIMIT, learned from the provider when it differs).
  * The study is persisted and reused; generation never sends reference images again.
  */
 export async function analyzeDesignReferences(db: any, input: any) {
@@ -149,7 +165,7 @@ export async function analyzeDesignReferences(db: any, input: any) {
   const perCall = Math.max(1, Math.min(5, Number(process.env.GROQ_DESIGN_VISION_MAX_IMAGES) || 3))
   const groq = new Groq({ apiKey: key, maxRetries: 0 })
   const width = 1080, height = Math.max(320, Math.min(4096, Math.round(width * refs[0].height / refs[0].width)))
-  const images = await Promise.all(refs.map(ref => referenceData(db, ref)))
+  const originals = await Promise.all(refs.map(ref => referenceBytes(db, ref)))
   const complete = async (request: any, purpose: string, withImages: boolean) => {
     console.info(`[ai-call] service=groq model=${model} purpose=${purpose} referenceImages=${withImages}`)
     try { return await budgetedCompletion(groq, request) }
@@ -162,51 +178,79 @@ export async function analyzeDesignReferences(db: any, input: any) {
   }
   const variants: any[] = [], observations: string[] = []
   let identity: any, study: any
-  for (let index = 0; index < refs.length; index += perCall) {
-    const targets = refs.map((_, i) => i).slice(index, index + perCall)
+  for (let index = 0; index < refs.length;) {
     const first = index === 0
-    const validate = (parsed: any) => {
-      parsed.reconstructions ??= parsed.variants
-      if (!Array.isArray(parsed.reconstructions) || parsed.reconstructions.length !== targets.length) throw Error(`Return exactly ${targets.length} reconstructions, one per TARGET.`)
+    const remaining = refs.slice(index)
+    const userText = (targets: number[]) => `${refs.length} references in this family. TARGETS in this request: ${targets.map(i => `reference ${i + 1}`).join(', ')}.${study ? ` Study so far from earlier references (revise it so recurring rules hold for ALL references and differences become flexible rules or grammar options, never separate templates; return the complete updated study): ${JSON.stringify(study)}` : ''}`
+    let response: any, targets: number[] = [], request: any
+    for (let attempt = 0; ; attempt++) {
+      const limit = inputLimit(model), ratio = ratioFor(model)
+      const allTargets = remaining.map((_, i) => index + i)
+      const cost = (count: number) => Math.ceil((textTokens(studyPrompt(width, height, count, first)) + textTokens(userText(allTargets.slice(0, count))) + count * (imageTokens() + 12)) * ratio)
+      let count = Math.min(perCall, remaining.length)
+      while (count > 1 && cost(count) > limit * .95) count--
+      if (cost(count) > limit * .95) throw Object.assign(new Error(`One reference plus the study instructions needs about ${cost(1)} input tokens, above ${model}'s limit of ${limit} per minute on your Groq plan. Use a vision model with a higher limit (GROQ_DESIGN_VISION_MODEL) or upgrade the Groq plan.`), { status: 413 })
+      targets = allTargets.slice(0, count)
+      const images = await Promise.all(targets.map(i => encodeReference(originals[i])))
+      request = { model, temperature: .15, max_tokens: Number(process.env.GROQ_DESIGN_VISION_MAX_TOKENS) || 16000, response_format: { type: 'json_object' }, messages: [
+        { role: 'system', content: studyPrompt(width, height, targets.length, first) },
+        { role: 'user', content: [
+          { type: 'text', text: userText(targets) },
+          ...targets.flatMap((i, n) => [{ type: 'text', text: `Reference ${i + 1}` }, { type: 'image_url', image_url: { url: images[n] } }]),
+        ] },
+      ] }
+      const estimate = Math.ceil(cost(count) / ratio)
+      console.info(`[design-study] batch=${targets.map(i => i + 1).join(',')} estimatedInput=${cost(count)} limit=${limit}`)
+      try {
+        response = await complete(request, 'design-study', true)
+        learnRatio(model, response.usage?.prompt_tokens, estimate)
+        break
+      } catch (error: any) {
+        // The provider reports its real limit and our real size: learn both, then retry once with fewer references.
+        if (error.status !== 413 || !error.requestedTokens || attempt) throw error
+        if (error.limitTokens) budgetState.limits[model] = error.limitTokens
+        learnRatio(model, error.requestedTokens, estimate)
+      }
+    }
+    const validate = (parsed: any, fallback: any[] = []) => {
+      const listed = [parsed.reconstructions, parsed.variants].find(list => Array.isArray(list) && list.length)
+      parsed.reconstructions = listed || fallback
       const out = z.object({ study: studySchema }).parse(parsed)
       if (first) z.object({ name: z.string().trim().min(3).max(100), description: z.string().max(3000), tags: z.array(z.string().max(40)).max(12), typography: familySchema.innerType().shape.typography, referenceStyle: familySchema.innerType().shape.referenceStyle.unwrap() }).parse(parsed)
-      // Reconstructions are review evidence. One that cannot be rebuilt is dropped; it never discards the study.
-      const built = parsed.reconstructions.flatMap((variant: any, offset: number) => {
-        const i = targets[offset], role = variantSchema.innerType().shape.role.safeParse(variant.role).success ? variant.role : 'content'
+      // Reconstructions are review evidence. Missing or unusable ones are dropped; they never discard the study.
+      const reconstructions = (Array.isArray(parsed.reconstructions) ? parsed.reconstructions : []).slice(0, targets.length)
+      const built = reconstructions.flatMap((variant: any, offset: number) => {
+        const i = targets[offset], role = variantSchema.innerType().shape.role.safeParse(variant?.role).success ? variant.role : 'content'
         try {
           const rebuilt = variantSchema.parse(expandReferencePatterns(assignMissingSlots(normalizeReferenceVariant({ ...variant, observations: undefined, id: `reference-${i + 1}`, name: String(variant.name || `Reference ${i + 1}`).slice(0, 80), role }), role, width, height)))
           return rebuilt.nodes.some(n => n.type === 'text' && (n.x < 0 || n.y < 0 || n.x + n.width > width || n.y + n.height > height)) ? [] : [rebuilt]
         } catch { return [] }
       })
-      return { parsed, study: out.study, built }
+      return { parsed: { ...parsed, reconstructions }, study: out.study, built }
     }
-    const request: any = { model, temperature: .15, max_tokens: Number(process.env.GROQ_DESIGN_VISION_MAX_TOKENS) || 16000, response_format: { type: 'json_object' }, messages: [
-      { role: 'system', content: studyPrompt(width, height, targets.length, first) },
-      { role: 'user', content: [
-        { type: 'text', text: `${refs.length} references in this family. TARGETS in this request: ${targets.map(i => `reference ${i + 1}`).join(', ')}.${study ? ` Study so far from earlier references (revise it so recurring rules hold for ALL references and differences become flexible rules or grammar options, never separate templates; return the complete updated study): ${JSON.stringify(study)}` : ''}` },
-        ...targets.flatMap(i => [{ type: 'text', text: `Reference ${i + 1}` }, { type: 'image_url', image_url: { url: images[i] } }]),
-      ] },
-    ] }
-    const response = await complete(request, 'design-study', true)
     const choice = response.choices[0]
     if (choice?.finish_reason === 'length') throw Object.assign(new Error('The design study response was truncated. Analyze fewer references at once (GROQ_DESIGN_VISION_MAX_IMAGES) or raise GROQ_DESIGN_VISION_MAX_TOKENS.'), { status: 502 })
     const content = choice?.message?.content || '{}'
     let result: any
     try { result = validate(JSON.parse(content)) }
     catch (error: any) {
-      // Text-only repair: the reference images are never resent.
-      const problems = String(error.issues?.map((issue: any) => issue.path.join('.') + ': ' + issue.message).slice(0, 8).join('; ') || error.message).slice(0, 1800)
-      const repaired = await complete({ ...request, messages: [
-        { role: 'system', content: studyPrompt(width, height, targets.length, first) },
-        { role: 'user', content: `This design-study JSON failed validation: ${problems}. Correct only what is invalid; keep the study, grammar, every measured node and observation. Return the complete JSON.\n${content}` },
+      // Text-only repair of the study alone: no images and no reconstructions are resent, so it stays small.
+      let original: any = {}
+      try { original = JSON.parse(content) } catch {}
+      const { reconstructions, variants: _ignored, ...studyOnly } = original
+      const problems = String(error.issues?.map((issue: any) => issue.path.join('.') + ': ' + issue.message).slice(0, 8).join('; ') || error.message).slice(0, 1200)
+      const repaired = await complete({ model, temperature: 0, max_tokens: 6000, response_format: { type: 'json_object' }, messages: [
+        { role: 'system', content: `Repair a design-study JSON object so it matches this shape: {${first ? 'name,description,tags:[string],typography:{headingFallback,bodyFallback},referenceStyle:{primary,secondary,accent,background,textPrimary} (six-digit hex),' : ''}${STUDY_SHAPE}}. Keep every valid value; fix only what is listed. Never add hex colors, font names or brand names inside the study. Return JSON only.` },
+        { role: 'user', content: `Problems: ${problems}\n${Object.keys(studyOnly).length ? JSON.stringify(studyOnly) : content.slice(0, 12000)}` },
       ] }, 'design-study-format-repair', false)
-      try { result = validate(JSON.parse(repaired.choices[0]?.message?.content || '{}')) }
+      try { result = validate(JSON.parse(repaired.choices[0]?.message?.content || '{}'), Array.isArray(reconstructions) ? reconstructions : original.variants) }
       catch (again: any) { throw Object.assign(new Error(`Could not study the references: ${again.issues?.[0]?.message || again.message}. Try another vision model or review the references.`), { status: 502 }) }
     }
     if (first) identity = result.parsed
     study = result.study
     variants.push(...result.built)
-    observations.push(...result.parsed.reconstructions.map((v: any, offset: number) => `${refs[targets[offset]].name}: ${String(v.observations || '').slice(0, 3000)}`))
+    observations.push(...result.parsed.reconstructions.map((v: any, offset: number) => `${refs[targets[offset]].name}: ${String(v?.observations || '').slice(0, 3000)}`))
+    index += targets.length
   }
   const family = reconcileStudy({ id: `family-${randomUUID()}`, schemaVersion: 1, version: 1, name: identity.name, description: identity.description, tags: identity.tags, width, height, typography: identity.typography, referenceStyle: identity.referenceStyle, referenceImages: refs, analysis: observations.join('\n\n').slice(0, 12000), study, variants } as any)
   return familySchema.parse(family)
