@@ -158,6 +158,7 @@ async function searchUnsplash(slot:VisualSlot,key:string,used:Set<string>):Promi
 }
 
 async function searchStock(slot:VisualSlot,unsplashKey:string|null,pexelsKey:string|null,used:Set<string>):Promise<ResolvedAsset|null> {
+  console.info(`[asset-call] service=${[unsplashKey&&'unsplash',pexelsKey&&'pexels'].filter(Boolean).join('+')} purpose=stock-photo-search slot=${slot.slot_id}`)
   const results=await Promise.allSettled([
     unsplashKey?stockCandidates(slot,'unsplash',unsplashKey,used):Promise.resolve([]),
     pexelsKey?stockCandidates(slot,'pexels',pexelsKey,used):Promise.resolve([]),
@@ -236,6 +237,7 @@ async function generateImageFal(
 async function generateImageOpenAI(prompt: string, transparent: boolean): Promise<ResolvedAsset> {
   const key = process.env.OPENAI_API_KEY
   if (!key) throw new Error('GPT Image 2.5 requires OPENAI_API_KEY in the server environment')
+  console.info(`[ai-call] service=openai purpose=image-generation transparent=${transparent} referenceImages=false`)
   const res = await fetch('https://api.openai.com/v1/images/generations', {
     method: 'POST', signal: AbortSignal.timeout(180000),
     headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },

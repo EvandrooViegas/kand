@@ -1,4 +1,4 @@
-import type { GlobalDesignFamily, TemplateNode, DesignVariant } from './types'
+import type { GlobalDesignFamily, TemplateNode, DesignVariant, DesignStudy } from './types'
 
 const text = (id: string, slot: string, x: number, y: number, width: number, height: number, fontSize: number, options: Partial<TemplateNode> = {}): TemplateNode => ({ id, type: 'text', text: `{{${slot}}}`, x, y, width, height, fontSize, minFontSize: Math.max(22, Math.round(fontSize * .58)), fontFamily: 'brand.headingFont', fontWeight: 700, lineHeight: 1.04, color: 'brand.textPrimary', ...options })
 const rect = (id: string, x: number, y: number, width: number, height: number, options: Partial<TemplateNode> = {}): TemplateNode => ({ id, type: 'shape', shape: 'rect', x, y, width, height, fill: 'brand.accent', ...options })
@@ -53,17 +53,84 @@ const photoBase = (): TemplateNode[] => [
 const photoCover: DesignVariant = { id: 'cover', name: 'Full-bleed serif cover', role: 'cover', background: 'brand.overlay', nodes: [...photoBase(), text('headline', 'headline', 108, 312, 820, 348, 170, { fontWeight: 400, color: 'brand.onImage', letterSpacing: -5, lineHeight: 1.03 }), text('body', 'body', 126, 695, 780, 100, 34, { fontStyle: 'italic', color: 'brand.onImage', optional: true }), text('author', 'author', 116, 1160, 650, 90, 34, { color: 'brand.onImage', optional: true })] }
 const photoContent: DesignVariant = { id: 'content', name: 'Photo with two-column reading', role: 'content', background: 'brand.overlay', nodes: [...photoBase().map(n => n.id === 'shade' ? { ...n, angle: 180, stops: [{ color: 'brand.overlay' as const, position: 0, alpha: 80 }, { color: 'brand.overlay' as const, position: 100, alpha: 8 }] } : n), text('eyebrow', 'eyebrow', 800, 106, 172, 90, 30, { fontStyle: 'italic', color: 'brand.onImage', textAlign: 'right', optional: true }), text('headline', 'headline', 108, 300, 430, 230, 102, { fontWeight: 400, color: 'brand.onImage' }), text('body', 'body', 602, 324, 370, 286, 28, { ...body, fontFamily: 'brand.headingFont', color: 'brand.onImage', textAlign: 'right', optional: true })] }
 
-function variants(cover: DesignVariant, content: DesignVariant): DesignVariant[] {
-  // Optional copy fits in reserved whitespace; reference covers may omit it.
-  if (!cover.nodes.some(n => n.text?.includes('{{body}}'))) cover = { ...cover, nodes: [...cover.nodes, text('body', 'body', 110, cover.background === 'brand.primary' ? 926 : 1050, 850, 86, 30, { ...body, optional: true })] }
-  if (!content.nodes.some(n => n.text?.includes('{{cta}}'))) content = { ...content, nodes: [...content.nodes, text('cta', 'cta', 110, 1230, 860, 66, 26, { ...body, color: content.background === 'brand.overlay' ? 'brand.onImage' : 'brand.textPrimary', optional: true })] }
-  return [cover, content,
-    { ...content, id: 'list', role: 'list', name: 'Steps', nodes: content.nodes.map(n => n.id === 'body' ? { ...n, fontSize: Math.min(n.fontSize || 40, 38) } : n) },
-    { ...content, id: 'cta', role: 'cta', name: 'Closing invitation', nodes: content.nodes.map(n => n.id === 'body' ? { ...n, text: '{{body}}\n{{cta}}' } : n.id === 'cta' ? { ...n, text: '{{brand.website}}' } : n) },
-  ]
+// The two references of each family are kept as reconstructions for review. Generation composes from the study.
+const reconstructions = (cover: DesignVariant, content: DesignVariant): DesignVariant[] => [{ ...cover, id: 'reference-1' }, { ...content, id: 'reference-2' }]
+const imagery = (mode: DesignStudy['imagery']['mode'], fields: Partial<DesignStudy['imagery']> = {}) => ({ mode, usage: '', placement: '', cropBehavior: '', subjectPlacement: '', textRelationship: '', overlayTreatment: '', frequency: '', notes: '', ...fields })
+
+const timelineStudy: DesignStudy = {
+  personality: 'Bold, energetic and structured; reads like a confident progress report.',
+  composition: 'Typography dominates; copy sits in the middle band with a strong structural motif (timeline, connectors) anchoring the lower area.',
+  spaceDensity: 'Dense texture behind generous text areas; margins about 10% of the width.',
+  typography: 'Very large uppercase heavy headline with tight leading and negative tracking; body around a third of the headline size.',
+  colorContrast: 'Saturated brand surface with high-contrast light text; one accent word in the headline.',
+  colorRoles: { background: 'saturated brand primary', foreground: 'high-contrast light on primary', accent: 'brand accent on one headline word', decoration: 'low-opacity secondary texture' },
+  imagery: imagery('none', { usage: 'Typography and geometric motifs only.' }),
+  decorative: 'A fading field of small geometric marks, outlined pill labels and ring-and-line connectors.',
+  hierarchy: 'Slide number and label, then the headline, then compact body copy.',
+  logoPlacement: 'No logo; a large slide number anchors the top-right corner.',
+  distinctive: ['Fading geometric texture', 'Huge slide numbers', 'Ring and line connectors'],
+  familyRules: ['Uppercase heavy headline dominates every slide', 'Saturated brand surface', 'Texture density changes but never disappears', 'Large slide number top-right'],
+  variantRules: ['Headline can sit high or centred', 'Connectors and rings move to whichever corner the copy leaves free', 'List slides may use ring markers'],
+  avoid: ['Small or lowercase headlines', 'Photography', 'More than one accent colour', 'Texture behind body copy at full strength'],
+  grammar: {
+    compositions: ['statement', 'stacked', 'backdrop-type', 'list', 'closing'],
+    headline: { scale: 'veryLarge', weight: 'black', case: 'uppercase', tracking: 'tight', leading: 'tight' }, body: { scale: 'medium' },
+    emphasis: 'color', alignment: ['left'], anchors: ['center', 'top'], margin: 'generous', density: 'balanced', surfaces: ['brand', 'dark'],
+    decorations: [{ kind: 'dotGrid', placement: 'background', scale: 'oversized', opacity: 22, color: 'surfaceTone', frequency: 'every' }, { kind: 'ring', placement: 'edge', scale: 'small', opacity: 100, color: 'foreground', frequency: 'some' }, { kind: 'pill', placement: 'corner', scale: 'small', opacity: 100, color: 'foreground', frequency: 'every' }],
+    imagery: { scale: 'none', positions: ['full'], shape: 'rect', overlap: 'none', dominance: 'balanced', overlay: 'none', frequency: 'never' },
+    branding: { logo: 'none', slideNumber: 'top-right', handle: 'none' }, cta: 'pill',
+  },
+}
+const editorialStudy: DesignStudy = {
+  personality: 'Calm, clear and editorial; a confident teacher rather than a salesperson.',
+  composition: 'Large headline over generous white space; supporting copy below with an annotation gesture.',
+  spaceDensity: 'Airy; generous margins and a lot of negative space.',
+  typography: 'Oversized sans-serif headline, regular-weight body about a third of its size.',
+  colorContrast: 'Light surface, dark text, a marker-style accent highlight behind one or two words.',
+  colorRoles: { background: 'light brand background', foreground: 'dark brand text', accent: 'marker highlight in the brand accent', decoration: 'thin dark annotation lines' },
+  imagery: imagery('none', { usage: 'Typography only.' }),
+  decorative: 'Marker highlights and a thin hand-drawn style annotation line.',
+  hierarchy: 'Headline, then body, then a quiet footer with brand and website.',
+  logoPlacement: 'Small brand name top-left, slide counter top-right, website bottom-left.',
+  distinctive: ['Marker highlight behind key words', 'Quiet header and footer frame'],
+  familyRules: ['Light surface with dark type', 'Marker highlight on one or two words', 'Header and footer stay quiet'],
+  variantRules: ['Headline may fill the slide or share it with body copy', 'Annotation line moves to the free side'],
+  avoid: ['Dark backgrounds', 'Photography', 'Highlighting whole sentences', 'Crowded layouts'],
+  grammar: {
+    compositions: ['statement', 'stacked', 'list', 'closing'],
+    headline: { scale: 'veryLarge', weight: 'bold', case: 'none', tracking: 'tight', leading: 'normal' }, body: { scale: 'medium' },
+    emphasis: 'background', alignment: ['left'], anchors: ['center', 'top'], margin: 'generous', density: 'airy', surfaces: ['light'],
+    decorations: [{ kind: 'line', placement: 'around-text', scale: 'medium', opacity: 100, color: 'foreground', frequency: 'every' }],
+    imagery: { scale: 'none', positions: ['full'], shape: 'rect', overlap: 'none', dominance: 'balanced', overlay: 'none', frequency: 'never' },
+    branding: { logo: 'top-left', slideNumber: 'top-right', handle: 'bottom-left' }, cta: 'underline',
+  },
+}
+const serifStudy: DesignStudy = {
+  personality: 'Calm, aspirational and editorial lifestyle.',
+  composition: 'Photography fills the canvas; copy sits on its quiet side with directional shading.',
+  spaceDensity: 'Generous; copy occupies a compact block.',
+  typography: 'Large regular-weight serif headline; small italic supporting line.',
+  colorContrast: 'Light text over darkened photography.',
+  colorRoles: { background: 'full-bleed photograph', foreground: 'light text on image', accent: 'none beyond type', decoration: 'dark directional overlay' },
+  imagery: imagery('background', { usage: 'Every slide is a full-bleed photograph.', cropBehavior: 'Edge-to-edge crops that keep the subject away from the copy.', textRelationship: 'Copy sits over the quiet, shaded part of the photo.', overlayTreatment: 'Directional dark gradient toward the copy.', frequency: 'Every slide.' }),
+  decorative: 'None beyond shading; the photograph is the decoration.',
+  hierarchy: 'Headline, then a short italic line, then small branding.',
+  logoPlacement: 'Small logo top-left on the image.',
+  distinctive: ['Full-bleed photography', 'Large light serif headline', 'Directional shading'],
+  familyRules: ['Every slide is photographic', 'Light type on shaded image', 'Logo top-left'],
+  variantRules: ['Copy may sit low or high depending on the photo'],
+  avoid: ['Flat colour backgrounds', 'Heavy decoration', 'Text over busy image areas'],
+  grammar: {
+    compositions: ['image-led', 'closing'],
+    headline: { scale: 'large', weight: 'regular', case: 'none', tracking: 'tight', leading: 'tight' }, body: { scale: 'medium' },
+    emphasis: 'none', alignment: ['left'], anchors: ['bottom', 'top'], margin: 'standard', density: 'balanced', surfaces: ['dark'],
+    decorations: [],
+    imagery: { scale: 'dominant', positions: ['full'], shape: 'rect', overlap: 'text', dominance: 'dominates', overlay: 'gradient', frequency: 'every' },
+    branding: { logo: 'top-left', slideNumber: 'none', handle: 'none' }, cta: 'arrow',
+  },
 }
 export const INITIAL_GLOBAL_FAMILIES: GlobalDesignFamily[] = [
-  { schemaVersion: 1, version: 2, id: 'momentum-timeline', name: 'Momentum Timeline', description: 'Oversized condensed hierarchy, a fading diamond field, outlined pill and numbered header, connected milestone motifs.', tags: ['bold', 'steps', 'typographic'], width: 1080, height: 1350, typography: { headingFallback: 'Inter', bodyFallback: 'Inter' }, referenceImages: [ref(1), ref(2)], analysis: 'References 1 and 2 share 108px outer margins, a 344×78 outlined header at (110,110), upper-right large number, dense uppercase headings and editable diamond texture. Cover: title begins at (108,420), four-node timeline at y1072. Content: title inset to x184 and body x237/y844, edge-connected rings. Density reverses between cover and content. Original orange, navy and white become semantic primary/text/onPrimary roles.', variants: variants(orangeCover, orangeContent) },
-  { schemaVersion: 1, version: 2, id: 'highlight-editorial', name: 'Highlight Editorial', description: 'Generous white space, oversized sans-serif type, selective marker highlights and a small dashed annotation.', tags: ['minimal', 'education', 'editorial'], width: 1080, height: 1350, typography: { headingFallback: 'Inter', bodyFallback: 'Inter' }, referenceImages: [ref(3), ref(4)], analysis: 'References 3 and 4 share a 108px frame, discreet brand at upper left, accent counter upper right, footer website at y1200 and right-aligned CTA. Cover title occupies x108/y345/w864/h665. Content uses x130/y350 heading and x130/y712 body with a curved dashed arrow beside it. Yellow marker highlights become brand.accent; black and white become textPrimary/background. Text remains semantic and editable.', variants: variants(yellowCover, yellowContent) },
-  { schemaVersion: 1, version: 2, id: 'serif-escape', name: 'Serif Escape', description: 'Full-bleed photography, directional dark overlays, large high-contrast serif typography and quiet corner branding.', tags: ['photography', 'serif', 'lifestyle'], width: 1080, height: 1350, typography: { headingFallback: 'Playfair Display', bodyFallback: 'Inter' }, referenceImages: [ref(5), ref(6)], analysis: 'References 5 and 6 are one photographic family. Photography fills 1080×1350 and remains a replaceable slot; no reference photo is embedded. Cover: brand x116/y104; serif headline x108/y312 with 170px type; italic supporting line y695; author lower left. Content: serif title at x108/y300, right-aligned body x602/y324/w370, tagline upper right. Left-to-right cover shading and top-to-bottom content shading preserve subject visibility.', variants: variants(photoCover, photoContent) },
+  { schemaVersion: 1, version: 3, id: 'momentum-timeline', name: 'Momentum Timeline', description: 'Oversized condensed hierarchy, a fading diamond field, outlined pill and numbered header, connected milestone motifs.', tags: ['bold', 'steps', 'typographic'], width: 1080, height: 1350, typography: { headingFallback: 'Inter', bodyFallback: 'Inter' }, referenceImages: [ref(1), ref(2)], analysis: 'References 1 and 2 share 108px outer margins, a 344×78 outlined header at (110,110), upper-right large number, dense uppercase headings and editable diamond texture. Cover: title begins at (108,420), four-node timeline at y1072. Content: title inset to x184 and body x237/y844, edge-connected rings. Density reverses between cover and content. Original orange, navy and white become semantic primary/text/onPrimary roles.', study: timelineStudy, variants: reconstructions(orangeCover, orangeContent) },
+  { schemaVersion: 1, version: 3, id: 'highlight-editorial', name: 'Highlight Editorial', description: 'Generous white space, oversized sans-serif type, selective marker highlights and a small dashed annotation.', tags: ['minimal', 'education', 'editorial'], width: 1080, height: 1350, typography: { headingFallback: 'Inter', bodyFallback: 'Inter' }, referenceImages: [ref(3), ref(4)], analysis: 'References 3 and 4 share a 108px frame, discreet brand at upper left, accent counter upper right, footer website at y1200 and right-aligned CTA. Cover title occupies x108/y345/w864/h665. Content uses x130/y350 heading and x130/y712 body with a curved dashed arrow beside it. Yellow marker highlights become brand.accent; black and white become textPrimary/background. Text remains semantic and editable.', study: editorialStudy, variants: reconstructions(yellowCover, yellowContent) },
+  { schemaVersion: 1, version: 3, id: 'serif-escape', name: 'Serif Escape', description: 'Full-bleed photography, directional dark overlays, large high-contrast serif typography and quiet corner branding.', tags: ['photography', 'serif', 'lifestyle'], width: 1080, height: 1350, typography: { headingFallback: 'Playfair Display', bodyFallback: 'Inter' }, referenceImages: [ref(5), ref(6)], analysis: 'References 5 and 6 are one photographic family. Photography fills 1080×1350 and remains a replaceable slot; no reference photo is embedded. Cover: brand x116/y104; serif headline x108/y312 with 170px type; italic supporting line y695; author lower left. Content: serif title at x108/y300, right-aligned body x602/y324/w370, tagline upper right. Left-to-right cover shading and top-to-bottom content shading preserve subject visibility.', study: serifStudy, variants: reconstructions(photoCover, photoContent) },
 ]

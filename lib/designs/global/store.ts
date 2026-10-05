@@ -1,5 +1,6 @@
 import { INITIAL_GLOBAL_FAMILIES } from './seeds'
 import { familySchema } from './types'
+import { reconcileStudy } from './study'
 import type { GlobalDesignFamily, GlobalDesignRecord, BrandGlobalDesign } from './types'
 
 export class DesignLibraryError extends Error {
@@ -45,7 +46,8 @@ export async function getGlobalRecord(db: any, id: string): Promise<GlobalDesign
   return plain(record)
 }
 export async function saveGlobalDraft(db: any, input: unknown, revision?: number) {
-  const family = familySchema.parse(input)
+  // Admin edits can add or remove photo areas; image modes and the family imagery strategy follow the geometry.
+  const family = familySchema.parse(reconcileStudy(familySchema.innerType().parse(input) as any))
   if (revision === undefined) {
     try { await records(db).insertOne({ _id: family.id, id: family.id, draft: family, revision: 1, status: 'draft', updatedAt: new Date() }) }
     catch (error: any) { if (error.code === 11000) throw new DesignLibraryError('This family already exists. Reload before saving.', 409); throw error }
@@ -73,7 +75,7 @@ export async function retireGlobalDesign(db: any, id: string, revision: number, 
 }
 export async function selectBrandFamilies(db: any, flowId: string, ids: string[]) {
   const selected = [...new Set(ids)]
-  if (selected.length < 3 || selected.length > 24) throw new DesignLibraryError('Select between 3 and 24 different Global Designs.')
+  if (selected.length > 24) throw new DesignLibraryError('Select up to 24 different Global Designs.')
   const flow = await db.collection('flows').findOne({ id: flowId })
   if (!flow) throw new DesignLibraryError('Brand not found', 404)
   const previous = (flow.brandContext?.designs || []).filter((d: any) => d.source === 'global')

@@ -183,3 +183,13 @@ test('LTV explains one customer contributing revenue over time instead of shoppi
  }
  assert.equal(used.size,2)
 })
+test('saved designs this designer cannot build are never picked, so the build step never meets an unknown design',()=>{
+ // Mirrors a real brand: legacy designs plus a study design saved by another app version.
+ const brand={designs:[{id:'brand-a',baseId:'editorial'},{id:'study-x',source:'study'},{id:'global-y',source:'global',globalFamilyId:'y'}]}
+ for(let i=0;i<40;i++){
+  const plan=planPostLayout(brand,{format:'single',headline:'Hello'},{})
+  assert.equal(plan.designId,'brand-a')
+ }
+ const none=planPostLayout({designs:[{id:'study-x',source:'study'}]},{format:'single',headline:'Hello'},{})
+ assert.ok(DESIGN_LIBRARY.some(d=>d.id===none.designId),'falls back to a library design the builder knows')
+})

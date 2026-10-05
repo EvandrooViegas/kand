@@ -161,80 +161,83 @@ async function getGroqModel(groq: Groq): Promise<string> {
   if (!found) throw new Error('No supported copywriting chat model is available in this Groq account. Check your project model permissions.')
   return found
 }
+
+/** Optional design context for the combined copy + composition plan call. */
+export interface PlanningDesign { prompt: string; validate: (parsed: any) => void }
+
+/**
+ * The single text-model call for a post. With `design`, the same call also returns the composition plan,
+ * so the copy context is sent once. A second attempt is made only when the output fails validation.
+ */
+export async function writeCopy(brandContext: any, idea: any, design?: PlanningDesign) {
+  const apiKey = (process.env.GROQ_API_KEY || process.env.GROQ_API_KEY_2)
+  if (!apiKey) throw Object.assign(new Error('GROQ_API_KEY is not configured'), { status: 500 })
+  const groq = new Groq({ apiKey,maxRetries:0 })
+  const model = await getGroqModel(groq)
+  const userPrompt = buildUserPrompt(JSON.stringify(compactBrand(brandContext)), JSON.stringify(idea, null, 2)) + (design ? '\n\n' + design.prompt : '')
+  let parsed: any
+  let validationFeedback = ''
+  for (let attempt = 0; attempt < 2; attempt++) {
+    let response: any
+    try {
+      console.info(`[ai-call] service=groq model=${model} purpose=${design ? 'post-copy-and-composition-plan' : 'post-copy'} attempt=${attempt + 1} referenceImages=false`)
+      response = await budgetedCompletion(groq, {
+        model,
+        messages: [
+          { role: 'system', content: SYSTEM_PROMPT + '\n\n' + EXTRACTED_CONTEXT_RULES },
+          { role: 'user', content: userPrompt + (attempt ? `\nThe previous attempt failed output validation: ${validationFeedback}. Correct that issue and generate a complete JSON object with the requested fields and no commentary.` : '') },
+        ],
+        response_format: { type: 'json_object' },
+        max_tokens: (attempt ? 4800 : 2400) + (design ? 1600 : 0),
+        temperature: attempt ? 0.2 : 0.7,
+      })
+    } catch (error: any) {
+      const code = error?.error?.error?.code || error?.error?.code || error?.code
+      if (attempt === 0 && code === 'json_validate_failed') continue
+      throw error
+    }
+    const choice = response.choices?.[0]
+    const raw = choice?.message?.content?.trim() || ''
+    try {
+      if (choice?.finish_reason === 'length') throw new Error('Truncated copywriting response')
+      parsed = JSON.parse(raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim())
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Expected a copywriting object')
+      if (!['single', 'carousel'].includes(parsed.format) || (idea.format && parsed.format !== idea.format)) throw new Error('Incorrect post format')
+      if (typeof parsed.caption !== 'string') throw new Error('Missing caption')
+      if (parsed.format === 'single' && (typeof parsed.headline !== 'string' || !parsed.headline.trim())) throw new Error('Missing headline')
+      if (parsed.format === 'carousel') {
+        if (!Array.isArray(parsed.slides) || parsed.slides.length < 2 || parsed.slides.some((slide: any) => !slide || typeof slide.headline !== 'string' || !slide.headline.trim())) throw new Error('Missing carousel slides')
+        const cover = parsed.slides[0]
+        const coverWords = cover.headline.trim().split(/\s+/u).filter(Boolean).length
+        const teaserWords = String(cover.body || '').trim().split(/\s+/u).filter(Boolean).length
+        if (coverWords > 10) throw new Error(`Carousel cover has ${coverWords} words; maximum is 10`)
+        if (teaserWords < 2 || teaserWords > 14) throw new Error(`Carousel cover teaser must contain 2–14 words; received ${teaserWords}`)
+        if (String(cover.cta || '').trim()) throw new Error('Carousel cover CTA must be empty')
+      }
+      design?.validate(parsed)
+      break
+    } catch (error: any) {
+      validationFeedback = error?.message || 'invalid output'
+      if (attempt === 0) continue
+      throw Object.assign(new Error('AI could not generate complete, valid copywriting. Please retry; your saved content is unchanged.'), { status: 502 })
+    }
+  }
+  return { copy: cleanCopy(parsed), raw: parsed }
+}
+
+export function copyErrorResponse(error: any, fallback: string) {
+  console.error('Copywriting generation error:', error)
+  return corsify(NextResponse.json({ error: error.status===429?'AI quota reached. Retry in '+retrySeconds(error)+' seconds. Completed steps are saved.':error.message || fallback }, { status: error.status===429?429:error.status||500,headers:error.status===429?{'Retry-After':String(retrySeconds(error))}:{} }))
+}
+
 export async function handleGenerateCopywriting(body: any, db: any) {
   try {
     const { idea } = body
     const brandContext = await loadGenerationBrandContext(db, body)
-
-    if (!brandContext) {
-      return corsify(NextResponse.json({ error: 'brandContext is required' }, { status: 400 }))
-    }
-    if (!idea) {
-      return corsify(NextResponse.json({ error: 'idea (content brief) is required' }, { status: 400 }))
-    }
-
-    const apiKey = (process.env.GROQ_API_KEY || process.env.GROQ_API_KEY_2)
-    if (!apiKey) {
-      return corsify(NextResponse.json({ error: 'GROQ_API_KEY is not configured' }, { status: 500 }))
-    }
-
-    const groq = new Groq({ apiKey,maxRetries:0 })
-    const model = await getGroqModel(groq)
-
-    const brandJson = JSON.stringify(compactBrand(brandContext))
-    const briefJson = JSON.stringify(idea, null, 2)
-    const userPrompt = buildUserPrompt(brandJson, briefJson)
-
-    let parsed: any
-    let validationFeedback = ''
-    for (let attempt = 0; attempt < 2; attempt++) {
-      let response: any
-      try {
-        response = await budgetedCompletion(groq, {
-          model,
-          messages: [
-            { role: 'system', content: SYSTEM_PROMPT + '\n\n' + EXTRACTED_CONTEXT_RULES },
-            { role: 'user', content: userPrompt + (attempt ? `\nThe previous attempt failed output validation: ${validationFeedback}. Correct that issue and generate a complete JSON object with the requested fields and no commentary.` : '') },
-          ],
-          response_format: { type: 'json_object' },
-          max_tokens: attempt ? 4800 : 2400,
-          temperature: attempt ? 0.2 : 0.7,
-        })
-      } catch (error: any) {
-        const code = error?.error?.error?.code || error?.error?.code || error?.code
-        if (attempt === 0 && code === 'json_validate_failed') continue
-        throw error
-      }
-      const choice = response.choices?.[0]
-      const raw = choice?.message?.content?.trim() || ''
-      try {
-        if (choice?.finish_reason === 'length') throw new Error('Truncated copywriting response')
-        parsed = JSON.parse(raw.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim())
-        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Expected a copywriting object')
-        if (!['single', 'carousel'].includes(parsed.format) || (idea.format && parsed.format !== idea.format)) throw new Error('Incorrect post format')
-        if (typeof parsed.caption !== 'string') throw new Error('Missing caption')
-        if (parsed.format === 'single' && (typeof parsed.headline !== 'string' || !parsed.headline.trim())) throw new Error('Missing headline')
-        if (parsed.format === 'carousel') {
-          if (!Array.isArray(parsed.slides) || parsed.slides.length < 2 || parsed.slides.some((slide: any) => !slide || typeof slide.headline !== 'string' || !slide.headline.trim())) throw new Error('Missing carousel slides')
-          const cover = parsed.slides[0]
-          const coverWords = cover.headline.trim().split(/\s+/u).filter(Boolean).length
-          const teaserWords = String(cover.body || '').trim().split(/\s+/u).filter(Boolean).length
-          if (coverWords > 10) throw new Error(`Carousel cover has ${coverWords} words; maximum is 10`)
-          if (teaserWords < 2 || teaserWords > 14) throw new Error(`Carousel cover teaser must contain 2–14 words; received ${teaserWords}`)
-          if (String(cover.cta || '').trim()) throw new Error('Carousel cover CTA must be empty')
-        }
-        break
-      } catch (error: any) {
-        validationFeedback = error?.message || 'invalid output'
-        if (attempt === 0) continue
-        return corsify(NextResponse.json({ error: 'AI could not generate complete, valid copywriting. Please retry; your saved content is unchanged.' }, { status: 502 }))
-      }
-    }
-    return corsify(NextResponse.json(cleanCopy(parsed)))
+    if (!brandContext) return corsify(NextResponse.json({ error: 'brandContext is required' }, { status: 400 }))
+    if (!idea) return corsify(NextResponse.json({ error: 'idea (content brief) is required' }, { status: 400 }))
+    return corsify(NextResponse.json((await writeCopy(brandContext, idea)).copy))
   } catch (error: any) {
-    console.error('Copywriting generation error:', error)
-    return corsify(
-      NextResponse.json({ error: error.status===429?'AI quota reached. Retry in '+retrySeconds(error)+' seconds. Completed steps are saved.':error.message || 'Failed to generate copywriting' }, { status: error.status===429?429:500,headers:error.status===429?{'Retry-After':String(retrySeconds(error))}:{} })
-    )
+    return copyErrorResponse(error, 'Failed to generate copywriting')
   }
 }

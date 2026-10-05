@@ -2,7 +2,7 @@ const {test}=require('node:test')
 const assert=require('node:assert/strict')
 const {stripTypeScriptTypes}=require('node:module')
 const source=stripTypeScriptTypes(require('node:fs').readFileSync('lib/handlers/assetPlannerHandler.ts','utf8').replace(/^import .*$/gm,'').replace(/export /g,''))
-const engine=completion=>new Function('Groq','availableGroqCompletion','process','console',source+';return refinePhotoBriefs')(class {},completion,{env:{GROQ_API_KEY:'test'}},{warn:()=>{}})
+const engine=completion=>new Function('Groq','availableGroqCompletion','process','console',source+';return refinePhotoBriefs')(class {},completion,{env:{GROQ_API_KEY:'test'}},{warn:()=>{},info:()=>{}})
 
 test('photo search uses the exact multilingual slide body instead of a broad topic',async()=>{
  let calls=0

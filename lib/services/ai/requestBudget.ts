@@ -44,7 +44,16 @@ export async function budgetedCompletion(groq:any,request:any,backups?:any[],ope
  }
  const work=state.tail.then(run,run);state.tail=work.catch(()=>{});return work
 }
-export function budgetedModels(groq:any) {return budgetedCompletion(groq,null,undefined,'models')}
+// The model catalog rarely changes; listing it per request spent rate-limited calls on every generation.
+const MODEL_CACHE_MS=10*60*1000
+export function budgetedModels(groq:any) {
+ const cached=state.models
+ if(cached&&cached.expires>Date.now())return cached.value
+ const value=budgetedCompletion(groq,null,undefined,'models')
+ state.models={value,expires:Date.now()+MODEL_CACHE_MS}
+ value.catch(()=>{if(state.models?.value===value)state.models=null})
+ return value
+}
 export function compactBrand(brand:any) {
  const out:any={}
  const limits:Record<string,number>={about:6500,description:1200,services:3500,projects:5000,targetAudience:1800,tone:1000,suggestedCtas:1500,differentiators:1800,contentTopics:2000}

@@ -2,13 +2,13 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
-import GlobalDesignPreview from '@/components/GlobalDesignPreview'
+import { ZoomablePreview } from '@/components/GlobalDesignPreview'
 import { Check, Loader2 } from 'lucide-react'
 
 export default function BrandDesignStudio({ flowId, brand, onChange }) {
   const [families, setFamilies] = useState([]), [selected, setSelected] = useState([])
   const [loading, setLoading] = useState(true), [busy, setBusy] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('')
-  const [variants, setVariants] = useState({}), [query, setQuery] = useState('')
+  const [samples, setSamples] = useState({}), [query, setQuery] = useState('')
   useEffect(() => {
     let active = true
     setLoading(true); setError('')
@@ -35,31 +35,32 @@ export default function BrandDesignStudio({ flowId, brand, onChange }) {
       if (familyIds.some(id => !savedIds.includes(id)) || savedIds.length !== familyIds.length) throw Error('The design selection was not retained. Reload and try again.')
       setSelected(savedIds)
       onChange({ ...brand, designs: data.brandContext.designs, designLibraryVersion: 1 })
-      setNotice(`${savedIds.length} brand designs saved and verified. New posts will use these families.`)
-    } catch (e) { setError(e.message) } finally { setBusy(false) }
+      setNotice(savedIds.length ? `${savedIds.length} brand design${savedIds.length === 1 ? '' : 's'} saved. New posts will use ${savedIds.length === 1 ? 'it' : 'them'}.` : 'No Global Designs selected. New posts will use your starter designs.')
+    } catch (e) {
+      setError(e.message)
+      // Show the selection that is actually saved, never an unsaved one.
+      try { const r = await fetch(`/api/global-designs/brand?flowId=${encodeURIComponent(flowId)}`, { cache: 'no-store' }); if (r.ok) setSelected((await r.json()).map(item => item.family.id)) } catch {}
+    } finally { setBusy(false) }
   }
   const toggleFamily = familyId => {
     setNotice(''); setError('')
     const removing = selected.includes(familyId)
-    if (removing && selected.length <= 3) {
-      setError('Keep at least 3 designs. Select a replacement before removing this one.')
-      return
-    }
     const next = removing ? selected.filter(id => id !== familyId) : [...selected, familyId]
+    // Every change is saved immediately, so what is shown as selected is what the brand keeps.
     setSelected(next)
-    if (next.length >= 3) void save(next)
+    void save(next)
   }
   return <section className="rounded-xl border bg-white p-5 sm:p-6 dark:bg-slate-950">
-    <div className="flex flex-wrap items-start justify-between gap-4"><div><h3 className="text-base font-semibold">Your brand designs</h3><p className="mt-2 max-w-2xl text-sm text-muted-foreground">Choose at least 3 Global Designs. Their layouts stay consistent while colors, fonts, and logo follow your brand.</p></div><Link href="/design-library" className="text-sm underline underline-offset-4">Global Design Library</Link></div>
-    <div className="my-5 flex flex-wrap items-center gap-3"><input aria-label="Search global designs" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search designs or categories" className="h-10 min-w-0 flex-1 rounded-md border bg-background px-3 text-sm" /><span className="text-sm text-muted-foreground">{selected.length} selected · minimum 3</span></div>
+    <div className="flex flex-wrap items-start justify-between gap-4"><div><h3 className="text-base font-semibold">Your brand designs</h3><p className="mt-2 max-w-2xl text-sm text-muted-foreground">Choose one or more Global Designs. Each one is a visual language: layouts adapt to every post while colors, fonts, and logo follow your brand.</p></div><Link href="/design-library" className="text-sm underline underline-offset-4">Global Design Library</Link></div>
+    <div className="my-5 flex flex-wrap items-center gap-3"><input aria-label="Search global designs" value={query} onChange={e => setQuery(e.target.value)} placeholder="Search designs or categories" className="h-10 min-w-0 flex-1 rounded-md border bg-background px-3 text-sm" /><span className="text-sm text-muted-foreground">{selected.length} selected</span></div>
     {loading && <p role="status" className="py-12 text-center text-sm text-muted-foreground">Loading design families…</p>}
     <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3">{families.filter(f => `${f.name} ${f.tags.join(' ')}`.toLowerCase().includes(query.toLowerCase())).map(family => <article key={family.id} className={`min-w-0 rounded-xl border-2 p-3 ${selected.includes(family.id) ? 'border-slate-900 dark:border-slate-100' : 'border-slate-200 dark:border-slate-800'}`}>
-      <GlobalDesignPreview family={family} brand={brand} variantId={variants[family.id]} />
+      <ZoomablePreview family={family} brand={brand} sample={samples[family.id] || 0} />
       <h4 className="mt-3 font-semibold">{family.name}</h4><p className="mt-1 text-xs text-muted-foreground">{family.tags.join(' · ')}</p>
-      <select aria-label={`Preview ${family.name} variant`} className="my-3 w-full rounded border bg-background p-2 text-xs" value={variants[family.id] || family.variants[0].id} onChange={e => setVariants(prev => ({ ...prev, [family.id]: e.target.value }))}>{family.variants.map(v => <option key={v.id} value={v.id}>{v.name}</option>)}</select>
+      <div role="group" aria-label={`${family.name} sample slides`} className="my-3 flex gap-1.5">{[0, 1, 2, 3].map(i => <button type="button" key={i} aria-label={`Sample slide ${i + 1}`} aria-pressed={(samples[family.id] || 0) === i} onClick={() => setSamples(prev => ({ ...prev, [family.id]: i }))} className={`h-2 flex-1 rounded-full ${(samples[family.id] || 0) === i ? 'bg-foreground' : 'bg-muted'}`} />)}</div>
       <Button type="button" disabled={busy} variant={selected.includes(family.id) ? 'default' : 'outline'} className="w-full" aria-pressed={selected.includes(family.id)} onClick={() => toggleFamily(family.id)}>{selected.includes(family.id) && <Check size={14} className="mr-2" />}{selected.includes(family.id) ? 'Selected' : 'Select design'}</Button>
     </article>)}</div>
     {error && <p role="alert" className="mt-4 text-sm text-red-600">{error}</p>}{notice && <p role="status" className="mt-4 text-sm text-green-700">{notice}</p>}
-    <div className="mt-6 flex items-center justify-between gap-4 border-t pt-5"><p className="text-xs text-muted-foreground">Selection saves automatically after the third design. Existing posts stay editable.</p><Button type="button" onClick={() => save()} disabled={loading || busy || !flowId || selected.length < 3}>{busy && <Loader2 size={14} className="mr-2 animate-spin" />}{busy ? 'Saving…' : 'Save again'}</Button></div>
+    <div className="mt-6 flex items-center justify-between gap-4 border-t pt-5"><p className="text-xs text-muted-foreground">Selection saves automatically. Existing posts stay editable.</p><Button type="button" onClick={() => save()} disabled={loading || busy || !flowId}>{busy && <Loader2 size={14} className="mr-2 animate-spin" />}{busy ? 'Saving…' : 'Save again'}</Button></div>
   </section>
 }

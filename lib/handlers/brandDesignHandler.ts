@@ -4,7 +4,7 @@ import { selectBrandFamilies } from '@/lib/designs/global/store'
 // Brand Design now imports reviewed global structures; it never invents coordinates.
 export async function handleBrandDesigns(db: any, body: any) {
   try {
-    if (typeof body.flowId !== 'string' || !Array.isArray(body.familyIds) || !body.familyIds.every((id: any) => typeof id === 'string')) return NextResponse.json({ error: 'Choose at least 3 designs from the Global Design Library.', code: 'GLOBAL_SELECTION_REQUIRED' }, { status: 400 })
+    if (typeof body.flowId !== 'string' || !Array.isArray(body.familyIds) || !body.familyIds.every((id: any) => typeof id === 'string')) return NextResponse.json({ error: 'Choose designs from the Global Design Library.', code: 'GLOBAL_SELECTION_REQUIRED' }, { status: 400 })
     return NextResponse.json(await selectBrandFamilies(db, body.flowId, body.familyIds))
   } catch (error: any) { return NextResponse.json({ error: error.message }, { status: error.status || 500 }) }
 }

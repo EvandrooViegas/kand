@@ -15,6 +15,7 @@ import { handleGenerateContentIdeas } from '@/lib/handlers/contentIdeasHandler'
 import { handleGenerateCopywriting } from '@/lib/handlers/copywritingHandler'
 import { handleUploadAsset, handleListAssets, handleGetAsset, handleDeleteAsset, handleUpdateAsset } from '@/lib/handlers/assetHandlers'
 import { handlePlanAssets } from '@/lib/handlers/assetPlannerHandler'
+import { handlePlanPost } from '@/lib/handlers/postPlanHandler'
 import { handleResolveAssets } from '@/lib/handlers/assetResolverHandler'
 import { handleDesignCanvas, handleSwitchDesign } from '@/lib/handlers/canvasDesignerHandler'
 
@@ -62,6 +63,11 @@ async function handleRoute(request, { params }) {
     // Copywriting generation endpoint
     if (route === '/generate-copywriting' && method === 'POST') {
       return await handleGenerateCopywriting(await request.json(), db)
+    }
+
+    // Post planning: copy + composition plan in one model call, asset needs derived in code
+    if (route === '/plan-post' && method === 'POST') {
+      return await handlePlanPost(db, await request.json())
     }
 
     // Asset planner endpoint

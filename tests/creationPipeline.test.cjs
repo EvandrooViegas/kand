@@ -1,25 +1,41 @@
 const {test}=require('node:test')
 const assert=require('node:assert/strict')
 const source=require('node:fs').readFileSync('components/Creation.jsx','utf8')
-const body=source.slice(source.indexOf('  const generatePost = async () => {'),source.indexOf('  // ── next step'))
-function setup(fail,existing={}) {
- const calls=[], lock={current:false}, result={copy:'copy-result',plan:'plan-result',resolve:'resolve-result',design:'design-result'}
- const scope={autoLock:lock,anyLoading:false,copy:null,plan:null,resolved:null,copyError:null,planError:null,resolveError:null,...existing,setAutoRunning:v=>calls.push(['running',v]),setConfirmRegen:()=>{},setActiveView:()=>{},toast:{success:()=>calls.push(['done'])}}
- for(const [key,name] of [['copy','runCopy'],['plan','runPlan'],['resolve','runResolve'],['design','runDesign']]) scope[name]=async(...args)=>{calls.push([key,...args]);return key===fail?undefined:result[key]}
- const run=new Function(...Object.keys(scope),body+';return generatePost')(...Object.values(scope))
- return {run,calls,lock}
+const body=source.slice(source.indexOf('async function postJson('),source.indexOf('function PostPipelineCard('))
+function setup({needsVisuals=false,fail}={}) {
+ const requests=[], stages=[], results={}
+ const fetch=async(url,init)=>{
+  const payload=JSON.parse(init.body);requests.push([url,payload])
+  const ok=url!==fail
+  const data=!ok?{error:'boom'}:url==='/api/plan-post'?{copy:payload.copy||{headline:'Fresh'},needsVisuals,plan:{designId:'global-x',layoutPlan:{source:'global'},slots:[{slot_id:'single_main',slot_label:'Main',needs_visual:needsVisuals}]}}:url==='/api/resolve-assets'?{slots:[{slot_id:'single_main',resolvedAsset:{url:'/photo'}}]}:{id:'canvas-1'}
+  return {ok,json:async()=>data}
+ }
+ const run=new Function('fetch',body+';return runPostGeneration')(fetch)
+ const record=key=>v=>{results[key]=v}
+ const go=(extra={})=>run({idea:{topic:'T'},brandContext:{id:'b',name:'B'},brandId:'brand_b',keepCopy:null,onStage:s=>stages.push(s),onCopy:record('copy'),onPlan:record('plan'),onResolve:record('resolve'),onDesign:record('design'),...extra})
+ return {go,requests,stages,results}
 }
-test('automatic pipeline passes fresh results between steps',async()=>{
- const s=setup();await s.run()
- assert.deepEqual(s.calls.filter(c=>['copy','plan','resolve','design'].includes(c[0])),[['copy'],['plan','copy-result'],['resolve','plan-result'],['design','resolve-result','copy-result']])
- assert.equal(s.lock.current,false)
+test('a design without imagery goes PLAN → BUILD with no asset request',async()=>{
+ const s=setup();await s.go()
+ assert.deepEqual(s.requests.map(r=>r[0]),['/api/plan-post','/api/design-canvas'])
+ assert.deepEqual(s.stages,['content','build'])
+ assert.equal(s.results.resolve.skipped,true)
+ assert.equal(s.requests[1][1].copy.headline,'Fresh')
 })
-test('failure stops downstream work and releases busy state',async()=>{
- const s=setup('plan');await s.run()
- assert.equal(s.calls.some(c=>c[0]==='resolve'),false)
- assert.deepEqual(s.calls.at(-1),['running',false])
+test('a design with imagery prepares visuals between plan and build',async()=>{
+ const s=setup({needsVisuals:true});await s.go()
+ assert.deepEqual(s.requests.map(r=>r[0]),['/api/plan-post','/api/resolve-assets','/api/design-canvas'])
+ assert.deepEqual(s.stages,['content','visuals','build'])
+ assert.equal(s.requests[2][1].resolvedPlan.slots[0].resolvedAsset.url,'/photo')
 })
-test('resume uses completed steps without regenerating images',async()=>{
- const s=setup(null,{copy:'saved-copy',plan:'saved-plan',resolved:'saved-images'});await s.run()
- assert.deepEqual(s.calls.filter(c=>['copy','plan','resolve','design'].includes(c[0])),[['design','saved-images','saved-copy']])
+test('failure stops downstream work and reports the stage error',async()=>{
+ const s=setup({needsVisuals:true,fail:'/api/plan-post'})
+ await assert.rejects(s.go(),/boom/)
+ assert.deepEqual(s.requests.map(r=>r[0]),['/api/plan-post'])
+ assert.equal(s.results.plan.error,'boom')
+})
+test('rebuilding with kept copy sends the copy so the server plans without writing again',async()=>{
+ const s=setup();await s.go({keepCopy:{headline:'Kept'}})
+ assert.deepEqual(s.requests[0][1].copy,{headline:'Kept'})
+ assert.equal(s.requests[1][1].copy.headline,'Kept')
 })

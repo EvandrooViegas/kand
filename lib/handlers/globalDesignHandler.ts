@@ -4,8 +4,6 @@ import { Binary } from 'mongodb'
 import sharp from 'sharp'
 import { ADMIN_COOKIE, adminConfigured, validAdminKey, adminSession, isDesignAdmin, requireDesignAdmin } from '@/lib/designs/global/admin'
 import { listGlobalDesigns, getGlobalRecord, saveGlobalDraft, publishGlobalDesign, retireGlobalDesign, hydrateBrandFamilies, DesignLibraryError } from '@/lib/designs/global/store'
-import { familySchema, variantSchema } from '@/lib/designs/global/types'
-import { resolveVariant, SAMPLE_COPY, templateFromCanvas } from '@/lib/designs/global/resolve'
 import { analyzeDesignReferences } from '@/lib/designs/global/analyze'
 import { retrySeconds } from '@/lib/services/ai/requestBudget'
 
@@ -61,23 +59,6 @@ export async function handleGlobalDesignRequest(db: any, request: Request, path:
       if (method !== 'POST' && method !== 'DELETE') throw new DesignLibraryError('Method not allowed', 405)
       const { revision } = await request.json()
       return NextResponse.json(action === 'publish' ? await publishGlobalDesign(db, id, revision) : await retireGlobalDesign(db, id, revision, method === 'DELETE'))
-    }
-    if (id && action === 'editor' && method === 'POST') {
-      const { variantId } = await request.json(), record = await getGlobalRecord(db, id)
-      const variant = record.draft.variants.find(v => v.id === variantId)
-      if (!variant) throw new DesignLibraryError('Variant not found', 404)
-      const canvas = { ...resolveVariant(record.draft, variant, { designTokens: record.draft.referenceStyle }, SAMPLE_COPY, 0, '', { preview: true, placeholders: true }), id: randomUUID(), type: 'single', name: `${record.draft.name} / ${variant.name}`, globalDesignEditor: { familyId: id, variantId, revision: record.revision }, createdAt: new Date(), updatedAt: new Date() }
-      await db.collection('canvases').insertOne(canvas)
-      const { _id, ...result } = canvas as any
-      return NextResponse.json(result)
-    }
-    if (id && action === 'apply-editor' && method === 'POST') {
-      const { canvasId } = await request.json(), record = await getGlobalRecord(db, id)
-      const canvas = await db.collection('canvases').findOne({ id: canvasId })
-      if (canvas?.globalDesignEditor?.familyId !== id) throw new DesignLibraryError('This is not a template editing canvas.')
-      if (record.revision !== canvas.globalDesignEditor.revision) throw new DesignLibraryError('The draft changed. Open a new editing canvas to avoid overwriting it.', 409)
-      const variants = record.draft.variants.map(v => v.id === canvas.globalDesignEditor.variantId ? variantSchema.parse(templateFromCanvas(record.draft, v, canvas)) : v)
-      return NextResponse.json(await saveGlobalDraft(db, familySchema.parse({ ...record.draft, variants }), record.revision))
     }
     throw new DesignLibraryError('Design action not found', 404)
   } catch (error: any) {

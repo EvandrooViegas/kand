@@ -9,11 +9,14 @@ function load(file, names, dependencies = {}) {
   const source = fs.readFileSync(file, 'utf8').replace(/^import .*$/gm, '').replace(/export /g, '')
   return new Function(...Object.keys(dependencies), stripTypeScriptTypes(source, { mode: 'transform' }) + `;return {${names.join(',')}}`)(...Object.values(dependencies))
 }
-const types = load('lib/designs/global/types.ts', ['familySchema', 'variantSchema', 'referenceSchema', 'COLOR_TOKENS', 'SLOT_NAMES'], { z })
+const types = load('lib/designs/global/types.ts', ['familySchema', 'variantSchema', 'referenceSchema', 'studySchema', 'imageryStrategySchema', 'grammarSchema', 'COMPOSITIONS', 'DECORATION_KINDS', 'COLOR_TOKENS', 'SLOT_NAMES'], { z })
 const { INITIAL_GLOBAL_FAMILIES: seeds } = load('lib/designs/global/seeds.ts', ['INITIAL_GLOBAL_FAMILIES'])
-const resolve = load('lib/designs/global/resolve.ts', ['resolveBrandTokens', 'resolveVariant', 'chooseVariant', 'contentSlots', 'templateFromCanvas', 'SAMPLE_COPY'])
-const store = load('lib/designs/global/store.ts', ['DesignLibraryError', 'ensureGlobalDesignLibrary', 'getGlobalVersion', 'listGlobalDesigns', 'getGlobalRecord', 'saveGlobalDraft', 'publishGlobalDesign', 'retireGlobalDesign', 'selectBrandFamilies', 'hydrateBrandFamilies'], { INITIAL_GLOBAL_FAMILIES: seeds, ...types })
-const generation = load('lib/designs/global/generation.ts', ['chooseBrandFamily', 'globalLayoutPlan', 'renderGlobalPost'], { ...resolve, ...store })
+const resolve = load('lib/designs/global/resolve.ts', ['resolveBrandTokens', 'resolveVariant', 'referencePreviewBrand', 'contentSlots', 'countLines', 'clean', 'lightness', 'on', 'hex', 'SAMPLE_COPY'])
+const study = load('lib/designs/global/study.ts', ['variantImageMode', 'familyImagery', 'familyGrammar', 'deriveGrammar', 'reconcileStudy', 'studyForPlanning'], { ...types })
+const compose = load('lib/designs/global/compose.ts', ['planSlides', 'composeSlide', 'imageFrame', 'brandPalette', 'listItems', 'previewSlide', 'SAMPLE_DECK'], { ...resolve, ...study })
+const validate = load('lib/designs/global/validate.ts', ['validatePost', 'validatePage'])
+const store = load('lib/designs/global/store.ts', ['DesignLibraryError', 'ensureGlobalDesignLibrary', 'getGlobalVersion', 'listGlobalDesigns', 'getGlobalRecord', 'saveGlobalDraft', 'publishGlobalDesign', 'retireGlobalDesign', 'selectBrandFamilies', 'hydrateBrandFamilies'], { INITIAL_GLOBAL_FAMILIES: seeds, ...types, ...study })
+const generation = load('lib/designs/global/generation.ts', ['chooseBrandFamily', 'globalLayoutPlan', 'renderGlobalPost'], { ...compose, ...store, ...study, ...validate })
 const auth = load('lib/designs/global/admin.ts', ['validAdminKey', 'adminSession', 'isDesignAdmin', 'requireDesignAdmin'], { ...crypto })
 
 function memoryDb() {
@@ -51,11 +54,12 @@ test('six references form three valid semantic families with no baked reference 
       if (node.type === 'text') assert.match(node.text, /\{\{[^}]+\}\}/)
     }
   }
-  assert.throws(() => types.familySchema.parse({ ...seeds[0], referenceImages: seeds[0].referenceImages.slice(0, 1) }))
+  assert.throws(() => types.familySchema.parse({ ...seeds[0], referenceImages: [] }))
+  assert.doesNotThrow(() => types.familySchema.parse({ ...seeds[0], referenceImages: seeds[0].referenceImages.slice(0, 1) }))
   assert.throws(() => types.variantSchema.parse({ ...seeds[1].variants[0], nodes: [{ ...seeds[1].variants[0].nodes[0], color: '#E5B52A' }] }))
 })
 
-test('brand adaptation changes identity while preserving geometry and source templates', () => {
+test('reference reconstructions preview in each brand identity without changing their geometry', () => {
   const family = seeds[1], variant = family.variants[0], original = JSON.stringify(family)
   const a = resolve.resolveVariant(family, variant, { colors: ['#e03020', '#ffffff', '#ffcc00'], fonts: ['Oswald', 'Inter'] }, { headline: 'Build better habits', cta: 'Read more' })
   const b = resolve.resolveVariant(family, variant, { colors: ['#123456', '#ffeecc', '#0077aa'], fonts: ['Montserrat', 'Roboto'] }, { headline: 'Build better habits', cta: 'Read more' })
@@ -66,13 +70,17 @@ test('brand adaptation changes identity while preserving geometry and source tem
   assert.equal(JSON.stringify(family), original)
 })
 
-test('carousels use variants from one family and produce normal editable Canvas nodes', () => {
-  const family = seeds[1], copy = { format: 'carousel', slides: [{ headline: 'A better beginning' }, { headline: 'Small steps', purpose: 'steps', body: '1. Decide\n2. Begin' }, { headline: 'Start today', body: 'Make the next step count.', cta: 'Learn more' }] }
+test('carousels compose varied layouts from one study and produce normal editable Canvas nodes', () => {
+  const family = seeds[1], copy = { format: 'carousel', slides: [{ headline: 'A better beginning', body: 'One clear step.' }, { headline: 'Small steps', purpose: 'steps', body: '1. Decide\n2. Begin\n3. Repeat' }, { headline: 'Consistency wins', body: 'Protect one habit every day and let it compound.' }, { headline: 'Start today', body: 'Make the next step count.', cta: 'Learn more' }] }
   const canvas = generation.renderGlobalPost(family, { id: 'brand', name: 'Brand' }, copy, { slots: [] }, { id: 'global-' + family.id }, crypto.randomUUID)
-  assert.deepEqual(canvas.pages.map(p => p.globalVariantId), ['cover', 'list', 'cta'])
+  const compositions = canvas.pages.map(p => p.globalComposition)
+  assert.ok(compositions.every(c => study.familyGrammar(family).compositions.includes(c)), 'every composition comes from the study grammar')
+  assert.ok(new Set(compositions).size >= 3, `layouts vary: ${compositions}`)
+  assert.equal(compositions[1], 'list'); assert.equal(compositions[3], 'closing')
+  assert.ok(!canvas.pages.some(p => 'globalVariantId' in p), 'no template route is recorded')
   assert.equal(canvas.height, 1350)
   assert.equal(new Set(canvas.pages.flatMap(p => p.nodes.map(n => n.id))).size, canvas.pages.reduce((n, p) => n + p.nodes.length, 0))
-  assert.ok(canvas.pages.every(p => p.nodes.some(n => n.type === 'text')))
+  assert.ok(canvas.pages.every(p => p.nodes.some(n => n.type === 'text' && n.designRole === 'headline')))
   assert.equal(canvas.designSelection.globalFamilyId, family.id)
   assert.equal(canvas.designInput.resolvedPlan.layoutPlan.source, 'global')
 })
@@ -96,16 +104,14 @@ test('text overflow fails clearly rather than rearranging the design or deleting
   assert.throws(() => resolve.resolveVariant(seeds[1], seeds[1].variants[1], {}, { headline: 'Test', body: 'Very long body. '.repeat(400) }), /too long/)
 })
 
-test('Canvas editing round trip preserves semantic bindings and geometry edits', () => {
-  const family = seeds[2], variant = family.variants[0]
-  const canvas = resolve.resolveVariant(family, variant, {}, resolve.SAMPLE_COPY, 0, '', { preview: true, placeholders: true })
-  const headline = canvas.nodes.find(n => n.id === 'headline'), photo = canvas.nodes.find(n => n.id === 'photo')
-  headline.x += 12; photo.x = -20
-  const updated = types.variantSchema.parse(resolve.templateFromCanvas(family, variant, canvas))
-  assert.equal(updated.nodes.find(n => n.id === 'headline').x, headline.x)
-  assert.equal(updated.nodes.find(n => n.id === 'headline').text, '{{headline}}')
-  assert.equal(updated.nodes.find(n => n.id === 'photo').src, '{{image.primary}}')
-  assert.equal(updated.nodes.find(n => n.id === 'photo').x, -20)
+test('composed copy shrinks within readable limits and fails clearly instead of cutting text', () => {
+  const family = seeds[1]
+  const plan = compose.planSlides(family, { format: 'single', headline: 'x' })[0]
+  const long = compose.composeSlide(family, {}, { headline: 'Teste simples pode dobrar o desempenho dos anúncios do seu negócio local', body: 'Descubra o passo a passo para otimizar o seu retorno.' }, plan, 0, 1)
+  const headline = long.nodes.find(n => n.designRole === 'headline')
+  assert.equal(headline.text.replace(/<%kind:[^:]+:([^%]+)%>/g, '$1'), 'Teste simples pode dobrar o desempenho dos anúncios do seu negócio local', 'complete copy, only styled')
+  assert.ok(headline.fontSize >= 34)
+  assert.throws(() => compose.composeSlide(family, {}, { headline: 'Test', body: 'Very long body. '.repeat(400) }, plan, 0, 1), /too long/)
 })
 
 test('publishing is versioned, stale edits conflict, and unpublishing preserves imports', async () => {
@@ -123,18 +129,27 @@ test('publishing is versioned, stale edits conflict, and unpublishing preserves 
   assert.equal((await store.getGlobalVersion(db, first.id, seeds[1].version)).name, seeds[1].name)
 })
 
-test('brand selection enforces three distinct published families and stores references only', async () => {
+test('brand selection keeps one or more distinct published families, stores references only, and survives a reload', async () => {
   const db = memoryDb(); await store.ensureGlobalDesignLibrary(db)
   await db.collection('flows').insertOne({ id: 'brand', brandContext: { colors: ['#123456'], designs: [{ id: 'legacy', baseId: 'editorial' }] } })
-  await assert.rejects(store.selectBrandFamilies(db, 'brand', [seeds[0].id, seeds[0].id]), /3 and 24/)
+  // A single selected study is saved, and reading the brand back returns it (the page reload path).
+  const single = await store.selectBrandFamilies(db, 'brand', [seeds[0].id, seeds[0].id])
+  assert.deepEqual(single.brandContext.designs.filter(d => d.source === 'global').map(d => d.globalFamilyId), [seeds[0].id])
+  const reloaded = await db.collection('flows').findOne({ id: 'brand' })
+  assert.deepEqual((await store.hydrateBrandFamilies(db, reloaded.brandContext)).map(item => item.family.id), [seeds[0].id])
+  const one = await generation.chooseBrandFamily(db, { ...reloaded.brandContext, id: 'brand' }, { headline: 'Hello' })
+  assert.equal(one.family.id, seeds[0].id, 'generation uses the one selected design')
   const result = await store.selectBrandFamilies(db, 'brand', seeds.map(f => f.id))
   assert.equal(result.brandContext.designs.length, 4)
   for (const design of result.brandContext.designs.filter(d => d.source === 'global')) { assert.equal(design.globalVersion, seeds[0].version); assert.equal(design.nodes, undefined); assert.equal(design.blueprint, undefined) }
   const selected = await generation.chooseBrandFamily(db, { ...result.brandContext, id: 'brand' }, { headline: 'A new beginning' })
   assert.ok(seeds.some(f => f.id === selected.family.id))
   assert.equal(await generation.chooseBrandFamily(db, { id: 'empty', designs: [] }, {}), null)
-  const partial = { id: 'partial', designs: result.brandContext.designs.filter(d => d.source === 'global').slice(0, 2) }
-  await assert.rejects(generation.chooseBrandFamily(db, partial, {}), /at least 3/)
+  // Clearing the selection returns the brand to its starter designs.
+  const cleared = await store.selectBrandFamilies(db, 'brand', [])
+  assert.deepEqual(cleared.brandContext.designs.map(d => d.id), ['legacy'])
+  assert.equal(await generation.chooseBrandFamily(db, { ...cleared.brandContext, id: 'brand' }, {}), null)
+  await assert.rejects(store.selectBrandFamilies(db, 'brand', Array.from({ length: 25 }, (_, i) => `f-${i}`)), /up to 24/)
 })
 
 test('admin sessions require the configured key, expire, and reject cross-origin writes', () => {
@@ -150,38 +165,101 @@ test('admin sessions require the configured key, expire, and reject cross-origin
   } finally { if (previous === undefined) delete process.env.GLOBAL_DESIGN_ADMIN_KEY; else process.env.GLOBAL_DESIGN_ADMIN_KEY = previous }
 })
 
-test('reference analysis accepts 5 images, batches them with an anchor, and validates semantic output', async () => {
+const STUDY = { personality: 'Calm editorial', composition: 'Headline dominates the upper half', spaceDensity: 'Generous margins', typography: 'Heavy headline, body about a third of its size', colorContrast: 'Light surface with a bright accent highlight on #ffe05b', colorRoles: { background: 'light brand background', foreground: 'dark text', accent: 'bright accent', decoration: 'low-opacity secondary' }, imagery: { mode: 'none', usage: 'Typography only' }, decorative: 'Fine rules', hierarchy: 'Headline, body, CTA', logoPlacement: 'Small anchor top-left', distinctive: ['Highlighted keyword'], familyRules: ['Left aligned text'], variantRules: [], avoid: ['Photography'] }
+function analyzerWith(handler) {
+  return load('lib/designs/global/analyze.ts', ['analyzeDesignReferences', 'normalizeReferenceVariant'], {
+    ...types, z, ...study,
+    Groq: class {}, sharp: () => ({ rotate() { return this }, resize() { return this }, jpeg() { return this }, async toBuffer() { return Buffer.from('image') } }),
+    readFile: async () => Buffer.from('reference'), join: require('node:path').join, randomUUID: crypto.randomUUID,
+    retrySeconds: () => 1, budgetedCompletion: handler,
+  })
+}
+const studyResponse = (request, overrides = {}) => {
+  const count = Number(request.messages[0].content.match(/exactly (\d+) reconstructions/)[1])
+  return { choices: [{ finish_reason: 'stop', message: { content: JSON.stringify({ name: 'Golden Editorial', description: 'Measured typography and highlights.', tags: ['editorial'], typography: { headingFallback: 'DM Sans', bodyFallback: 'Inter' }, referenceStyle: { primary: '#ffffff', secondary: '#111111', accent: '#ffe05b', background: '#ffffff', textPrimary: '#111111' }, study: STUDY, variants: Array.from({ length: count }, () => ({ observations: 'Headline at x 108 y 360 width 860 height 640.', ...seeds[1].variants[1], imageMode: 'none', nodes: seeds[1].variants[1].nodes.map(n => ({ ...n, x: String(n.x), fontSize: n.fontSize ? `${n.fontSize}px` : undefined })) })), ...overrides }) } }] }
+}
+
+test('design study makes one multimodal call per batch, persists a structured brand-agnostic study and never resends images', async () => {
   const calls = []
   const oldKey = process.env.GROQ_API_KEY
   process.env.GROQ_API_KEY = 'test-only'
-  const analyzer = load('lib/designs/global/analyze.ts', ['analyzeDesignReferences', 'normalizeReferenceVariant'], {
-    ...types, z,
-    Groq: class {}, sharp: () => ({ rotate() { return this }, resize() { return this }, jpeg() { return this }, async toBuffer() { return Buffer.from('image') } }),
-    readFile: async () => Buffer.from('reference'), join: require('node:path').join, randomUUID: crypto.randomUUID,
-    retrySeconds: () => 1,
-    budgetedCompletion: async (_client, request) => {
-      calls.push(request)
-      if (request.messages[0].content.startsWith('Measure reference')) {
-        const count = Number(request.messages[0].content.match(/exactly (\d+) observations/)[1])
-        return { choices: [{ message: { content: JSON.stringify({ name: 'Golden Editorial', description: 'Measured typography and highlights.', tags: ['editorial'], typography: { headingFallback: 'DM Sans', bodyFallback: 'Inter' }, referenceStyle: { primary: '#ffffff', secondary: '#111111', accent: '#ffe05b', background: '#ffffff', textPrimary: '#111111' }, observations: Array.from({ length: count }, () => ({ measurements: 'Headline at x 108 y 360 width 860 height 640. Yellow highlights; generous whitespace.' })) }) } }] }
-      }
-      const count = Number(request.messages[0].content.match(/exactly (\d+) variants/)[1])
-      assert.match(request.messages[1].content.at(-1).text, /Headline at x 108/)
-      return { choices: [{ message: { content: JSON.stringify({ analysis: 'Shared margins and typography; cover and content use different hierarchy.', variants: Array.from({ length: count }, () => ({ ...seeds[1].variants[1], nodes: seeds[1].variants[1].nodes.map(n => ({ ...n, x: String(n.x), fontSize: n.fontSize ? `${n.fontSize}px` : undefined })) })) }) } }] }
-    },
-  })
+  const analyzer = analyzerWith(async (_client, request) => { calls.push(request); return studyResponse(request) })
   try {
     const references = seeds.flatMap(f => f.referenceImages).slice(0, 5)
     const family = await analyzer.analyzeDesignReferences({}, { referenceImages: references })
     assert.equal(family.referenceImages.length, 5); assert.equal(family.variants.length, 5)
-    assert.equal(calls.length, 6)
+    assert.equal(calls.length, 2, '5 references at 3 per call')
+    assert.equal(calls.reduce((n, c) => n + c.messages[1].content.filter(item => item.type === 'image_url').length, 0), 5, 'each reference is sent exactly once')
+    assert.match(calls[1].messages[1].content[0].text, /Study so far/)
     assert.equal(family.name, 'Golden Editorial')
-    assert.equal(family.typography.headingFallback, 'DM Sans')
-    assert.equal(family.referenceStyle.accent, '#ffe05b')
-    assert.ok(calls.every(call => call.messages[1].content.filter(item => item.type === 'image_url').length <= 3))
-    assert.deepEqual(family.variants.map(v => v.id), ['cover', 'content-1', 'content-2', 'content-3', 'content-4'])
+    assert.equal(family.study.imagery.mode, 'none')
+    assert.ok(family.variants.every(v => v.imageMode === 'none'))
+    assert.ok(!JSON.stringify(family.study).includes('#ffe05b'), 'literal reference colors are removed from the study')
+    assert.deepEqual(family.variants.map(v => v.id), ['reference-1', 'reference-2', 'reference-3', 'reference-4', 'reference-5'], 'references are kept as reconstructions, not routes')
+    assert.ok(family.variants.every(v => !/cover|content/.test(v.id)))
+    assert.ok(types.grammarSchema.safeParse(family.study.grammar).success, 'the study stores a complete grammar')
+    assert.match(calls[0].messages[0].content, /grammar, not a template/)
     assert.equal(typeof family.variants[0].nodes[0].x, 'number')
   } finally { if (oldKey === undefined) delete process.env.GROQ_API_KEY; else process.env.GROQ_API_KEY = oldKey }
+})
+
+test('invalid study output gets one text-only repair without the reference images', async () => {
+  const calls = []
+  const oldKey = process.env.GROQ_API_KEY
+  process.env.GROQ_API_KEY = 'test-only'
+  const analyzer = analyzerWith(async (_client, request) => { calls.push(request); return calls.length === 1 ? studyResponse(request, { study: { ...STUDY, imagery: undefined } }) : studyResponse(request) })
+  try {
+    const family = await analyzer.analyzeDesignReferences({}, { referenceImages: seeds[0].referenceImages })
+    assert.equal(calls.length, 2)
+    assert.equal(typeof calls[1].messages[1].content, 'string')
+    assert.ok(!calls[1].messages[1].content.includes('data:image'))
+    assert.equal(family.study.imagery.mode, 'none')
+  } finally { if (oldKey === undefined) delete process.env.GROQ_API_KEY; else process.env.GROQ_API_KEY = oldKey }
+})
+
+test('a single reference becomes a complete study that composes a whole carousel', async () => {
+  const calls = []
+  const oldKey = process.env.GROQ_API_KEY
+  process.env.GROQ_API_KEY = 'test-only'
+  const analyzer = analyzerWith(async (_client, request) => { calls.push(request); return studyResponse(request) })
+  try {
+    const family = await analyzer.analyzeDesignReferences({}, { referenceImages: seeds[0].referenceImages.slice(0, 1) })
+    assert.equal(calls.length, 1)
+    assert.match(calls[0].messages[0].content, /exactly 1 reconstructions/)
+    assert.equal(family.referenceImages.length, 1); assert.equal(family.variants.length, 1)
+    const copy = { format: 'carousel', slides: [{ headline: 'Start here', body: 'A short teaser.' }, { headline: 'Why it matters', body: 'Consistency compounds over months.' }, { headline: 'Begin today', body: 'One step is enough.', cta: 'Go' }] }
+    const canvas = generation.renderGlobalPost(family, { id: 'b', name: 'Brand' }, copy, { slots: [] }, { id: 'global-' + family.id }, crypto.randomUUID)
+    assert.equal(canvas.pages.length, 3)
+  } finally { if (oldKey === undefined) delete process.env.GROQ_API_KEY; else process.env.GROQ_API_KEY = oldKey }
+})
+
+test('an unusable reconstruction is dropped without discarding the study', async () => {
+  const oldKey = process.env.GROQ_API_KEY
+  process.env.GROQ_API_KEY = 'test-only'
+  const broken = { observations: 'x', name: 'List', role: 'list', background: 'brand.background', nodes: [{ id: 'a', type: 'text', text: '{{step.1}}', x: 900, y: 0, width: 600, height: 40, fontSize: 30, fontFamily: 'brand.bodyFont', color: 'brand.textPrimary' }] }
+  const analyzer = analyzerWith(async (_client, request) => { const response = studyResponse(request); const body = JSON.parse(response.choices[0].message.content); body.variants[1] = broken; response.choices[0].message.content = JSON.stringify(body); return response })
+  try {
+    const family = await analyzer.analyzeDesignReferences({}, { referenceImages: seeds[0].referenceImages })
+    assert.deepEqual(family.variants.map(v => v.id), ['reference-1'])
+    assert.ok(family.study.grammar)
+  } finally { if (oldKey === undefined) delete process.env.GROQ_API_KEY; else process.env.GROQ_API_KEY = oldKey }
+})
+
+test('list references reconstructed without headline or CTA slots are bound instead of failing the study', () => {
+  const { assignMissingSlots } = load('lib/designs/global/analyze.ts', ['assignMissingSlots'], { ...types, z })
+  const style = { type: 'text', fontFamily: 'brand.bodyFont', color: 'brand.textPrimary', height: 40, width: 700, x: 120 }
+  const list = { id: 'content-1', name: 'List', role: 'list', background: 'brand.background', nodes: [
+    ...[1, 2, 3, 4].map(i => ({ ...style, id: `step-${i}`, text: `{{step.${i}}}`, y: 300 + i * 60, fontSize: 24 })),
+    { ...style, id: 'note', text: 'Original reference sentence', y: 700, fontSize: 22, height: 120 },
+  ] }
+  const slotted = types.variantSchema.parse(assignMissingSlots(list, 'list', 1080, 1350))
+  const text = slotted.nodes.map(n => n.text || '').join(' ')
+  for (const slot of ['headline', 'body', 'cta', 'step.1', 'step.4']) assert.ok(text.includes(`{{${slot}}}`), slot)
+  assert.ok(!text.includes('Original reference sentence'))
+  assert.ok(slotted.nodes.every(n => n.y >= 0 && n.y + n.height <= 1350))
+  const cover = assignMissingSlots({ ...list, nodes: [{ ...style, id: 'title', text: 'Big words', y: 200, fontSize: 90 }, { ...style, id: 'small', text: 'tiny', y: 400, fontSize: 20 }] }, 'cover', 1080, 1350)
+  assert.equal(cover.nodes.find(n => n.id === 'title').text, '{{headline}}')
+  assert.equal(cover.nodes.find(n => n.id === 'small').text, 'tiny', 'covers are not forced to carry body or CTA')
 })
 
 test('dense reference patterns expand into editable shapes without losing size progression or opacity', () => {
@@ -196,4 +274,4 @@ test('dense reference patterns expand into editable shapes without losing size p
   assert.throws(() => expandReferencePatterns({ ...value, patterns: [{ ...value.patterns[0], rows: 60, columns: 60 }] }), /1600/)
 })
 
-module.exports = { load, seeds, resolve, types, store, generation }
+module.exports = { load, seeds, resolve, types, store, generation, study, compose }

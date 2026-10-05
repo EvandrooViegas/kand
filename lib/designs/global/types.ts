@@ -35,12 +35,81 @@ export const templateNodeSchema = z.object({
   if (node.type === 'image' && !node.src) ctx.addIssue({ code: 'custom', message: 'Images must use image.primary or brand.logo slots' })
   if (node.type === 'gradient' && !node.stops) ctx.addIssue({ code: 'custom', message: 'Gradient requires stops' })
 })
+export const IMAGERY_MODES = ['none', 'background', 'fullBleed', 'cutout', 'contained', 'collage', 'mixed', 'other'] as const
+export const VARIANT_IMAGE_MODES = ['none', 'background', 'cutout', 'contained'] as const
+const prose = (max = 1200) => z.string().trim().max(max).default('')
+const rules = z.array(z.string().trim().min(1).max(400)).max(16).default([])
+// Imagery is a property of the design, never of the brand. Generation follows it.
+export const imageryStrategySchema = z.object({
+  mode: z.enum(IMAGERY_MODES), usage: prose(), placement: prose(), cropBehavior: prose(), subjectPlacement: prose(),
+  textRelationship: prose(), overlayTreatment: prose(), frequency: prose(), notes: prose(),
+})
+
+// The grammar is the machine-readable half of a study: relationships and constraints, never coordinates.
+// Every field tolerates partial model output so one odd value never discards a whole study.
+const oneOf = <T extends readonly [string, ...string[]]>(values: T, fallback: T[number]) => z.enum(values).catch(fallback)
+const someOf = <T extends readonly [string, ...string[]]>(values: T, fallback: T[number][]) => z.preprocess(
+  v => Array.isArray(v) ? [...new Set(v.filter(x => (values as readonly unknown[]).includes(x)))] : v,
+  z.array(z.enum(values)).min(1)).catch(fallback)
+/** Composition moves a study allows. The planner combines them with the grammar; they are not templates. */
+export const COMPOSITIONS = ['statement', 'stacked', 'split', 'image-led', 'backdrop-type', 'list', 'closing'] as const
+export const DECORATION_KINDS = ['oversizedType', 'ring', 'circle', 'arc', 'line', 'dotGrid', 'pill', 'cornerBlock', 'frame', 'glow'] as const
+const POSITIONS = ['top-left', 'top-right', 'top-center', 'bottom-left', 'bottom-right', 'bottom-center', 'none'] as const
+const decorationSchema = z.object({
+  kind: z.enum(DECORATION_KINDS),
+  placement: oneOf(['behind', 'edge', 'corner', 'around-text', 'background'] as const, 'edge'),
+  scale: oneOf(['small', 'medium', 'large', 'oversized'] as const, 'large'),
+  opacity: z.coerce.number().min(0).max(100).catch(20),
+  color: oneOf(['accent', 'foreground', 'surfaceTone'] as const, 'surfaceTone'),
+  frequency: oneOf(['every', 'some'] as const, 'every'),
+})
+export const grammarSchema = z.object({
+  compositions: someOf(COMPOSITIONS, ['statement', 'stacked', 'closing']),
+  headline: z.object({
+    scale: oneOf(['medium', 'large', 'veryLarge', 'oversized'] as const, 'large'),
+    weight: oneOf(['regular', 'bold', 'black'] as const, 'bold'),
+    case: oneOf(['none', 'uppercase'] as const, 'none'),
+    tracking: oneOf(['tight', 'normal', 'wide'] as const, 'normal'),
+    leading: oneOf(['tight', 'normal', 'loose'] as const, 'tight'),
+  }).catch({ scale: 'large', weight: 'bold', case: 'none', tracking: 'normal', leading: 'tight' }),
+  body: z.object({ scale: oneOf(['small', 'medium', 'large'] as const, 'medium') }).catch({ scale: 'medium' }),
+  emphasis: oneOf(['none', 'color', 'background', 'underline'] as const, 'color'),
+  alignment: someOf(['left', 'center', 'right'] as const, ['left']),
+  anchors: someOf(['top', 'center', 'bottom'] as const, ['center']),
+  margin: oneOf(['tight', 'standard', 'generous'] as const, 'standard'),
+  density: oneOf(['airy', 'balanced', 'dense'] as const, 'balanced'),
+  surfaces: someOf(['dark', 'light', 'brand'] as const, ['light']),
+  decorations: z.preprocess(v => Array.isArray(v) ? v.filter(d => d && (DECORATION_KINDS as readonly unknown[]).includes(d.kind)) : [], z.array(decorationSchema).max(6)).catch([]),
+  imagery: z.object({
+    scale: oneOf(['none', 'small', 'medium', 'large', 'dominant'] as const, 'none'),
+    positions: someOf(['full', 'top', 'bottom', 'left', 'right', 'center'] as const, ['full']),
+    shape: oneOf(['rect', 'rounded', 'circle', 'pill', 'arch'] as const, 'rect'),
+    overlap: oneOf(['none', 'text', 'edge'] as const, 'none'),
+    dominance: oneOf(['supports', 'balanced', 'dominates'] as const, 'balanced'),
+    overlay: oneOf(['none', 'gradient', 'solid'] as const, 'none'),
+    frequency: oneOf(['every', 'most', 'some', 'rare', 'never'] as const, 'never'),
+  }).catch({ scale: 'none', positions: ['full'], shape: 'rect', overlap: 'none', dominance: 'balanced', overlay: 'none', frequency: 'never' }),
+  branding: z.object({ logo: oneOf(POSITIONS, 'top-left'), slideNumber: oneOf(POSITIONS, 'none'), handle: oneOf(POSITIONS, 'none') })
+    .catch({ logo: 'top-left', slideNumber: 'none', handle: 'none' }),
+  cta: oneOf(['text', 'pill', 'underline', 'arrow'] as const, 'text'),
+})
+/**
+ * Brand-agnostic design DNA: relationships, roles and behaviour. No hex colors, font names, logos or reference copy.
+ * familyRules are the recurring rules, variantRules the flexible rules, avoid the anti-patterns.
+ */
+export const studySchema = z.object({
+  personality: prose(), composition: prose(), spaceDensity: prose(), typography: prose(), colorContrast: prose(),
+  colorRoles: z.object({ background: prose(200), foreground: prose(200), accent: prose(200), decoration: prose(200) }).default({}),
+  imagery: imageryStrategySchema, decorative: prose(), hierarchy: prose(), logoPlacement: prose(400),
+  distinctive: rules, familyRules: rules, variantRules: rules, avoid: rules,
+  grammar: grammarSchema.optional(),
+})
 export const variantSchema = z.object({
   id: z.string().regex(/^[a-z0-9-]+$/).max(80), name: z.string().min(1).max(80), role: z.enum(VARIANT_ROLES),
+  imageMode: z.enum(VARIANT_IMAGE_MODES).optional(), applicability: z.string().max(600).optional(),
   background: color, nodes: z.array(templateNodeSchema).min(1).max(1600),
 }).superRefine((v, ctx) => {
   if (new Set(v.nodes.map(n => n.id)).size !== v.nodes.length) ctx.addIssue({ code: 'custom', message: 'Node IDs must be unique within each variant' })
-  if (!v.nodes.some(n => n.text?.includes('{{headline}}'))) ctx.addIssue({ code: 'custom', message: 'Every variant needs a headline slot' })
 })
 export const referenceSchema = z.object({ id: z.string().min(1).max(100), url: z.string().regex(/^\/(?:api\/uploads\/[a-zA-Z0-9-]+|design-references\/[a-zA-Z0-9_.-]+)$/), name: z.string().max(200), width: z.number().positive(), height: z.number().positive() })
 export const familySchema = z.object({
@@ -53,19 +122,22 @@ export const familySchema = z.object({
     accent: z.string().regex(/^#[a-fA-F0-9]{6}$/), background: z.string().regex(/^#[a-fA-F0-9]{6}$/),
     textPrimary: z.string().regex(/^#[a-fA-F0-9]{6}$/),
   }).optional(),
-  referenceImages: z.array(referenceSchema).min(2).max(30),
-  analysis: z.string().max(12000), variants: z.array(variantSchema).min(2).max(30),
+  referenceImages: z.array(referenceSchema).min(1).max(30),
+  // Variants are reference reconstructions: evidence for review, never the routes generation follows.
+  analysis: z.string().max(12000), study: studySchema.optional(), variants: z.array(variantSchema).max(30).default([]),
 }).superRefine((family, ctx) => {
   if (new Set(family.variants.map(v => v.id)).size !== family.variants.length) ctx.addIssue({ code: 'custom', message: 'Variant IDs must be unique' })
-  if (!family.variants.some(v => v.role === 'cover') || !family.variants.some(v => v.role === 'content')) ctx.addIssue({ code: 'custom', message: 'A family needs cover and content variants' })
   for (const variant of family.variants) for (const node of variant.nodes) {
     if (node.type === 'text' && (node.x < 0 || node.y < 0 || node.x + node.width > family.width || node.y + node.height > family.height)) ctx.addIssue({ code: 'custom', message: `${variant.id}/${node.id}: text must stay inside the canvas` })
   }
-  if (!family.variants.some(v => v.nodes.some(n => n.text?.includes('{{body}}')) && v.nodes.some(n => n.text?.includes('{{cta}}')))) ctx.addIssue({ code: 'custom', message: 'Include a content variant with body and CTA slots so supplied copy is preserved' })
 })
 export type TemplateNode = z.infer<typeof templateNodeSchema>
 export type DesignVariant = z.infer<typeof variantSchema>
 export type GlobalDesignFamily = z.infer<typeof familySchema>
 export type ReferenceImage = z.infer<typeof referenceSchema>
+export type DesignStudy = z.infer<typeof studySchema>
+export type DesignGrammar = z.infer<typeof grammarSchema>
+export type Composition = typeof COMPOSITIONS[number]
+export type VariantImageMode = typeof VARIANT_IMAGE_MODES[number]
 export interface BrandGlobalDesign { id: string; source: 'global'; globalFamilyId: string; globalVersion: number; name: string; tags: string[]; createdAt: string }
 export interface GlobalDesignRecord { id: string; status: 'draft' | 'published'; revision: number; draft: GlobalDesignFamily; publishedVersion?: number; deletedAt?: Date; updatedAt: Date }

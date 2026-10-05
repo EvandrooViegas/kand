@@ -1,15 +1,15 @@
 import type { GlobalDesignFamily, DesignVariant, TemplateNode } from './types'
 
-const hex = (value: unknown): string | undefined => {
+export const hex = (value: unknown): string | undefined => {
   if (typeof value !== 'string') return undefined
   if (/^#[a-f\d]{6}$/i.test(value)) return value
   if (/^#[a-f\d]{3}$/i.test(value)) return '#' + value.slice(1).split('').map(c => c + c).join('')
 }
-function lightness(color: string) {
+export function lightness(color: string) {
   const c = [1, 3, 5].map(i => parseInt(color.slice(i, i + 2), 16) / 255).map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4)
   return c[0] * .2126 + c[1] * .7152 + c[2] * .0722
 }
-const on = (color: string) => lightness(color) > .179 ? '#101010' : '#ffffff'
+export const on = (color: string) => lightness(color) > .179 ? '#101010' : '#ffffff'
 const font = (value: any, fallback: string) => (typeof value === 'string' ? value : value?.family || value?.name || fallback).replace(/-?(Regular|SemiBold|Bold|Italic)$/i, '')
 
 export function resolveBrandTokens(brand: any = {}, family?: GlobalDesignFamily): Record<string, string> {
@@ -25,19 +25,33 @@ export function resolveBrandTokens(brand: any = {}, family?: GlobalDesignFamily)
     'brand.background': background, 'brand.textPrimary': text,
     'brand.textSecondary': hex(roles.textSecondary) || text,
     'brand.onPrimary': lightness(primary) <= .3 ? '#ffffff' : '#101010', 'brand.onAccent': on(accent), 'brand.onImage': '#ffffff', 'brand.overlay': '#000000', transparent: '#00000000',
-    'brand.headingFont': font(brand.headingFont || brand.fonts?.[0], family?.typography.headingFallback || 'Inter'),
-    'brand.bodyFont': font(brand.bodyFont || brand.fonts?.[1] || brand.fonts?.[0], family?.typography.bodyFallback || 'Inter'),
+    // Fonts always come from the brand. Reference fonts are preview metadata and never a generation fallback.
+    'brand.headingFont': font(brand.headingFont || brand.fonts?.[0], 'Inter'),
+    'brand.bodyFont': font(brand.bodyFont || brand.fonts?.[1] || brand.fonts?.[0], 'Inter'),
   }
 }
 
-export function chooseVariant(family: GlobalDesignFamily, slide: any, index: number, total: number): DesignVariant {
-  const preferred = index === 0 ? (total === 1 && String(slide.body || slide.supportingText || '').length > 110 ? 'content' : 'cover')
-    : index === total - 1 ? 'cta'
-      : /list|steps|checklist|passos|lista/i.test(slide.purpose || '') || Array.isArray(slide.items) || /(?:^|\n)\s*(?:[-•]|\d+[.)])/.test(slide.body || '') ? 'list'
-        : /quote|cita/i.test(slide.purpose || '') ? 'quote' : 'content'
-  // Only pick a variant inside this one family; unsupported roles reuse its content layout.
-  const accepts = (v: DesignVariant) => (!String(slide.body || slide.supportingText || '').trim() || v.nodes.some(n => n.text?.includes('{{body}}'))) && (!String(slide.cta || '').trim() || v.nodes.some(n => n.text?.includes('{{cta}}')))
-  return family.variants.find(v => v.role === preferred && accepts(v)) || family.variants.find(v => v.role === 'content' && accepts(v)) || family.variants.find(accepts) || family.variants[0]
+/** Unbranded previews may show the reference look; brand posts never receive it. */
+export const referencePreviewBrand = (family: GlobalDesignFamily) => ({ ...(family.referenceStyle ? { designTokens: family.referenceStyle } : {}), headingFont: family.typography.headingFallback, bodyFont: family.typography.bodyFallback })
+
+const fontFactor = (font: string) => ['Oswald', 'Bebas Neue', 'Anton'].includes(font) ? .82 : ['Playfair Display', 'Dancing Script', 'Pacifico', 'Lobster'].includes(font) ? 1.12 : 1
+
+/** Estimated wrapped line count. Shared by template fitting and the study composer. */
+export function countLines(text: string, size: number, width: number, font: string, letterSpacing = 0): number {
+  const factor = fontFactor(font)
+  let lines = 0
+  for (const paragraph of text.split('\n')) {
+    let used = 0
+    lines++
+    for (const word of paragraph.split(/\s+/).filter(Boolean)) {
+      const length = [...word].reduce((sum, c) => sum + size * (/[ilI.,'!:;]/.test(c) ? .32 : /[MW@#%]|[^\u0000-\u024f]/.test(c) ? 1 : /[A-Z0-9]/.test(c) ? .74 : .65) * factor + Math.max(0, letterSpacing), 0)
+      const gap = used ? size * .34 * factor : 0
+      if (used && used + gap + length > width) { lines++; used = 0 }
+      if (length > width) { lines += Math.ceil(length / width) - 1; used = length % width || width }
+      else used += (used ? gap : 0) + length
+    }
+  }
+  return lines
 }
 
 function fitSize(text: string, node: TemplateNode, resolvedFont: string): number {
@@ -47,28 +61,15 @@ function fitSize(text: string, node: TemplateNode, resolvedFont: string): number
   // copy can be longer than reference copy, so keep shrinking within a readable
   // range before rejecting it. Geometry and the complete text stay unchanged.
   const minimum = Math.min(designedMinimum, Math.max(14, Math.floor(preferred * .34)))
-  const factor = ['Oswald', 'Bebas Neue', 'Anton'].includes(resolvedFont) ? .82 : ['Playfair Display', 'Dancing Script', 'Pacifico', 'Lobster'].includes(resolvedFont) ? 1.12 : 1
   const width = node.width - (node.highlight === 'background' ? 28 : 8)
   for (let size = preferred; size >= minimum; size--) {
-    let lines = 0
-    for (const paragraph of text.split('\n')) {
-      let used = 0
-      lines++
-      for (const word of paragraph.split(/\s+/).filter(Boolean)) {
-        const length = [...word].reduce((sum, c) => sum + size * (/[ilI.,'!:;]/.test(c) ? .32 : /[MW@#%]|[^\u0000-\u024f]/.test(c) ? 1 : .65) * factor + Math.max(0, node.letterSpacing || 0), 0)
-        const gap = used ? size * .34 * factor : 0
-        if (used && used + gap + length > width) { lines++; used = 0 }
-        if (length > width) { lines += Math.ceil(length / width) - 1; used = length % width || width }
-        else used += (used ? gap : 0) + length
-      }
-    }
-    if (lines * size * (node.lineHeight || 1.15) + 8 <= node.height) return size
+    if (countLines(text, size, width, resolvedFont, node.letterSpacing || 0) * size * (node.lineHeight || 1.15) + 8 <= node.height) return size
   }
   throw Object.assign(new Error(`The ${node.id} text is too long for this design. Shorten it or split it into another slide.`), { status: 422 })
 }
 
 // Content is text data, never executable inline-style markup supplied by a model.
-const clean = (value: any) => String(value ?? '').replace(/<%|%>|\{\{|\}\}/g, '').slice(0, 8000)
+export const clean = (value: any) => String(value ?? '').replace(/<%|%>|\{\{|\}\}/g, '').slice(0, 8000)
 export function contentSlots(brand: any, slide: any, index = 0, image = ''): Record<string, string> {
   let website = clean(brand.website || '')
   try { if (website) website = new URL(website).hostname } catch {}
@@ -82,7 +83,7 @@ export function contentSlots(brand: any, slide: any, index = 0, image = ''): Rec
   }
 }
 
-/** Compile template data into the application's existing editable Canvas node format. */
+/** Compile a reference reconstruction into editable Canvas nodes. Used for review previews only. */
 export function resolveVariant(family: GlobalDesignFamily, variant: DesignVariant, brand: any = {}, slide: any = {}, index = 0, image = '', options: { preview?: boolean; placeholders?: boolean } = {}) {
   const tokens = resolveBrandTokens(brand, family), slots = contentSlots(brand, slide, index, image)
   const surface = tokens[variant.background]
@@ -135,23 +136,3 @@ export function resolveVariant(family: GlobalDesignFamily, variant: DesignVarian
 }
 
 export const SAMPLE_COPY = { headline: 'Make your next move matter', body: 'A thoughtful approach turns a clear idea into meaningful progress. Start with one practical step and build from there.', cta: 'Explore more', eyebrow: 'Start here', author: 'Your name', steps: ['Decide', 'Start', 'Keep going', 'Finish'] }
-
-/** Preserve semantic bindings while accepting geometry/type edits from the existing Canvas. */
-export function templateFromCanvas(family: GlobalDesignFamily, variant: DesignVariant, canvas: any): DesignVariant {
-  const tokens = resolveBrandTokens({}, family)
-  const previous = new Map(variant.nodes.map(n => [n.id, n]))
-  const semantic = (value: string, fallback: string) => Object.entries(tokens).find(([key, resolved]) => resolved === value && key.startsWith('brand.'))?.[0] || fallback
-  const nodes = (canvas.nodes || []).map((n: any) => {
-    const old = previous.get(n.id)
-    const bindingKeys = ['text', 'src', 'color', 'fill', 'stroke', 'fontFamily', 'stops', 'minFontSize', 'highlight', 'highlightCount', 'optional', 'fillAlpha']
-    const bindings = n.templateBinding || Object.fromEntries(bindingKeys.filter(key => (old as any)?.[key] !== undefined).map(key => [key, (old as any)[key]]))
-    const result = { ...n, ...Object.fromEntries(Object.entries(bindings).filter(([, value]) => value !== undefined)) }
-    for (const key of ['color', 'fill', 'stroke']) if (n[key] && !bindings[key]) result[key] = semantic(n[key], key === 'fill' ? 'brand.accent' : 'brand.textPrimary')
-    if (n.type === 'text') { result.fontFamily = bindings.fontFamily || 'brand.bodyFont'; result.text = /\{\{.+\}\}/.test(n.text) ? n.text : bindings.text || '{{body}}' }
-    if (n.type === 'image') result.src = bindings.src || '{{image.primary}}'
-    if (n.stops && !bindings.stops) result.stops = n.stops.map((s: any) => ({ ...s, color: semantic(s.color, 'brand.overlay') }))
-    delete result.templateBinding
-    return result
-  })
-  return { ...variant, nodes, background: canvas.background === tokens[variant.background] ? variant.background : semantic(canvas.background, variant.background) as DesignVariant['background'] }
-}

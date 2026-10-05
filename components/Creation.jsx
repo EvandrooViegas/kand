@@ -6,7 +6,6 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Badge } from '@/components/ui/badge'
 import { toast } from 'sonner'
 import ResolvedImagePreview from '@/components/ResolvedImagePreview'
-import ImageDispositionPicker from '@/components/ImageDispositionPicker'
 import {
   Loader2, Sparkles, Lightbulb, Check, RefreshCw,
   LayoutTemplate, Image as ImageIcon, ChevronDown, ChevronUp,
@@ -17,8 +16,6 @@ import {
 } from 'lucide-react'
 
 // ─── helpers ─────────────────────────────────────────────────────────────────
-
-const sleep = ms => new Promise(r => setTimeout(r, ms))
 
 const PILLAR_COLORS = {
   'Educational':            'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-300',
@@ -62,245 +59,108 @@ function SlideRow({ slide }) {
   )
 }
 
-// ─── Per-post pipeline card ───────────────────────────────────────────────────
+// ─── Post generation: PLAN → (VISUALS) → BUILD ────────────────────────────────
 
-const STEP_KEYS = ['copy', 'layout', 'plan', 'resolve', 'design']
+async function postJson(url, body) {
+  const res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
+  const data = await res.json()
+  if (!res.ok) throw new Error(data.error || 'Failed')
+  return data
+}
+
+/**
+ * One request per real stage. PLAN makes the post's single model call (copy + composition plan);
+ * VISUALS runs only when the selected design study needs imagery; BUILD creates and validates the editable canvas.
+ * With keepCopy, the existing copy is re-planned without a model call.
+ */
+async function runPostGeneration({ idea, brandContext, brandId, keepCopy, onStage, onCopy, onPlan, onResolve, onDesign }) {
+  onStage('content')
+  let planned
+  try {
+    planned = await postJson('/api/plan-post', { brandContext, flowId: brandContext?.id, idea, ...(keepCopy ? { copy: keepCopy } : {}) })
+    onCopy({ loading: false, error: null, copy: planned.copy })
+    onPlan({ loading: false, error: null, plan: planned.plan, layoutPlan: planned.plan.layoutPlan })
+  } catch (err) { onPlan({ loading: false, error: err.message, plan: null }); throw err }
+
+  let resolved
+  if (planned.needsVisuals) {
+    onStage('visuals')
+    try { resolved = await postJson('/api/resolve-assets', { plan: planned.plan, brand_id: brandId }) }
+    catch (err) { onResolve({ loading: false, error: err.message, resolved: null }); throw err }
+  } else {
+    // The studied design uses no imagery: no search or generation is requested.
+    resolved = { designId: planned.plan.designId, layoutPlan: planned.plan.layoutPlan, post_id: planned.plan.post_id, format: planned.plan.format, slots: planned.plan.slots.map(s => ({ slot_id: s.slot_id, slot_label: s.slot_label, needs_visual: false, visual_purpose: '', source: 'none', resolvedAsset: null, warning: null })) }
+  }
+  onResolve({ loading: false, error: null, resolved, skipped: !planned.needsVisuals })
+
+  onStage('build')
+  try {
+    const canvas = await postJson('/api/design-canvas', { brandContext, copy: planned.copy, resolvedPlan: resolved, canvasName: `${brandContext?.name ?? ''} — ${idea.topic}`.trim() })
+    onDesign({ loading: false, error: null, canvas })
+    return canvas
+  } catch (err) { onDesign({ loading: false, error: err.message, canvas: null }); throw err }
+}
 
 function PostPipelineCard({
   idea, brandContext, brandId,
   copyState, planState, resolveState, designState,
   onCopyDone, onPlanDone, onResolveDone, onDesignDone,
 }) {
-  // Which step's content is currently visible
-  const [activeView, setActiveView] = useState(null)
-  const [stepByStep,setStepByStep]=useState(false)
-  const [imageDisposition,setImageDisposition]=useState(null)
-  const [autoRunning, setAutoRunning] = useState(false)
-  const autoLock = useRef(false)
-  // Which step is showing a regenerate confirmation popover
-  const [confirmRegen, setConfirmRegen] = useState(null)
-
-  const [copyLoading,    setCopyLoading]    = useState(false)
-  const [planLoading,    setPlanLoading]    = useState(false)
-  const [resolveLoading, setResolveLoading] = useState(false)
-  const [designLoading,  setDesignLoading]  = useState(false)
-  const [layoutLoading,setLayoutLoading]=useState(false)
-  const layoutPlan=planState?.layoutPlan||planState?.plan?.layoutPlan
+  const [stage, setStage] = useState(null)
+  const [failedStage, setFailedStage] = useState(null)
+  const [showDetails, setShowDetails] = useState(false)
+  const lock = useRef(false)
 
   const copy     = copyState?.copy        ?? null
   const plan     = planState?.plan        ?? null
   const resolved = resolveState?.resolved ?? null
   const canvas   = designState?.canvas    ?? null
+  const error    = copyState?.error || planState?.error || resolveState?.error || designState?.error || null
+  const running  = !!stage
+  const needsVisuals = plan ? plan.slots.some(s => s.needs_visual) : null
 
-  const copyError    = copyState?.error    ?? null
-  const planError    = planState?.error    ?? null
-  const resolveError = resolveState?.error ?? null
-  const designError  = designState?.error  ?? null
-
-  const anyLoading = autoRunning || copyLoading || layoutLoading || planLoading || resolveLoading || designLoading
-
-  // ── cascade clear downstream steps ───────────────────────────────────────
-  // When step N is rerun, steps N+1…4 are invalidated.
-
-  const clearFrom = (stepKey) => {
-    const idx = ['copy','plan','resolve','design'].indexOf(stepKey==='layout'?'plan':stepKey)
-    if (idx <= 0) {
-      onCopyDone(idea.id,    { loading: false, error: null, copy: null })
-    }
-    if (idx <= 1) {
-      onPlanDone(idea.id,    { loading: false, error: null, plan: null })
-    }
-    if (idx <= 2) {
-      onResolveDone(idea.id, { loading: false, error: null, resolved: null })
-    }
-    if (idx <= 3) {
-      onDesignDone(idea.id,  { loading: false, error: null, canvas: null })
-    }
-  }
-
-  // ── step runners ──────────────────────────────────────────────────────────
-
-  const runCopy = async () => {
-    clearFrom('copy')
-    setCopyLoading(true)
+  const generate = async ({ keepCopy = null } = {}) => {
+    if (lock.current) return
+    lock.current = true
+    setFailedStage(null)
+    if (!keepCopy) onCopyDone(idea.id, { loading: false, error: null, copy: null })
+    onPlanDone(idea.id, { loading: false, error: null, plan: null })
+    onResolveDone(idea.id, { loading: false, error: null, resolved: null })
+    onDesignDone(idea.id, { loading: false, error: null, canvas: null })
+    let current = 'content'
     try {
-      for (let attempt = 0; attempt < 1; attempt++) {
-        try {
-          const res = await fetch('/api/generate-copywriting', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ brandContext, idea }),
-          })
-          const data = await res.json()
-          if (!res.ok) throw new Error(data.error || 'Failed')
-          onCopyDone(idea.id, { loading: false, error: null, copy: data })
-          setActiveView('copy')
-          return data
-        } catch (err) {
-          const is429 = err?.message?.includes('429') || err?.message?.includes('rate_limit')
-
-          throw err
-        }
-      }
-    } catch (err) {
-      onCopyDone(idea.id, { loading: false, error: err.message, copy: null })
-      toast.error(`Copy failed: ${err.message}`)
-    } finally {
-      setCopyLoading(false)
-    }
-  }
-
-  const runLayout=async(currentCopy=copy,{keepResults=false}={})=>{
-    if(!currentCopy)return
-    if(!keepResults)clearFrom('layout')
-    setLayoutLoading(true);setActiveView('layout')
-    try {
-      const response=await fetch('/api/plan-assets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phase:'canvas',brandContext,copy:currentCopy,idea,brand_id:brandId,imageDisposition:imageDisposition||(keepResults?layoutPlan?.imageDisposition:undefined),designId:keepResults?(layoutPlan?.designId||canvas?.designSelection?.id||resolved?.designId):undefined})})
-      const result=await response.json();if(!response.ok)throw Error(result.error||'Layout failed')
-      onPlanDone(idea.id,{loading:false,error:null,plan:keepResults&&plan?{...plan,layoutPlan:result,designId:result.designId}:null,layoutPlan:result})
-      if(keepResults&&resolved){
-        const updatedResolved={...resolved,layoutPlan:result,designId:result.designId}
-        onResolveDone(idea.id,{...resolveState,resolved:updatedResolved})
-        if(canvas){
-          const updatedCanvas=await runDesign(updatedResolved,currentCopy,{keepResults:true})
-          if(updatedCanvas)toast.success('Design updated using your existing copy and images.')
-        }else toast.success('Design regenerated. Existing assets and resolved images kept.')
-      }else if(keepResults)toast.success('Design regenerated. Other steps kept.')
-      return result
-    }catch(e){
-      if(keepResults)toast.error(`Design regeneration failed: ${e.message}`)
-      else onPlanDone(idea.id,{loading:false,error:e.message,plan:null})
-    }finally{setLayoutLoading(false)}
-  }
-  const runPlan = async (currentCopy = copy) => {
-    if (!currentCopy) { toast.error('Write copy first'); return }
-    const currentLayout=layoutPlan||await runLayout(currentCopy)
-    if(!currentLayout)return
-    clearFrom('plan')
-    setPlanLoading(true)
-    try {
-      const res = await fetch('/api/plan-assets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ brandContext, copy: currentCopy, idea, brand_id: brandId,layoutPlan:currentLayout }),
+      await runPostGeneration({
+        idea, brandContext, brandId, keepCopy,
+        onStage: s => { current = s; setStage(s) },
+        onCopy: v => onCopyDone(idea.id, v), onPlan: v => onPlanDone(idea.id, v),
+        onResolve: v => onResolveDone(idea.id, v), onDesign: v => onDesignDone(idea.id, v),
       })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Failed')
-      onPlanDone(idea.id, { loading: false, error: null, plan: data,layoutPlan:currentLayout })
-      setActiveView('plan')
-      return data
+      toast.success('Post ready to edit')
     } catch (err) {
-      onPlanDone(idea.id, { loading: false, error: err.message, plan: null })
-      toast.error(`Asset plan failed: ${err.message}`)
+      setFailedStage(current)
+      toast.error(err.message)
     } finally {
-      setPlanLoading(false)
+      setStage(null)
+      lock.current = false
     }
   }
+  // Retrying after content succeeded keeps the copy; the plan is rebuilt without a model call.
+  const retry = () => generate({ keepCopy: failedStage && failedStage !== 'content' ? copy : null })
 
-  const runResolve = async (currentPlan = plan) => {
-    if (!currentPlan) { toast.error('Plan assets first'); return }
-    clearFrom('resolve')
-    setResolveLoading(true)
-    try {
-      const res = await fetch('/api/resolve-assets', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ plan: currentPlan, brand_id: brandId }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Failed')
-      onResolveDone(idea.id, { loading: false, error: null, resolved: data })
-      setActiveView('resolve')
-      return data
-    } catch (err) {
-      onResolveDone(idea.id, { loading: false, error: err.message, resolved: null })
-      toast.error(`Asset resolve failed: ${err.message}`)
-    } finally {
-      setResolveLoading(false)
-    }
-  }
-
-  const runDesign = async (currentResolved = resolved, currentCopy = copy,{keepResults=false}={}) => {
-    if (!currentResolved) { toast.error('Resolve assets first'); return }
-    if(!keepResults)clearFrom('design')
-    setDesignLoading(true)
-    try {
-      const res = await fetch('/api/design-canvas', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          brandContext, copy: currentCopy, resolvedPlan: currentResolved,
-          canvasName: `${brandContext?.name ?? ''} — ${idea.topic}`.trim(),
-        }),
-      })
-      const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Failed')
-      onDesignDone(idea.id, { loading: false, error: null, canvas: data })
-      setActiveView('design')
-      return data
-    } catch (err) {
-      onDesignDone(idea.id, { loading: false, error: err.message, canvas:keepResults?canvas:null })
-      toast.error(`Canvas design failed: ${err.message}`)
-    } finally {
-      setDesignLoading(false)
-    }
-  }
-
-  const generatePost = async () => {
-    if (autoLock.current || anyLoading) return
-    autoLock.current = true
-    setAutoRunning(true)
-    setConfirmRegen(null)
-    try {
-      let currentCopy = copyError ? null : copy
-      let currentPlan = currentCopy && !planError ? plan : null
-      let currentResolved = currentPlan && !resolveError ? resolved : null
-      if (!currentCopy) { setActiveView('copy'); currentCopy = await runCopy(); if (!currentCopy) return }
-      if (!currentPlan) { setActiveView('plan'); currentPlan = await runPlan(currentCopy); if (!currentPlan) return }
-      if (!currentResolved) { setActiveView('resolve'); currentResolved = await runResolve(currentPlan); if (!currentResolved) return }
-      setActiveView('design')
-      const result = await runDesign(currentResolved, currentCopy)
-      if (result) toast.success('Post ready to edit')
-    } finally {
-      autoLock.current = false
-      setAutoRunning(false)
-    }
-  }
-
-  // ── next step ─────────────────────────────────────────────────────────────
-
-  const nextStep = (() => {
-    if (!copy    || copyError)     return { key: 'copy',    label: 'Write copy',     Icon: PenLine,   run: runCopy,    loading: copyLoading    }
-    if (!layoutPlan) return {key:'layout',label:'Plan canvas',Icon:Sparkles,run:runLayout,loading:layoutLoading}
-    if (!plan    || planError)     return { key: 'plan',    label: 'Plan assets',    Icon: Boxes,     run: runPlan,    loading: planLoading    }
-    if (!resolved || resolveError) return { key: 'resolve', label: 'Resolve assets', Icon: ImageIcon, run: runResolve, loading: resolveLoading }
-    if (!canvas  || designError)   return { key: 'design',  label: 'Fit final canvas',  Icon: Sparkles,  run: runDesign,  loading: designLoading  }
-    return null
-  })()
+  const progress = [
+    { key: 'content', label: 'Preparing content and design plan' },
+    ...(needsVisuals === false ? [] : [{ key: 'visuals', label: 'Preparing visuals' }]),
+    { key: 'build', label: 'Building and checking your post' },
+  ].map(item => {
+    const done = item.key === 'content' ? !!plan : item.key === 'visuals' ? !!resolved : !!canvas
+    const state = stage === item.key ? 'active' : failedStage === item.key ? 'error' : done ? 'done' : 'pending'
+    return { ...item, state }
+  })
+  const started = running || copy || plan || canvas || failedStage
 
   const isCarousel = idea.format === 'carousel'
   const canvasId   = canvas?.id
-
-  // Steps meta for the progress strip
-  const steps = [
-    { key: 'copy',    label: 'Copy',    Icon: PenLine,   done: !!copy,     error: !!copyError,    loading: copyLoading,    canRun: true,       run: runCopy    },
-    { key:'layout',label:'Canvas',Icon:Sparkles,done:!!layoutPlan,error:!!planError&&!layoutPlan,loading:layoutLoading,canRun:!!copy,run:runLayout },
-    { key: 'plan',    label: 'Assets',  Icon: Boxes,     done: !!plan,     error: !!planError,    loading: planLoading,    canRun: !!layoutPlan,     run: runPlan    },
-    { key: 'resolve', label: 'Resolve', Icon: ImageIcon, done: !!resolved, error: !!resolveError, loading: resolveLoading, canRun: !!plan,     run: runResolve },
-    { key: 'design',  label: 'Fit',  Icon: Sparkles,  done: !!canvas,   error: !!designError,  loading: designLoading,  canRun: !!resolved, run: runDesign  },
-  ]
-
-  // Downstream warning: how many steps will be cleared if we regenerate
-  const downstreamCount = (stepKey) => {
-    const idx = STEP_KEYS.indexOf(stepKey)
-    return STEP_KEYS.slice(idx + 1).filter(k => {
-      if (k === 'layout') return !!layoutPlan
-      if (k === 'plan')    return !!plan
-      if (k === 'resolve') return !!resolved
-      if (k === 'design')  return !!canvas
-      return false
-    }).length
-  }
+  const validation = canvas?.validation
 
   return (
     <div className="rounded-xl border-2 border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 overflow-hidden">
@@ -322,358 +182,122 @@ function PostPipelineCard({
         </div>
       </div>
 
-      {/* ── Pipeline progress strip ── */}
-      <div className="px-5 pb-3 flex items-center gap-1.5 flex-wrap">
-        {steps.map((s, idx) => {
-          const isActive = activeView === s.key
-          return (
-            <div key={s.key} className="flex items-center gap-1.5">
-              {/* Step pill — clicking opens the step's content panel */}
-              <button
-                onClick={() => {
-                  if (s.done || s.error) setActiveView(activeView === s.key ? null : s.key)
-                }}
-                disabled={!s.done && !s.error}
-                className={`
-                  flex items-center gap-1.5 px-3 h-7 rounded-full text-xs font-semibold transition-all
-                  ${s.loading
-                    ? 'bg-primary/10 text-primary cursor-wait'
-                    : s.done
-                      ? isActive
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-300 hover:bg-green-200 cursor-pointer'
-                      : s.error
-                        ? 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300 cursor-pointer'
-                        : s.canRun
-                          ? 'bg-slate-100 dark:bg-slate-800 text-slate-400 dark:text-slate-500'
-                          : 'bg-slate-100 dark:bg-slate-800 text-slate-300 dark:text-slate-600'
-                  }
-                `}
-              >
-                {s.loading
-                  ? <Loader2 className="w-3 h-3 animate-spin" />
-                  : s.done
-                    ? <CheckCircle2 className="w-3 h-3" />
-                    : s.error
-                      ? <AlertCircle className="w-3 h-3" />
-                      : <s.Icon className="w-3 h-3" />
-                }
-                {s.label}
-              </button>
-              {idx < steps.length - 1 && (
-                <ArrowRight className="w-3 h-3 flex-shrink-0 text-slate-200 dark:text-slate-700" />
-              )}
-            </div>
-          )
-        })}
-      </div>
+      {/* ── Progress: only real stages; visuals is omitted when the design uses no imagery ── */}
+      {started && (
+        <ol className="px-5 pb-3 space-y-1.5" aria-live="polite">
+          {progress.map(item => (
+            <li key={item.key} className={`flex items-center gap-2 text-xs ${item.state === 'pending' ? 'text-slate-400' : item.state === 'error' ? 'text-red-600 dark:text-red-400' : 'text-slate-700 dark:text-slate-300'}`}>
+              {item.state === 'active' ? <Loader2 className="w-3.5 h-3.5 animate-spin text-primary" />
+                : item.state === 'done' ? <CheckCircle2 className="w-3.5 h-3.5 text-green-600" />
+                : item.state === 'error' ? <AlertCircle className="w-3.5 h-3.5" />
+                : <span className="w-3.5 h-3.5 rounded-full border border-slate-300 dark:border-slate-600" />}
+              {item.label}
+            </li>
+          ))}
+          {needsVisuals === false && <li className="text-[11px] text-slate-400 pl-5">This design uses typography and graphics only — no images needed.</li>}
+        </ol>
+      )}
 
-      {/* ── Primary action row ── */}
-      <div className="px-5 pb-3"><label className="text-sm flex items-center gap-2"><input type="checkbox" checked={stepByStep} disabled={anyLoading} onChange={e=>setStepByStep(e.target.checked)}/>Step-by-step mode</label></div>
-      {stepByStep&&copy&&layoutPlan?.source!=='global'&&(!plan||nextStep?.key==='design'||activeView==='layout'||activeView==='design')&&<div className="px-5 pb-4 space-y-2"><p className="text-sm font-semibold">Image style for this post</p><p className="text-xs text-muted-foreground">Uses your brand default unless changed here. Changing style resets the asset and final design steps; click each next-step button to continue.</p><ImageDispositionPicker value={imageDisposition||layoutPlan?.imageDisposition||brandContext?.imageDisposition||'cutout'} disabled={anyLoading} onChange={value=>{setImageDisposition(value);clearFrom('layout');setActiveView('layout')}}/></div>}
+      {/* ── Actions ── */}
       <div className="px-5 pb-4 flex items-center gap-2 flex-wrap">
-        {!stepByStep&&(nextStep || autoRunning) && <Button size="sm" onClick={generatePost} disabled={anyLoading} className="gap-1.5">
-          {autoRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-          {autoRunning ? 'Generating post…' : copy ? 'Continue generating post' : 'Generate post'}
-        </Button>}
-        <span role="status" aria-live="polite" className="text-xs text-slate-500">
-          {autoRunning ? copyLoading ? 'Step 1 of 5 · Writing copy' : layoutLoading ? 'Step 2 of 5 · Planning canvas' : planLoading ? 'Step 3 of 5 · Planning assets' : resolveLoading ? 'Step 4 of 5 · Creating images' : designLoading ? 'Step 5 of 5 · Fitting final canvas' : 'Preparing next step…' : ''}
-        </span>
-        {/* Next step button */}
-        {nextStep && (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => {setStepByStep(true);nextStep.run()}}
-            disabled={nextStep.loading || anyLoading}
-            className="gap-1.5"
-          >
-            {nextStep.loading
-              ? <><Loader2 className="w-3.5 h-3.5 animate-spin" />Running…</>
-              : <><nextStep.Icon className="w-3.5 h-3.5" />{nextStep.label}</>
-            }
+        {!canvas && !failedStage && (
+          <Button size="sm" onClick={() => generate()} disabled={running} className="gap-1.5">
+            {running ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+            {running ? 'Creating your post…' : 'Generate post'}
           </Button>
         )}
-
-        {/* All done indicator */}
-        {!nextStep && !anyLoading && (
-          <span className="flex items-center gap-1.5 text-xs font-medium text-green-600 dark:text-green-400">
-            <CheckCircle2 className="w-3.5 h-3.5" />All steps complete
-          </span>
+        {failedStage && !running && (
+          <Button size="sm" onClick={retry} className="gap-1.5"><RefreshCw className="w-3.5 h-3.5" />Retry</Button>
         )}
-
-        {/* Open in editor */}
-        {canvasId && (
-          <a
-            href={isCarousel ? `/carousel/${canvasId}` : `/editor/${canvasId}`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="ml-auto"
-          >
-            <Button size="sm" variant="outline" className="gap-1.5">
-              <ExternalLink className="w-3.5 h-3.5" />Open in editor
+        {canvas && !running && (
+          <>
+            <Button size="sm" variant="outline" onClick={() => generate({ keepCopy: copy })} className="gap-1.5" title="Rebuild the design with the same copy. No new AI writing.">
+              <RefreshCw className="w-3.5 h-3.5" />Rebuild design · keep copy
             </Button>
+            <Button size="sm" variant="ghost" onClick={() => generate()} className="gap-1.5">
+              <Sparkles className="w-3.5 h-3.5" />New version
+            </Button>
+          </>
+        )}
+        {(copy || resolved || canvas || error) && (
+          <button onClick={() => setShowDetails(v => !v)} className="text-xs text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 flex items-center gap-1">
+            {showDetails ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />}Details
+          </button>
+        )}
+        {canvasId && (
+          <a href={isCarousel ? `/carousel/${canvasId}` : `/editor/${canvasId}`} target="_blank" rel="noopener noreferrer" className="ml-auto">
+            <Button size="sm" className="gap-1.5"><ExternalLink className="w-3.5 h-3.5" />Open in editor</Button>
           </a>
         )}
       </div>
 
-      {/* ── Step content panels ── */}
-      {activeView && (
-        <div className="border-t border-slate-100 dark:border-slate-800">
+      {error && !running && <div className="px-5 pb-4"><ErrorBlock label="Post could not be created" message={error} /></div>}
 
-          {/* Panel header with regenerate button */}
-          <div className="px-5 py-3 flex items-center justify-between bg-slate-50 dark:bg-slate-900/60">
-            <div className="flex items-center gap-2">
-              {steps.filter(s => s.done || s.error).map(s => (
-                <button
-                  key={s.key}
-                  onClick={() => setActiveView(s.key)}
-                  className={`text-xs font-semibold px-2.5 py-1 rounded-md transition-colors
-                    ${activeView === s.key
-                      ? 'bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 shadow-sm'
-                      : 'text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
-                    }`}
-                >
-                  {s.label}
-                </button>
-              ))}
-            </div>
-
-            <div className="flex items-center gap-2 flex-wrap justify-end">
-            {activeView === 'layout' && layoutPlan && (
-              <button
-                onClick={() => { setConfirmRegen(null); runLayout(copy,{keepResults:true}) }}
-                disabled={anyLoading}
-                title="Regenerate the design and update the finished post using the existing copy, assets, and resolved images."
-                className="flex items-center gap-1.5 text-xs font-semibold text-primary px-2.5 py-1 rounded-md border border-primary/20 hover:bg-primary/5 transition-colors disabled:opacity-40"
-              >
-                <RefreshCw className={`w-3 h-3 ${layoutLoading ? 'animate-spin' : ''}`} />
-                {layoutLoading ? 'Regenerating design…' : 'Regenerate design · keep other steps'}
-              </button>
-            )}
-            {/* Regenerate — shows confirmation inline */}
-            {confirmRegen === activeView ? (
-              <div className="flex items-center gap-2">
-                <span className="text-xs text-slate-500">
-                  {downstreamCount(activeView) > 0
-                    ? `This will also clear ${downstreamCount(activeView)} downstream step${downstreamCount(activeView) > 1 ? 's' : ''}.`
-                    : 'Regenerate this step?'}
-                </span>
-                <button
-                  onClick={() => setConfirmRegen(null)}
-                  className="text-xs text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 px-2 py-1 rounded hover:bg-slate-200 dark:hover:bg-slate-700"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => {
-                    setConfirmRegen(null)
-                    const s = steps.find(s => s.key === activeView)
-                    s?.run()
-                  }}
-                  disabled={anyLoading}
-                  className="text-xs font-semibold text-white bg-primary hover:bg-primary/90 px-2.5 py-1 rounded transition-colors disabled:opacity-50"
-                >
-                  Regenerate
-                </button>
-              </div>
-            ) : (
-              <button
-                onClick={() => setConfirmRegen(activeView)}
-                disabled={anyLoading}
-                className="flex items-center gap-1.5 text-xs text-slate-500 hover:text-slate-700 dark:hover:text-slate-300 px-2 py-1 rounded hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors disabled:opacity-40"
-              >
-                <RefreshCw className="w-3 h-3" />Regenerate
-              </button>
-            )}
-            </div>
-          </div>
-
-          {/* Panel body */}
-          <div className="px-5 py-4">
-
-            {/* ── Copy view ── */}
-            {activeView === 'copy' && (
-              <div className="space-y-3">
-                {copyError && <ErrorBlock label="Copywriting error" message={copyError} />}
-                {copy && (
-                  <>
-                    {!isCarousel && (
-                      <div className="space-y-2">
-                        {copy.headline && <p className="text-base font-bold text-slate-900 dark:text-slate-100">{copy.headline}</p>}
-                        {copy.subheadline && <p className="text-sm text-slate-600 dark:text-slate-400">{copy.subheadline}</p>}
-                        {copy.supportingText && <p className="text-sm text-slate-600 dark:text-slate-400">{copy.supportingText}</p>}
-                        {copy.cta && <p className="text-sm font-semibold text-primary">→ {copy.cta}</p>}
-                      </div>
-                    )}
-                    {isCarousel && Array.isArray(copy.slides) && copy.slides.length > 0 && (
-                      <div className="space-y-1.5">
-                        {copy.slides.map(slide => <SlideRow key={slide.slideNumber} slide={slide} />)}
-                      </div>
-                    )}
-                    {copy.caption && (
-                      <div>
-                        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1 flex items-center gap-1.5">
-                          <MessageSquare className="w-3 h-3" />Caption
-                        </p>
-                        <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">{copy.caption}</p>
-                      </div>
-                    )}
-                    {Array.isArray(copy.hashtags) && copy.hashtags.length > 0 && (
-                      <div className="flex flex-wrap gap-1.5">
-                        {copy.hashtags.map((tag, i) => (
-                          <span key={i} className="text-xs bg-slate-100 dark:bg-slate-800 text-slate-500 px-2 py-0.5 rounded font-mono">
-                            {tag.startsWith('#') ? tag : `#${tag}`}
-                          </span>
-                        ))}
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-            )}
-
-            {/* ── Asset plan view ── */}
-            {activeView==='layout'&&layoutPlan&&<div className="grid grid-cols-2 gap-4">{layoutPlan.slots.map((s,i)=><div key={s.slot_id} className="rounded-lg border p-3"><p className="text-sm font-medium mb-2">Slide {i+1} · {s.spec.composition||'Layout'}</p><svg viewBox={`0 0 ${layoutPlan.width||1080} ${layoutPlan.height||1080}`} className="w-full bg-muted rounded"><rect width={layoutPlan.width||1080} height={layoutPlan.height||1080} fill="#f3f4f6"/>{s.spec.elements.filter(e=>e.role||e.type==='image').map((e,j)=><g key={j}><rect x={e.x} y={e.y} width={e.width} height={e.height} rx="12" fill={e.type==='image'?'#cbd5e1':'#334155'} opacity={e.role==='body'?.55:1}/><text x={e.x+16} y={e.y+36} fill={e.type==='image'?'#334155':'white'} fontSize="26">{e.role||'Image'}</text></g>)}</svg><p className="text-xs mt-2">{s.background?'Background photograph':s.needs_visual?'Subject image':'Typography'}</p></div>)}</div>}
-            {activeView === 'plan' && (
-              <div className="space-y-2">
-                {planError && <ErrorBlock label="Asset plan error" message={planError} />}
-                {plan && plan.slots.map(slot => {
-                  const srcMeta = {
-                    uploaded_asset: { label: 'Uploaded', cls: 'bg-green-100 text-green-700' },
-                    unsplash:       { label: 'Stock photo', cls: 'bg-blue-100 text-blue-700' },
-                    ai_generated:   { label: 'AI gen',    cls: 'bg-purple-100 text-purple-700' },
-                    none:           { label: 'No image',  cls: 'bg-slate-100 text-slate-500' },
-                  }[slot.preferred_source] ?? { label: slot.preferred_source, cls: 'bg-slate-100 text-slate-500' }
-                  return (
-                    <div key={slot.slot_id} className="flex items-start gap-3 py-2 border-b border-slate-100 dark:border-slate-800 last:border-0">
-                      <span className="w-5 h-5 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center flex-shrink-0 text-[10px] mt-0.5">
-                        {slot.slot_id.replace(/[^0-9]/g, '') || '·'}
-                      </span>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className="text-xs font-medium text-slate-700 dark:text-slate-300">{slot.slot_label}</span>
-                          <Badge className={`text-[10px] py-0 px-1.5 ${srcMeta.cls}`}>{srcMeta.label}</Badge>
-                          {!slot.needs_visual && <Badge variant="outline" className="text-[10px] py-0 px-1.5">Type only</Badge>}
-                        </div>
-                        {slot.visual_purpose && (
-                          <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">{slot.visual_purpose}</p>
-                        )}
-                        {slot.search_keywords?.length > 0 && (
-                          <div className="flex flex-wrap gap-1 mt-1">
-                            {slot.search_keywords.map(k => (
-                              <span key={k} className="text-[10px] bg-slate-100 dark:bg-slate-800 text-slate-500 px-1.5 py-0.5 rounded font-mono">{k}</span>
-                            ))}
-                          </div>
-                        )}
-                      </div>
+      {/* ── Details ── */}
+      {showDetails && (
+        <div className="border-t border-slate-100 dark:border-slate-800 px-5 py-4 space-y-5">
+          {copy && (
+            <section className="space-y-3">
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Content</p>
+              {!isCarousel && (
+                <div className="space-y-2">
+                  {copy.headline && <p className="text-base font-bold text-slate-900 dark:text-slate-100">{copy.headline}</p>}
+                  {copy.subheadline && <p className="text-sm text-slate-600 dark:text-slate-400">{copy.subheadline}</p>}
+                  {copy.supportingText && <p className="text-sm text-slate-600 dark:text-slate-400">{copy.supportingText}</p>}
+                  {copy.cta && <p className="text-sm font-semibold text-primary">→ {copy.cta}</p>}
+                </div>
+              )}
+              {isCarousel && Array.isArray(copy.slides) && copy.slides.length > 0 && (
+                <div className="space-y-1.5">{copy.slides.map((slide, i) => <SlideRow key={slide.slideNumber ?? i} slide={slide} />)}</div>
+              )}
+              {copy.caption && (
+                <div>
+                  <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-1 flex items-center gap-1.5"><MessageSquare className="w-3 h-3" />Caption</p>
+                  <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">{copy.caption}</p>
+                </div>
+              )}
+              {Array.isArray(copy.hashtags) && copy.hashtags.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {copy.hashtags.map((tag, i) => <span key={i} className="text-xs bg-slate-100 dark:bg-slate-800 text-slate-500 px-2 py-0.5 rounded font-mono">{tag.startsWith('#') ? tag : `#${tag}`}</span>)}
+                </div>
+              )}
+            </section>
+          )}
+          {resolved && resolved.slots.some(s => s.needs_visual) && (
+            <section className="space-y-3">
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Visuals</p>
+              {resolved.slots.filter(s => s.needs_visual).map(slot => {
+                const asset = slot.resolvedAsset
+                return (
+                  <div key={slot.slot_id} className="flex items-start gap-3">
+                    <ResolvedImagePreview asset={asset} label={slot.slot_label} />
+                    <div className="flex-1 min-w-0 space-y-1">
+                      <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">{slot.slot_label}</span>
+                      {slot.visual_purpose && <p className="text-xs text-slate-500 dark:text-slate-400 line-clamp-3">{slot.visual_purpose}</p>}
+                      {asset?.photo_page && /^https:\/\//.test(asset.photo_page) && (
+                        <a href={asset.photo_page} target="_blank" rel="noopener noreferrer" className="block text-xs text-slate-500 underline">Photo{asset.photographer ? ` by ${asset.photographer}` : ''} on {asset.source === 'pexels' ? 'Pexels' : 'Unsplash'}</a>
+                      )}
+                      {slot.warning && <div className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400"><AlertCircle className="w-3 h-3 flex-shrink-0" />{slot.warning}</div>}
                     </div>
-                  )
-                })}
-              </div>
-            )}
-
-            {/* ── Resolve view ── */}
-            {activeView === 'resolve' && (
-              <div className="space-y-3">
-                {resolveError && <ErrorBlock label="Asset resolve error" message={resolveError} />}
-                {resolved && (
-                  <div className="space-y-3">
-                    {resolved.slots.map(slot => {
-                      const asset = slot.resolvedAsset
-                      const srcCls = {
-                        uploaded_asset: 'bg-green-100 text-green-700',
-                        unsplash:       'bg-blue-100 text-blue-700',
-                        pexels:         'bg-teal-100 text-teal-700',
-                        ai_generated:   'bg-purple-100 text-purple-700',
-                        none:           'bg-slate-100 text-slate-500',
-                      }[slot.source] ?? 'bg-slate-100 text-slate-500'
-                      return (
-                        <div key={slot.slot_id} className="flex items-start gap-3">
-                          <ResolvedImagePreview asset={asset} label={slot.slot_label} />
-                          {/* Info */}
-                          <div className="flex-1 min-w-0 space-y-1">
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">{slot.slot_label}</span>
-                              <Badge className={`text-[10px] py-0 px-1.5 ${srcCls}`}>{slot.source.replace('_', ' ')}</Badge>
-                              {slot.resolvedAsset?.reused&&<Badge className="text-[10px] py-0 px-1.5">Reused from gallery · {Math.round((slot.resolvedAsset.match_score||0)*100)}% match</Badge>}
-                              {asset?.width && asset?.height && (
-                                <span className="text-[10px] text-slate-400 font-mono">{asset.width}×{asset.height}</span>
-                              )}
-                            </div>
-                            {slot.visual_purpose && (
-                              <p className="text-xs text-slate-500 dark:text-slate-400">{slot.visual_purpose}</p>
-                            )}
-                            {asset?.photo_page && /^https:\/\//.test(asset.photo_page) && (
-                              <a href={asset.photo_page} target="_blank" rel="noopener noreferrer" className="block text-xs text-slate-500 underline">Photo{asset.photographer ? ` by ${asset.photographer}` : ''} on {asset.source === 'pexels' ? 'Pexels' : 'Unsplash'}</a>
-                            )}
-                            {slot.warning && (
-                              <div className="flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400">
-                                <AlertCircle className="w-3 h-3 flex-shrink-0" />{slot.warning}
-                              </div>
-                            )}
-
-                          </div>
-                        </div>
-                      )
-                    })}
                   </div>
-                )}
-              </div>
-            )}
-
-            {/* ── Canvas view ── */}
-            {activeView === 'design' && (
-              <div className="space-y-3">
-                {designError && <ErrorBlock label="Canvas design error" message={designError} />}
-                {canvas && (
-                  <>
-                    <div className="grid grid-cols-3 gap-2 text-center">
-                      <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-2">
-                        <p className="text-[10px] text-slate-500 mb-0.5">Type</p>
-                        <p className="text-xs font-semibold capitalize">{canvas.type}</p>
-                      </div>
-                      <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-2">
-                        <p className="text-[10px] text-slate-500 mb-0.5">Size</p>
-                        <p className="text-xs font-semibold">{canvas.width}×{canvas.height}</p>
-                      </div>
-                      <div className="rounded-lg bg-slate-50 dark:bg-slate-800 p-2">
-                        <p className="text-[10px] text-slate-500 mb-0.5">Slides</p>
-                        <p className="text-xs font-semibold">{isCarousel ? canvas.pages?.length : 1}</p>
-                      </div>
-                    </div>
-                    {isCarousel && canvas.pages?.length > 0 && (
-                      <div className="space-y-1.5">
-                        {canvas.pages.map((page, i) => {
-                          const hasImage = (page.nodes || []).some(n => n.type === 'image')
-                          const typeLabel = { top_peer: 'Cover', content: `Slide ${i}`, bottom_peer: 'CTA' }[page.type] ?? page.name
-                          return (
-                            <div key={page.id} className="flex items-center gap-2 text-xs text-slate-600 dark:text-slate-400">
-                              <span className="w-5 h-5 rounded-full bg-primary/10 text-primary font-bold flex items-center justify-center flex-shrink-0 text-[10px]">{i + 1}</span>
-                              <span className="font-medium">{typeLabel}</span>
-                              <span className="text-slate-400">·</span>
-                              <span>{(page.nodes || []).length} nodes</span>
-                              {hasImage && <Badge variant="outline" className="text-[10px] py-0 px-1.5">image</Badge>}
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
-                    <div className="flex items-center gap-2 p-2 rounded-lg bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
-                      <p className="text-[10px] text-slate-500 flex-shrink-0">Canvas ID</p>
-                      <p className="text-[10px] font-mono text-slate-600 dark:text-slate-400 truncate">{canvas.id}</p>
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-
-          </div>
+                )
+              })}
+            </section>
+          )}
+          {canvas && (
+            <section className="space-y-2">
+              <p className="text-xs font-semibold text-slate-500 uppercase tracking-wide">Final checks</p>
+              <p className="text-xs text-slate-600 dark:text-slate-400">{canvas.width}×{canvas.height} · {isCarousel ? `${canvas.pages?.length || 0} slides` : '1 slide'} · {(isCarousel ? (canvas.pages || []).reduce((n, p) => n + (p.nodes || []).length, 0) : (canvas.nodes || []).length)} editable elements</p>
+              {validation?.corrections?.length > 0 && <ul className="text-xs text-slate-500 list-disc pl-4">{[...new Set(validation.corrections)].map(c => <li key={c}>Fixed: {c}</li>)}</ul>}
+              {validation?.warnings?.length > 0 && <ul className="text-xs text-amber-600 dark:text-amber-400 list-disc pl-4">{[...new Set(validation.warnings)].map(w => <li key={w}>{w}</li>)}</ul>}
+            </section>
+          )}
         </div>
       )}
     </div>
   )
 }
+
 
 function ErrorBlock({ label, message }) {
   return (
@@ -854,105 +478,29 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
 
   const nextActionForSelection = (() => {
     if (!selectedIdeas.length) return null
-    // Find the earliest incomplete step across all selected
-    const allHaveCopy    = selectedIdeas.every(i => copyResults[i.id]?.copy    && !copyResults[i.id]?.error)
-    const allHavePlan    = selectedIdeas.every(i => planResults[i.id]?.plan    && !planResults[i.id]?.error)
-    const allHaveResolve = selectedIdeas.every(i => resolveResults[i.id]?.resolved && !resolveResults[i.id]?.error)
-    const allHaveCanvas  = selectedIdeas.every(i => designResults[i.id]?.canvas  && !designResults[i.id]?.error)
-    if (!allHaveCopy)    return { label: 'Write copy',      Icon: PenLine   }
-    if (!allHavePlan)    return { label: 'Plan assets',     Icon: Boxes     }
-    if (!allHaveResolve) return { label: 'Resolve assets',  Icon: ImageIcon }
-    if (!allHaveCanvas)  return { label: 'Fit final canvas',   Icon: Sparkles  }
-    return { label: 'Re-run pipeline', Icon: RefreshCw }
+    const allHaveCanvas = selectedIdeas.every(i => designResults[i.id]?.canvas && !designResults[i.id]?.error)
+    return allHaveCanvas ? { label: 'Regenerate posts', Icon: RefreshCw } : { label: 'Generate posts', Icon: Sparkles }
   })()
 
   const runAllSelected = async () => {
     if (!selectedIdeas.length) { toast.error('Select at least one idea'); return }
-    toast.info(`Starting pipeline for ${selectedIdeas.length} post${selectedIdeas.length > 1 ? 's' : ''}…`)
+    toast.info(`Creating ${selectedIdeas.length} post${selectedIdeas.length > 1 ? 's' : ''}…`)
+    // Posts run one at a time so a batch never multiplies concurrent AI requests.
     for (const idea of selectedIdeas) {
-      // Copy
-      let copyData = null
-      setCopyResults(prev => ({ ...prev, [idea.id]: { loading: true, error: null, copy: null } }))
+      const reset = { loading: false, error: null }
+      setCopyResults(prev => ({ ...prev, [idea.id]: { ...reset, copy: null } }))
+      setPlanResults(prev => ({ ...prev, [idea.id]: { ...reset, plan: null } }))
+      setResolveResults(prev => ({ ...prev, [idea.id]: { ...reset, resolved: null } }))
+      setDesignResults(prev => ({ ...prev, [idea.id]: { ...reset, canvas: null } }))
       try {
-        for (let attempt = 0; attempt < 1; attempt++) {
-          try {
-            const res = await fetch('/api/generate-copywriting', {
-              method: 'POST', headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ brandContext, idea }),
-            })
-            const data = await res.json()
-            if (!res.ok) throw new Error(data.error || 'Failed')
-            copyData = data
-            setCopyResults(prev => ({ ...prev, [idea.id]: { loading: false, error: null, copy: data } }))
-            break
-          } catch (err) {
-
-            throw err
-          }
-        }
-      } catch (err) {
-        setCopyResults(prev => ({ ...prev, [idea.id]: { loading: false, error: err.message, copy: null } }))
-        continue
-      }
-      await sleep(1000)
-
-      // Plan
-      let planData = null
-      setPlanResults(prev => ({ ...prev, [idea.id]: { loading: true, error: null, plan: null } }))
-      try {
-        const layoutResponse=await fetch('/api/plan-assets',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({phase:'canvas',brandContext,copy:copyData,idea,brand_id:brandId})})
-        const batchLayout=await layoutResponse.json()
-        if(!layoutResponse.ok)throw Error(batchLayout.error||'Canvas planning failed')
-        setPlanResults(prev=>({...prev,[idea.id]:{loading:true,error:null,plan:null,layoutPlan:batchLayout}}))
-        const res = await fetch('/api/plan-assets', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ brandContext, copy: copyData, idea, brand_id: brandId,layoutPlan:batchLayout }),
+        await runPostGeneration({
+          idea, brandContext, brandId, keepCopy: null, onStage: () => {},
+          onCopy: v => setCopyResults(prev => ({ ...prev, [idea.id]: v })),
+          onPlan: v => setPlanResults(prev => ({ ...prev, [idea.id]: v })),
+          onResolve: v => setResolveResults(prev => ({ ...prev, [idea.id]: v })),
+          onDesign: v => setDesignResults(prev => ({ ...prev, [idea.id]: v })),
         })
-        const data = await res.json()
-        if (!res.ok) throw new Error(data.error || 'Failed')
-        planData = data
-        setPlanResults(prev => ({ ...prev, [idea.id]: { loading: false, error: null, plan: data } }))
-      } catch (err) {
-        setPlanResults(prev => ({ ...prev, [idea.id]: { loading: false, error: err.message, plan: null } }))
-        continue
-      }
-      await sleep(500)
-
-      // Resolve
-      let resolvedData = null
-      setResolveResults(prev => ({ ...prev, [idea.id]: { loading: true, error: null, resolved: null } }))
-      try {
-        const res = await fetch('/api/resolve-assets', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ plan: planData, brand_id: brandId }),
-        })
-        const data = await res.json()
-        if (!res.ok) throw new Error(data.error || 'Failed')
-        resolvedData = data
-        setResolveResults(prev => ({ ...prev, [idea.id]: { loading: false, error: null, resolved: data } }))
-      } catch (err) {
-        setResolveResults(prev => ({ ...prev, [idea.id]: { loading: false, error: err.message, resolved: null } }))
-        continue
-      }
-
-      // Design
-      setDesignResults(prev => ({ ...prev, [idea.id]: { loading: true, error: null, canvas: null } }))
-      try {
-        const res = await fetch('/api/design-canvas', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            brandContext, copy: copyData, resolvedPlan: resolvedData,
-            canvasName: `${brandContext?.name ?? ''} — ${idea.topic}`.trim(),
-          }),
-        })
-        const data = await res.json()
-        if (!res.ok) throw new Error(data.error || 'Failed')
-        setDesignResults(prev => ({ ...prev, [idea.id]: { loading: false, error: null, canvas: data } }))
-      } catch (err) {
-        setDesignResults(prev => ({ ...prev, [idea.id]: { loading: false, error: err.message, canvas: null } }))
-      }
-
-      if (idea !== selectedIdeas[selectedIdeas.length - 1]) await sleep(1000)
+      } catch (err) { console.warn('Post generation failed', idea.id, err.message) }
     }
 
     // Final persist
@@ -975,7 +523,7 @@ export default function Creation({ flowId, brandContext: suppliedBrandContext })
 
       {globalDesignCount === 0 && (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-200 bg-blue-50 px-4 py-3 text-sm text-blue-900 dark:border-blue-900 dark:bg-blue-950/30 dark:text-blue-200">
-          <span>Using your saved starter designs. To use the Global Design Library, select at least 3 designs for this brand.</span>
+          <span>Using your saved starter designs. To use the Global Design Library, select a design for this brand.</span>
           <a href={`/flow/${flowId}/brand-information`} className="font-semibold underline underline-offset-4">Choose designs</a>
         </div>
       )}

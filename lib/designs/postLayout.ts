@@ -265,7 +265,8 @@ export function arrangeReadableBody(spec:any,body:string) {
 export function planPostLayout(brand:any,copy:any,idea:any,designId?:string,override?:string) {
  const requested=override||brand?.imageDisposition
  const disposition=['cutout','background','framed','none'].includes(requested)?requested:null
- const saved=brand?.designs||[]
+ // Only saved designs this designer can build. Other kinds (Global Designs, studies saved by other versions) are never picked here.
+ const saved=(Array.isArray(brand?.designs)?brand.designs:[]).filter((d:any)=>DESIGN_LIBRARY.some(l=>l.id===d.baseId))
  const selected=saved.find((d:any)=>d.id===designId)||saved[Math.floor(Math.random()*saved.length)]
  const family=DESIGN_LIBRARY.find(d=>d.id===(selected?.baseId||designId))||DESIGN_LIBRARY[Math.floor(Math.random()*DESIGN_LIBRARY.length)]
  const slides=Array.isArray(copy.slides)&&copy.slides.length?copy.slides:[copy]
