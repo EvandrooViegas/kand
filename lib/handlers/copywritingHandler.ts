@@ -65,6 +65,7 @@ Each slide should have:
 
 The first slide is a cover with a short hook and one brief teaser. Use 3–8 words for the headline when possible and never exceed 10 words. Make it instantly understandable, concrete and curiosity-driving without clickbait. Add a 2–14 word body that invites the reader into the carousel without explaining the whole topic. Set its cta to an empty string; put detailed explanations on subsequent slides.
 The middle slides should develop the idea logically.
+When a slide names steps, phases, options, benefits or tips (3–6 of them), write them as separate lines in its body: an optional short intro line, then one line per item starting with "1." or "-", each item 1–6 words. Never pack them into one sentence; they are laid out as a designed list.
 The final slide closes the idea with its takeaway. Give it a cta only when the post's objective calls for an action; otherwise leave the cta empty and let the caption carry the next step.
 Do not put too much text on a slide.
 

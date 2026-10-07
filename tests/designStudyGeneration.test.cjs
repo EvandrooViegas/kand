@@ -14,7 +14,7 @@ function planner(writeCopy, planAssets) {
     NextResponse: nodeRes, corsify: r => r,
     loadGenerationBrandContext: async (_db, body) => ({ id: 'brand', name: 'Brand', ...body.brandContext }),
     chooseBrandFamily: async (_db, brand) => brand.family ? { family: brand.family, design: { id: 'global-' + brand.family.id } } : null,
-    studyForPlanning: study.studyForPlanning, familyGrammar: study.familyGrammar, familyImagery: study.familyImagery, familyCutouts: study.familyCutouts,
+    studyForPlanning: study.studyForPlanning, familyGrammar: study.familyGrammar, familyImagery: study.familyImagery, familyCutouts: study.familyCutouts, familyPhotoLed: study.familyPhotoLed,
     writeCopy, copyErrorResponse: (error) => ({ body: { error: error.message }, status: error.status || 500 }), planAssets,
   })
 }
@@ -47,13 +47,13 @@ test('existing copy is re-planned with zero model calls', async () => {
   assert.equal(res.status, 200)
 })
 
-test('TEST B: a background study requires imagery and plans background treatment from the study', () => {
+test('TEST B: a background study requires imagery and keeps full-canvas photographs on every image slide', () => {
   assert.equal(study.familyImagery(background).mode, 'background')
-  const layout = generation.globalLayoutPlan(background, 'global-x', { format: 'single', headline: 'Escape', supportingText: 'Go somewhere quiet.', design: { image: { subject: 'quiet mountain lake', queries: ['mountain lake'] } } })
-  const slot = layout.slots[0]
-  assert.equal(slot.needs_visual, true); assert.equal(slot.background, true); assert.equal(slot.treatment, 'environmental')
-  assert.deepEqual(slot.frame, { x: 0, y: 0, width: 1080, height: 1350 })
-  assert.deepEqual(slot.planned, { subject: 'quiet mountain lake', queries: ['mountain lake'] })
+  const plan = headline => generation.globalLayoutPlan(background, 'global-x', { format: 'single', headline, supportingText: 'Go somewhere quiet.', design: { image: { subject: 'quiet mountain lake', queries: ['mountain lake'] } } }).slots[0]
+  const slots = Array.from({ length: 30 }, (_, i) => plan(`Escape ${i}`))
+  assert.ok(slots.every(s => s.needs_visual && s.treatment === 'environmental' && s.background))
+  assert.deepEqual(slots[0].frame, { x: 0, y: 0, width: 1080, height: 1350 })
+  assert.deepEqual(slots[0].planned, { subject: 'quiet mountain lake', queries: ['mountain lake'] })
 })
 
 test('TEST C: a cutout study uses isolated-subject treatment and the transparent derivative', () => {
@@ -162,7 +162,8 @@ test('ACCEPTANCE: one studied design composes a varied, on-brand, editable carou
     { id: 'bloom', name: 'Bloom', designTokens: { primary: '#e8553f', accent: '#e8553f', background: '#fbf3e6', textPrimary: '#2b1d16' }, fonts: ['Playfair Display', 'Lato'] },
   ]
   const layout = generation.globalLayoutPlan(family, 'global-dark-accent', copy)
-  const resolved = { slots: layout.slots.map(s => ({ slot_id: s.slot_id, resolvedAsset: s.needs_visual ? { url: `/api/uploads/photo-${s.slot_id}` } : null })) }
+  // As the resolver returns them: cutout slots get AI-generated transparent PNGs, photo slots get stock photos.
+  const resolved = { slots: layout.slots.map(s => ({ slot_id: s.slot_id, treatment: s.treatment, resolvedAsset: s.needs_visual ? { url: `/api/uploads/photo-${s.slot_id}`, source: s.treatment === 'isolated_subject' ? 'ai_generated' : 'pexels' } : null })) }
   const posts = brands.map(brand => generation.renderGlobalPost(family, brand, copy, resolved, { id: 'global-dark-accent' }, crypto.randomUUID))
   for (const [i, post] of posts.entries()) {
     const brand = brands[i], json = JSON.stringify(post.pages).toLowerCase()

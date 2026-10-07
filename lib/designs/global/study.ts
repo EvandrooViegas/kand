@@ -56,6 +56,17 @@ export function familyCutouts(family: GlobalDesignFamily): 'never' | 'some' | 'a
   return imagery.mode === 'mixed' && PHOTO_PROSE.test(prose) ? 'some' : 'always'
 }
 
+/**
+ * A study built on a full-canvas photograph behind the copy (background imagery, or full-bleed photos that fill the
+ * frame). Its look is the photograph, so its images stay photographs instead of becoming AI cutouts.
+ */
+export function familyPhotoLed(family: GlobalDesignFamily): boolean {
+  const imagery = familyImagery(family)
+  if (imagery.mode === 'background') return true
+  const positions = (family.study as any)?.grammar?.imagery?.positions
+  return imagery.mode === 'fullBleed' && familyCutouts(family) === 'never' && Array.isArray(positions) && positions.length === 1 && positions[0] === 'full'
+}
+
 const IMAGE_COMPOSITIONS: Composition[] = ['image-led', 'split', 'stacked']
 const textCompositions = (list: Composition[]) => list.filter(c => c !== 'image-led' && c !== 'split')
 

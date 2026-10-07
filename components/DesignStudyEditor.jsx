@@ -59,6 +59,7 @@ export default function DesignStudyEditor({ family, onChange }) {
       <div className="grid gap-3 sm:grid-cols-3">
         <Choice title="Headline scale" value={g.headline.scale} options={['medium', 'large', 'veryLarge', 'oversized']} onChange={v => setGrammar({ headline: { ...g.headline, scale: v } })} />
         <Choice title="Headline weight" value={g.headline.weight} options={['regular', 'bold', 'black']} onChange={v => setGrammar({ headline: { ...g.headline, weight: v } })} />
+        <Choice title="Headline box" value={g.headline.frame || 'none'} options={['none', 'outline', 'solid']} labels={{ none: 'None', outline: 'Outlined box', solid: 'Filled panel' }} onChange={v => setGrammar({ headline: { ...g.headline, frame: v } })} />
         <Choice title="Headline case" value={g.headline.case} options={['none', 'uppercase']} onChange={v => setGrammar({ headline: { ...g.headline, case: v } })} />
         <Choice title="Tracking" value={g.headline.tracking} options={['tight', 'normal', 'wide']} onChange={v => setGrammar({ headline: { ...g.headline, tracking: v } })} />
         <Choice title="Body scale" value={g.body.scale} options={['small', 'medium', 'large']} onChange={v => setGrammar({ body: { scale: v } })} />
@@ -80,9 +81,9 @@ export default function DesignStudyEditor({ family, onChange }) {
           <Choice title="Shape" value={g.imagery.shape} options={['rect', 'rounded', 'circle', 'pill', 'arch']} onChange={v => setGrammar({ imagery: { ...g.imagery, shape: v } })} />
           <Choice title="Overlap" value={g.imagery.overlap} options={['none', 'text', 'edge']} onChange={v => setGrammar({ imagery: { ...g.imagery, overlap: v } })} />
           <Choice title="Overlay" value={g.imagery.overlay} options={['none', 'gradient', 'solid']} onChange={v => setGrammar({ imagery: { ...g.imagery, overlay: v } })} />
-          <Choice title="Subjects" value={g.imagery.cutout || 'never'} options={['never', 'some', 'always']} labels={{ never: 'Photographs', some: 'Photos and cutouts', always: 'Transparent cutouts' }} onChange={v => setGrammar({ imagery: { ...g.imagery, cutout: v } })} />
+          <Choice title="Images" value={g.imagery.cutout === 'always' ? 'always' : 'some'} options={['some', 'always']} labels={{ some: 'AI cutouts, up to 20% stock', always: 'AI cutouts only' }} onChange={v => setGrammar({ imagery: { ...g.imagery, cutout: v } })} />
         </div>
-        {g.imagery.cutout && g.imagery.cutout !== 'never' && <p className="text-xs text-muted-foreground">Cutouts are transparent PNGs. A post reuses a fitting cutout from the brand gallery, otherwise one is generated with AI and saved to the gallery. Photographs always come from the gallery or stock, never from AI.</p>}
+        <p className="text-xs text-muted-foreground">Images are AI-generated transparent PNGs, saved to the brand gallery (a post may reuse one that fits). With “up to 20% stock”, about one image in five is a stock photograph instead; photographs are never AI-generated.</p>
         <Multi title="Positions" value={g.imagery.positions} options={['full', 'top', 'bottom', 'left', 'right', 'center']} onChange={v => setGrammar({ imagery: { ...g.imagery, positions: v } })} />
         <div className="grid gap-3 sm:grid-cols-2">{[['usage', 'Usage'], ['placement', 'Placement'], ['cropBehavior', 'Crop'], ['textRelationship', 'Text relationship'], ['overlayTreatment', 'Overlay treatment'], ['frequency', 'Frequency notes']].map(([key, title]) => <Text key={key} title={title} rows={1} value={study.imagery[key]} onChange={v => setImagery({ [key]: v })} />)}</div>
       </>}

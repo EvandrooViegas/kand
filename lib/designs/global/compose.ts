@@ -4,7 +4,7 @@
  * this module decides concrete coordinates from the actual content. No model calls, no templates.
  */
 import { resolveBrandTokens, countLines, clean, lightness, on, hex } from './resolve'
-import { familyGrammar, familyImagery, familyCutouts } from './study'
+import { familyGrammar, familyImagery, familyCutouts, familyPhotoLed } from './study'
 import type { GlobalDesignFamily, DesignGrammar, Composition } from './types'
 
 type Align = 'left' | 'center' | 'right'
@@ -12,22 +12,42 @@ type Anchor = 'top' | 'center' | 'bottom'
 type ImagePos = 'full' | 'top' | 'bottom' | 'left' | 'right' | 'center'
 type Box = { x: number; y: number; width: number; height: number }
 /** `cutout`: the slide's image is a transparent PNG subject standing on the design surface, not a photograph. */
-export interface SlidePlan { composition: Composition; withImage: boolean; align: Align; anchor: Anchor; imagePos: ImagePos; surface: 'dark' | 'light' | 'brand'; beat?: number; callout?: boolean; badge?: boolean; cutout?: boolean }
+/** `fill`: a cutout placed in the empty band the copy leaves on a text slide. `frame: false`: no headline box here. */
+export interface SlidePlan { composition: Composition; withImage: boolean; align: Align; anchor: Anchor; imagePos: ImagePos; surface: 'dark' | 'light' | 'brand'; beat?: number; callout?: boolean; badge?: boolean; cutout?: boolean; fill?: boolean; frame?: boolean }
 
+/** Fonts published in a single (regular) weight. */
+const SINGLE_WEIGHT = new Set(['anton', 'bebas neue', 'impact', 'archivo black', 'alfa slab one', 'abril fatface', 'lobster', 'pacifico', 'dela gothic one', 'bungee', 'righteous', 'russo one', 'black ops one', 'titan one', 'luckiest guy', 'staatliches', 'ultra'])
+/** Share of image slots that may use stock photography; the rest are AI-generated transparent cutouts. */
+export const STOCK_SHARE = .2
 const IMAGE_CAPABLE: Composition[] = ['image-led', 'split', 'stacked']
 const TEXT_ONLY: Composition[] = ['statement', 'stacked', 'backdrop-type', 'list', 'closing']
 const IMAGE_ONLY: Composition[] = ['image-led', 'split']
 const hash = (text: string) => [...text].reduce((n, c) => (Math.imul(n, 31) + c.charCodeAt(0)) >>> 0, 7)
 const slidesOf = (copy: any) => Array.isArray(copy?.slides) && copy.slides.length ? copy.slides : [copy || {}]
 
-/** Items of a list slide: explicit arrays, or numbered/bulleted body lines. */
-export function listItems(slide: any): string[] {
+const MARKED = /^(?:[-•–]|\d+[.)])\s+/
+const LAST_AND = /\s+(?:e|and|y|et|ou|or|&)\s+/i
+/**
+ * Items of a list slide and the short lead that introduces them: explicit arrays, numbered or bulleted body lines,
+ * or an inline enumeration written as a sentence ("Each phase: Discovery, Strategy, Delivery and Growth").
+ */
+export function listParts(slide: any): { items: string[]; lead: string } {
+  const body = String(slide?.body || slide?.supportingText || '')
   const explicit = Array.isArray(slide?.items) ? slide.items : Array.isArray(slide?.steps) ? slide.steps : null
-  if (explicit) return explicit.map((s: any) => clean(s).trim()).filter(Boolean).slice(0, 6)
-  const lines = String(slide?.body || slide?.supportingText || '').split('\n').map(l => l.trim()).filter(Boolean)
-  const marked = lines.filter(l => /^(?:[-•–]|\d+[.)])\s+/.test(l))
-  return marked.length >= 2 ? marked.map(l => clean(l.replace(/^(?:[-•–]|\d+[.)])\s+/, ''))).slice(0, 6) : []
+  if (explicit) return { items: explicit.map((s: any) => clean(s).trim()).filter(Boolean).slice(0, 6), lead: clean(body).trim() }
+  const lines = body.split('\n').map(l => l.trim()).filter(Boolean)
+  const marked = lines.filter(l => MARKED.test(l))
+  if (marked.length >= 2) return { items: marked.map(l => clean(l.replace(MARKED, ''))).slice(0, 6), lead: clean(lines.filter(l => !MARKED.test(l)).join(' ')).trim() }
+  // 3–6 short items after a colon, separated by commas or semicolons and a final "and".
+  const inline = clean(body).replace(/\s+/g, ' ').trim().match(/^([^:]{0,140}):\s*(.+?)\.?$/)
+  if (inline) {
+    const chunks = inline[2].split(/\s*[;,]\s*/)
+    const parts = [...chunks.slice(0, -1), ...chunks[chunks.length - 1].split(LAST_AND)].map(p => p.trim().replace(/\.$/, '')).filter(Boolean)
+    if (parts.length >= 3 && parts.length <= 6 && parts.every(p => p.split(' ').length <= 5 && p.length <= 42)) return { items: parts, lead: inline[1].trim() }
+  }
+  return { items: [], lead: '' }
 }
+export const listItems = (slide: any): string[] => listParts(slide).items
 
 /**
  * Chooses a composition per slide inside the grammar. A model-proposed composition is honoured when the
@@ -36,7 +56,7 @@ export function listItems(slide: any): string[] {
  */
 export function planSlides(family: GlobalDesignFamily, copy: any): SlidePlan[] {
   const g = familyGrammar(family), imagery = familyImagery(family), slides = slidesOf(copy)
-  const hasImagery = imagery.mode !== 'none', cutouts = familyCutouts(family)
+  const hasImagery = imagery.mode !== 'none', cutouts = familyCutouts(family), photoLed = familyPhotoLed(family)
   const plans: SlidePlan[] = []
   const observedUses = new Map<any, number>()
   slides.forEach((slide: any, index: number) => {
@@ -57,7 +77,9 @@ export function planSlides(family: GlobalDesignFamily, copy: any): SlidePlan[] {
       : (() => { const rest = refs.filter((r, i) => i > 0 && r.composition !== 'list'); return rest.length ? rest[(index - 1) % rest.length] : refs[index % refs.length] })()
     const observedFits = !!observed && g.compositions.includes(observed.composition) && (observed.composition !== 'list' || listy) && (!IMAGE_ONLY.includes(observed.composition) || (hasImagery && observed.image))
     let composition: Composition
-    if (proposed && (wantImage ? IMAGE_CAPABLE : TEXT_ONLY).includes(proposed)) composition = proposed
+    // Three or more items read better as a designed list (markers, cards) than as a sentence, whatever was proposed.
+    if (listItems(slide).length >= 3) { composition = 'list'; wantImage = false }
+    else if (proposed && (wantImage ? IMAGE_CAPABLE : TEXT_ONLY).includes(proposed)) composition = proposed
     else if (!proposed && observedFits) {
       composition = observed!.composition
       wantImage = hasImagery && observed!.image && IMAGE_CAPABLE.includes(composition)
@@ -91,11 +113,18 @@ export function planSlides(family: GlobalDesignFamily, copy: any): SlidePlan[] {
     const followedPos = follows?.image && (composition === 'stacked' ? ['top', 'bottom'] : composition === 'split' ? ['left', 'right'] : ['full', 'top', 'bottom']).includes(follows.imagePos) ? follows.imagePos as ImagePos : undefined
     const callout = follows ? follows.callout : g.containers.style !== 'none' && g.containers.use.includes('callout') && index % 2 === 1 && !last
     const badge = follows ? follows.badge : g.badge === 'logo' && index === 0
+    // When the references say which of them box the headline, only slides following those get the box (the cover
+    // follows the first reference). Studies without that measurement box every headline when the grammar has a box.
+    const measuredFrames = refs.some(r => typeof r.frame === 'boolean')
+    const frame = !measuredFrames ? undefined : follows ? !!follows.frame : index === 0 && refs[0]?.frame === true
     // Surfaces: the dominant role carries the family; a second role marks the closing beat when the study allows one.
     const surface = (last && g.surfaces.length > 1 ? g.surfaces[1] : g.surfaces[0]) as SlidePlan['surface']
-    // Cutouts follow the study; a study that mixes both lets the copy plan choose per slide.
-    const cutout = wantImage && (cutouts === 'always' || (cutouts === 'some' && slide?.design?.image?.kind === 'cutout'))
-    plans.push({ composition, withImage: wantImage, align: followedAlign || align, anchor, imagePos: followedPos || imagePos, surface, beat: plans.filter(p => p.withImage).length, callout, badge, cutout })
+    // AI cutouts are the preferred imagery. Unless the study is cutout-only, about one image in five stays a stock
+    // photograph, chosen per slide so the same copy always gets the same decision.
+    // Studies built on a full-canvas photograph keep photographs: a cutout cannot recreate that look.
+    const stockPhoto = photoLed || (cutouts !== 'always' && hash(`stock:${slide?.headline || ''}:${index}`) % 100 < STOCK_SHARE * 100)
+    const cutout = wantImage && !stockPhoto
+    plans.push({ composition, withImage: wantImage, align: followedAlign || align, anchor, imagePos: followedPos || imagePos, surface, beat: plans.filter(p => p.withImage).length, callout, badge, cutout, ...(frame === undefined ? {} : { frame }) })
   })
   return plans
 }
@@ -138,7 +167,7 @@ const WEIGHT = { regular: 400, bold: 700, black: 900 }
 const LEADING = { tight: 1.02, normal: 1.12, loose: 1.25 }
 
 interface ComposeOptions { preview?: boolean; image?: string; logo?: boolean; imageSize?: { width: number; height: number } }
-interface TextSpec { role: string; text: string; font: string; size: number; min: number; weight: number; lineHeight: number; letterSpacing?: number; color: string; uppercase?: boolean; italic?: boolean; highlight?: 'color' | 'background'; pad?: number }
+interface TextSpec { role: string; text: string; font: string; size: number; min: number; weight: number; lineHeight: number; letterSpacing?: number; color: string; uppercase?: boolean; italic?: boolean; highlight?: 'color' | 'background'; pad?: number; padY?: number }
 
 function emphasize(text: string, slide: any, kind: 'color' | 'background') {
   const words = text.split(/\s+/)
@@ -159,7 +188,7 @@ function fitGroup(specs: TextSpec[], width: number, height: number, gap: number)
       const usable = width - 8 - (s.pad || 0)
       const lines = countLines(text, size, usable, s.font, s.letterSpacing || 0)
       const wordsFit = text.split(/\s+/).every(word => !word || countLines(word, size, usable, s.font, s.letterSpacing || 0) === 1)
-      return { ...s, text, size, wordsFit, height: Math.ceil(lines * size * s.lineHeight + 10) }
+      return { ...s, text, size, wordsFit, height: Math.ceil(lines * size * s.lineHeight + 10) + 2 * (s.padY || 0) }
     })
     const total = sized.reduce((n, s) => n + s.height, 0) + gap * (sized.length - 1)
     if (total <= height && sized.every(s => s.wordsFit)) return { sized, total }
@@ -201,7 +230,12 @@ export function composeSlide(family: GlobalDesignFamily, brand: any, slide: any,
   const nodes: any[] = []
   let n = 0
   const id = (role: string) => `${role}-${++n}`
-  const push = (role: string, node: any) => { nodes.push({ id: id(role), designRole: role, ...node }); return nodes[nodes.length - 1] }
+  // Display fonts that ship one weight are set at that weight: a requested bold would be faked by the browser,
+  // wider than measured, and wrap onto extra lines.
+  const push = (role: string, node: any) => {
+    const weight = node.type === 'text' && SINGLE_WEIGHT.has(String(node.fontFamily || '').toLowerCase()) ? { fontWeight: 400 } : {}
+    nodes.push({ id: id(role), designRole: role, ...node, ...weight }); return nodes[nodes.length - 1]
+  }
   // A single line of text sized to its own line box and centred in a band or shape. The editor draws text from the
   // top of its box, so a box taller than the line would leave the text high inside its shape.
   const line = (top: number, boxHeight: number, fontSize: number, lineHeight: number) => {
@@ -210,7 +244,8 @@ export function composeSlide(family: GlobalDesignFamily, brand: any, slide: any,
   }
 
   // Image and the colors that sit on it.
-  let frame = imageFrame(family, plan)
+  // A fill cutout never moves the copy: the slide is laid out as text-only and the cutout takes the space left over.
+  let frame = plan.fill ? null : imageFrame(family, plan)
   const cutout = plan.cutout ?? imagery.mode === 'cutout'
   const textOnImage = !!frame && plan.composition === 'image-led' && plan.imagePos === 'full' && !cutout
   const fg = textOnImage ? '#ffffff' : p.foreground
@@ -249,19 +284,26 @@ export function composeSlide(family: GlobalDesignFamily, brand: any, slide: any,
     if (ink !== null && (Math.max(ink, g) + .05) / (Math.min(ink, g) + .05) >= 2.5) return variants.originalTransparent || logoUrl
     return (ink === null && g >= .4 ? variants?.originalTransparent : g < .4 ? variants?.whiteTransparent : variants?.blackTransparent) || logoUrl
   }
-  // A brand with a logo is identified by the logo, not its website: the logo takes the handle's place when the
-  // study has no logo position, and the website link is dropped when the logo is already shown.
-  const logoPos = g.branding.logo !== 'none' ? g.branding.logo : showLogo ? g.branding.handle : 'none'
+  // The logo is measured by its visible mark, not by its file's padding.
+  const mark = variants?.bounds && variants.imageAspect ? { bounds: variants.bounds, imageAspect: variants.imageAspect as number } : null
+  const markAspect = mark ? mark.bounds.width / mark.bounds.height * mark.imageAspect : 0
+  // One brand mark per slide, always in a corner: never inside the copy and never centred. A brand with a logo is
+  // identified by the logo, not its website: the logo takes the handle's place when the study has no logo position,
+  // and the website link is dropped when the logo is shown. A study that places no branding still gets the logo
+  // (or the name) top-left.
+  const corner = (pos: string) => pos === 'top-center' ? 'top-left' : pos === 'bottom-center' ? 'bottom-left' : pos
+  const logoPos = corner(g.branding.logo !== 'none' ? g.branding.logo
+    : g.branding.handle !== 'none' ? (showLogo ? g.branding.handle : 'none')
+    : showLogo || clean(brand.name || '').trim() ? 'top-left' : 'none')
   const branding = [
     { kind: 'logo', pos: logoPos },
     { kind: 'number', pos: total > 1 ? g.branding.slideNumber : 'none' },
     { kind: 'handle', pos: showLogo ? 'none' : g.branding.handle },
   ].filter((b, i, all) => b.pos !== 'none' && all.findIndex(o => o.pos === b.pos) === i)
   const band = Math.round(W * .05)
-  // The logo is sized by its visible mark (about 8% of the width tall, wide wordmarks capped), not by its file's padding.
-  const mark = variants?.bounds && variants.imageAspect ? { bounds: variants.bounds, imageAspect: variants.imageAspect as number } : null
-  const markAspect = mark ? mark.bounds.width / mark.bounds.height * mark.imageAspect : 0
-  const logoHeight = !showLogo ? 0 : markAspect ? Math.round(Math.min(W * .08, W * .34 / markAspect)) : Math.round(W * .07)
+  // Logos are sized by area, so a wide wordmark carries the same visual weight as a square mark (8% of the width
+  // tall) instead of the same height: a 4:1 wordmark is about 4% tall and 16% wide. Very wide marks are capped.
+  const logoHeight = !showLogo ? 0 : markAspect ? Math.round(Math.max(W * .03, Math.min(W * .08 / Math.sqrt(Math.max(1, markAspect)), W * .3 / markAspect))) : Math.round(W * .06)
   const rowHeight = (v: string) => Math.max(band, branding.some(b => b.kind === 'logo' && b.pos.startsWith(v)) ? logoHeight : 0)
   const topBand = branding.some(b => b.pos.startsWith('top')) ? rowHeight('top') + gap : 0
   const bottomBand = branding.some(b => b.pos.startsWith('bottom')) ? rowHeight('bottom') + gap : 0
@@ -282,14 +324,16 @@ export function composeSlide(family: GlobalDesignFamily, brand: any, slide: any,
   const headlineRatio = HEADLINE[g.headline.scale] * (plan.composition === 'list' ? .78 : plan.composition === 'image-led' ? .9 : plan.composition === 'backdrop-type' ? .88 : 1) * (frame && !textOnImage ? .82 : 1)
   const hSize = Math.round(W * headlineRatio), bSize = Math.round(W * BODY[g.body.scale])
   const headlineText = clean(slide.headline || slide.title).trim()
-  const items = plan.composition === 'list' ? listItems(slide) : []
-  const bodyText = clean(items.length && !Array.isArray(slide.items) && !Array.isArray(slide.steps) ? '' : slide.body || slide.supportingText).trim()
+  const parts = plan.composition === 'list' ? listParts(slide) : { items: [] as string[], lead: '' }
+  const items = parts.items
+  const bodyText = clean(items.length ? parts.lead : slide.body || slide.supportingText).trim()
   const eyebrowText = clean(slide.eyebrow || slide.subheadline).trim()
   const ctaText = clean(slide.cta).trim()
   const emphasis = g.emphasis === 'none' ? undefined : g.emphasis === 'background' ? 'background' as const : 'color' as const
   const specs: TextSpec[] = []
-  if (eyebrowText) specs.push({ role: 'eyebrow', text: eyebrowText, font: bodyFont, size: Math.round(bSize * .8), min: 18, weight: 600, lineHeight: 1.2, letterSpacing: 2, color: accent, uppercase: true })
-  if (headlineText) specs.push({ role: 'headline', text: headlineText, font: heading, size: hSize, min: Math.max(34, Math.round(hSize * .42)), weight: WEIGHT[g.headline.weight], lineHeight: LEADING[g.headline.leading], letterSpacing: g.headline.tracking === 'tight' ? -Math.round(hSize * .025) : g.headline.tracking === 'wide' ? Math.round(hSize * .04) : 0, color: fg, uppercase: g.headline.case === 'uppercase', highlight: emphasis, pad: emphasis === 'background' ? 28 : 0 })
+  const boxed = g.headline.frame !== 'none' && plan.frame !== false
+  if (eyebrowText) specs.push({ role: 'eyebrow', text: eyebrowText, font: bodyFont, size: Math.round(bSize * .8), min: 18, weight: 600, lineHeight: 1.2, letterSpacing: 2, color: textOnImage ? '#ffffffd9' : accent, uppercase: true })
+  if (headlineText) specs.push({ role: 'headline', text: headlineText, font: heading, size: hSize, min: Math.max(34, Math.round(hSize * .42)), weight: WEIGHT[g.headline.weight], lineHeight: LEADING[g.headline.leading], letterSpacing: g.headline.tracking === 'tight' ? -Math.round(hSize * .025) : g.headline.tracking === 'wide' ? Math.round(hSize * .04) : 0, color: fg, uppercase: g.headline.case === 'uppercase', highlight: emphasis, pad: boxed ? Math.round(hSize * .7) : emphasis === 'background' ? 28 : 0, padY: boxed ? Math.round(hSize * .2) : 0 })
   if (bodyText) specs.push({ role: 'body', text: bodyText, font: bodyFont, size: bSize, min: 22, weight: 400, lineHeight: 1.32, color: textOnImage ? '#ffffff' : mix(fg, p.surface, .12) })
 
   const ctaHeight = ctaText ? Math.round(bSize * 1.6) : 0
@@ -308,12 +352,22 @@ export function composeSlide(family: GlobalDesignFamily, brand: any, slide: any,
     }
   }
 
-  const textNode = (spec: any, area: Box, align: Align) => push(spec.role, {
+  // A studied headline box: the headline sits inside a border (outline) or on a filled panel (solid) spanning the copy.
+  const textNode = (spec: any, area: Box, align: Align) => {
+    if (spec.role === 'headline' && boxed) {
+      const solid = g.headline.frame === 'solid', padY = spec.padY || 0, padX = Math.round((spec.pad || 0) / 2)
+      push('headline-frame', { type: 'shape', shape: 'rect', ...area, borderRadius: 0, fill: solid ? accent : '#00000000', ...(solid ? {} : { stroke: accent, strokeWidth: Math.max(3, Math.round(spec.size * .035)) }) })
+      area = { x: area.x + padX, y: area.y + padY, width: area.width - 2 * padX, height: area.height - 2 * padY }
+      if (solid) spec = { ...spec, color: on(accent), solidFrame: true }
+    }
+    return placeText(spec, area, align)
+  }
+  const placeText = (spec: any, area: Box, align: Align) => push(spec.role, {
     type: 'text', ...area, text: spec.highlight ? emphasize(spec.text, slide, spec.highlight) : spec.text,
     fontFamily: spec.font, fontSize: spec.size, fontWeight: spec.weight, lineHeight: spec.lineHeight, letterSpacing: spec.letterSpacing || 0,
     color: spec.color, textAlign: align, ...(spec.italic ? { fontStyle: 'italic' } : {}),
     // Gradient-filled headlines stay editable text: the editor's text-fill gradient, not a picture of text.
-    ...(spec.role === 'headline' && headlineGradient ? { fillType: 'gradient', textGradient: headlineGradient } : {}),
+    ...(spec.role === 'headline' && headlineGradient && !spec.solidFrame ? { fillType: 'gradient', textGradient: headlineGradient } : {}),
   })
   const card = (area: Box, role = 'card') => push(role, {
     type: 'shape', shape: 'rect', ...area, borderRadius: radiusFor(area.height),
@@ -418,15 +472,31 @@ export function composeSlide(family: GlobalDesignFamily, brand: any, slide: any,
   const lineAccent = g.decorations.find(d => d.kind === 'line')
   const lineReserve = lineAccent ? Math.round(W * .012) + gap : 0
   if (plan.composition === 'list' && items.length) {
-    const head = specs.filter(s => s.role !== 'body')
-    const headFit = fitGroup(head, zone.width, Math.round(zone.height * .4), Math.round(gap * .6))
     const inCards = cardsFor('list'), pad = inCards ? Math.round(gap * .55) : 0
-    const itemSize = Math.round(bSize * 1.2), marker = Math.round(itemSize * 1.6), textX = zone.x + pad + marker + Math.round(gap * .7)
     const rowGap = Math.round(gap * (inCards ? .45 : .8))
-    const listHeight = zone.height - ctaReserve - lineReserve - headFit.total - gap * 1.4 - pad * 2 * items.length
-    const itemSpecs = items.map(text => ({ role: 'item', text, font: bodyFont, size: itemSize, min: 20, weight: 500, lineHeight: 1.25, color: inCards ? cardText : fg }))
-    const fit = fitGroup(itemSpecs, zone.x + zone.width - pad - textX, listHeight, rowGap)
-    const rows = fit.sized.map(s => Math.max(s.height, marker) + pad * 2)
+    // Eyebrow, headline and the list's lead line sit above the items. Rows are as tall as their marker, so markers,
+    // padding and text scale together; the headline gives up room first, so items stay readable before they shrink.
+    const ATTEMPTS = [[.45, 1], [.38, 1], [.45, .9], [.32, 1], [.38, .9], [.32, .9], [.27, 1], [.32, .8], [.27, .8], [.27, .7], [.27, .6], [.27, .5]]
+    let headFit: any = null, itemSize = 0, marker = 0, textX = 0, fit: any = null, rows: number[] = []
+    // Each marker is centred on its item's first line and the text starts at the top of the row, so numbers stay
+    // aligned even when the real font wraps an item onto fewer or more lines than estimated.
+    const rowGeometry = (s: any) => {
+      const first = s.size * s.lineHeight, centre = Math.max(marker, first) / 2
+      return { marker: centre - marker / 2, text: centre - first / 2, inner: Math.max(centre + marker / 2, centre - first / 2 + s.height) }
+    }
+    for (const [share, scale] of ATTEMPTS) {
+      // The lead line keeps a readable size; the headline is what gives way.
+      const headSpecs = specs.map(s => s.role === 'body' ? { ...s, min: Math.max(s.min, Math.round(bSize * .85)) } : s)
+      try { headFit = fitGroup(headSpecs, zone.width, Math.round(zone.height * share), Math.round(gap * .6)) } catch { continue }
+      const available = zone.height - ctaReserve - lineReserve - headFit.total - gap * 1.4
+      itemSize = Math.round(bSize * 1.2 * scale); marker = Math.round(itemSize * 1.6); textX = zone.x + pad + marker + Math.round(gap * .7)
+      const itemSpecs = items.map(text => ({ role: 'item', text, font: bodyFont, size: itemSize, min: itemSize, weight: 500, lineHeight: 1.25, color: inCards ? cardText : fg }))
+      try { fit = fitGroup(itemSpecs, zone.x + zone.width - pad - textX, available - pad * 2 * items.length, rowGap) } catch { fit = null; continue }
+      rows = fit.sized.map((s: any) => rowGeometry(s).inner + pad * 2)
+      if (rows.reduce((n, h) => n + h, 0) + rowGap * (rows.length - 1) <= available) break
+      fit = null
+    }
+    if (!fit || !headFit) throw Object.assign(new Error('The list has too many or too long items for this design. Shorten them or split the slide.'), { status: 422 })
     const groupHeight = lineReserve + headFit.total + gap * 1.4 + rows.reduce((n, h) => n + h, 0) + rowGap * (rows.length - 1) + ctaReserve
     let y = Math.round(plan.anchor === 'top' ? zone.y : plan.anchor === 'bottom' ? zone.y + zone.height - groupHeight : zone.y + (zone.height - groupHeight) / 2)
     if (lineAccent) { push('accent-line', { type: 'shape', shape: 'rect', x: zone.x, y, width: Math.round(W * .12), height: Math.max(6, Math.round(W * .008)), fill: accent }); y += lineReserve }
@@ -435,8 +505,9 @@ export function composeSlide(family: GlobalDesignFamily, brand: any, slide: any,
     fit.sized.forEach((s, i) => {
       const rowH = rows[i]
       if (inCards) card({ x: zone.x, y, width: zone.width, height: rowH }, 'item-card')
-      drawMarker(zone.x + pad, y + (rowH - marker) / 2, marker, i)
-      textNode(s, { x: textX, y: y + (rowH - s.height) / 2, width: zone.x + zone.width - pad - textX, height: s.height }, 'left')
+      const geometry = rowGeometry(s)
+      drawMarker(zone.x + pad, y + pad + geometry.marker, marker, i)
+      textNode(s, { x: textX, y: y + pad + geometry.text, width: zone.x + zone.width - pad - textX, height: s.height }, 'left')
       y += rowH + rowGap
     })
     if (ctaText) placeCta(y - rowGap + gap)
@@ -453,13 +524,11 @@ export function composeSlide(family: GlobalDesignFamily, brand: any, slide: any,
       specs.splice(specs.indexOf(body), 1)
       zone = { ...zone, height: zone.height - cardH - gap }
     }
-    const badgeSize = plan.badge ? Math.round(W * .17) : 0
     // Stacked text-only slides spread the copy: headline to one edge, supporting copy to the other.
     const spread = plan.composition === 'stacked' && !frame && specs.length > 1
-    const badgeReserve = badgeSize ? badgeSize + gap : 0
-    const textBudget = zone.height - ctaReserve - lineReserve - badgeReserve
+    const textBudget = zone.height - ctaReserve - lineReserve
     const fit = fitGroup(specs, zone.width, Math.max(120, textBudget - (spread ? gap * 2 : 0)), gap)
-    const groupHeight = fit.total + ctaReserve + lineReserve + badgeReserve
+    const groupHeight = fit.total + ctaReserve + lineReserve
     let y = plan.anchor === 'top' || spread ? zone.y : plan.anchor === 'bottom' ? zone.y + zone.height - groupHeight : zone.y + (zone.height - groupHeight) / 2
     y = Math.max(zone.y, Math.round(y))
     if (lineAccent) { push('accent-line', { type: 'shape', shape: 'rect', x: align === 'center' ? W / 2 - W * .06 : align === 'right' ? zone.x + zone.width - W * .12 : zone.x, y, width: Math.round(W * .12), height: Math.max(6, Math.round(W * .008)), fill: accent }); y += lineReserve }
@@ -473,19 +542,10 @@ export function composeSlide(family: GlobalDesignFamily, brand: any, slide: any,
         textNode(s, { x: px, y, width: textW, height: s.height }, 'center')
       } else textNode(s, { x: zone.x, y, width: zone.width, height: s.height }, align)
       y += s.height + gap
-      if (s.role === 'headline' && badgeSize) { placeBadge(align === 'center' ? Math.round(W / 2 - badgeSize / 2) : align === 'right' ? zone.x + zone.width - badgeSize : zone.x, y, badgeSize); y += badgeSize + gap }
     })
     if (ctaText) placeCta(spread || plan.anchor === 'bottom' || ctaProminent ? Math.min(zone.y + zone.height - ctaHeight, y) : y)
   }
 
-  // A brand mark inside a solid tile (an app-icon style badge), editable as a shape plus the logo image.
-  function placeBadge(x: number, y: number, size: number) {
-    const tile = lightness(p.surface) < .4 ? accent : p.dark
-    push('badge', { type: 'shape', shape: 'rect', x, y, width: size, height: size, fill: tile, borderRadius: Math.round(size * .24) })
-    const inset = Math.round(size * .2)
-    if (showLogo) push('badge-logo', { type: 'image', x: x + inset, y: y + inset, width: size - 2 * inset, height: size - 2 * inset, src: logoOn(tile), objectFit: 'contain' })
-    else push('badge-mark', { type: 'text', x, ...line(y, size, Math.round(size * .5), 1), width: size, text: (clean(brand.name).trim()[0] || '•').toUpperCase(), fontFamily: heading, fontSize: Math.round(size * .5), fontWeight: 800, lineHeight: 1, color: on(tile), textAlign: 'center' })
-  }
 
   // Nothing on an Instagram graphic is clickable, so the CTA is typography in the accent color: never a button
   // shape, a link underline or an arrow. It stays on one line, shrinking a little when it has to.
@@ -493,6 +553,28 @@ export function composeSlide(family: GlobalDesignFamily, brand: any, slide: any,
     let size = Math.round(bSize * (ctaProminent ? 1.08 : .92))
     while (size > 22 && countLines(ctaText, size, zone.width - 8, bodyFont, 0) > 1) size -= 2
     push('cta', { type: 'text', x: zone.x, ...line(y, ctaHeight, size, 1.15), width: zone.width, text: ctaText, fontFamily: bodyFont, fontSize: size, fontWeight: 700, lineHeight: 1.15, color: accent, textAlign: align })
+  }
+
+  // The largest empty band the copy leaves inside the content area (above or below it). A fill cutout stands in it:
+  // on the bottom edge below the copy, or just above the headline, on the side away from the copy's alignment.
+  const COPY = /^(eyebrow|eyebrow-pill|headline|headline-frame|body|cta|item|item-card|marker|marker-glyph|marker-dot|badge|badge-logo|badge-mark|callout-card|accent-line)$/
+  const copyNodes = nodes.filter(n => COPY.test(n.designRole || ''))
+  let free: { side: 'top' | 'bottom'; box: Box } | null = null
+  if (copyNodes.length) {
+    const top = Math.min(...copyNodes.map(n => n.y)), bottom = Math.max(...copyNodes.map(n => n.y + n.height))
+    const above = top - gap - content.y, below = content.y + content.height - bottom - gap
+    const bottomEdge = bottomBand ? content.y + content.height : H
+    if (Math.max(above, below) >= H * .22) free = below >= above
+      ? { side: 'bottom', box: { x: M, y: bottom + gap, width: W - 2 * M, height: bottomEdge - bottom - gap } }
+      : { side: 'top', box: { x: M, y: content.y, width: W - 2 * M, height: above } }
+  }
+  if (plan.fill && options.image && free) {
+    const size = options.imageSize
+    const tone = g.imagery.tone === 'monochrome' ? { filters: { saturate: 0, contrast: 108, brightness: 100, opacity: 100 } } : {}
+    const scale = size?.width && size?.height ? Math.min(free.box.width * .7 / size.width, free.box.height / size.height) : 0
+    const width = scale ? Math.round(size!.width * scale) : Math.round(free.box.width * .5), height = scale ? Math.round(size!.height * scale) : free.box.height
+    const x = plan.align === 'left' ? free.box.x + free.box.width - width : plan.align === 'right' ? free.box.x : free.box.x + Math.round((free.box.width - width) / 2)
+    push('image', { type: 'image', x, y: free.box.y + free.box.height - height, width, height, ...(scale ? { aspectRatio: size!.width / size!.height } : {}), src: options.image, objectFit: 'contain', ...tone })
   }
 
   // Icons: a small header icon and/or a scatter of faint marks in the space the copy leaves free.
@@ -517,6 +599,10 @@ export function composeSlide(family: GlobalDesignFamily, brand: any, slide: any,
       const y = lo + ((seed >>> (k * 2 + 1)) + k * 241) % Math.max(1, hi - lo)
       // In a centred layout, keep marks out of the copy's middle band.
       if (plan.anchor === 'center' && y > H * .3 && y < H * .7) continue
+      // Marks only go in empty space: never on text, cards, markers, images or the logo tile.
+      const clear = s * .5
+      if (nodes.some(n => (n.type === 'text' || n.type === 'image' || /card|marker|badge|pill|cta/.test(n.designRole || '')) && n.designRole !== 'backdrop-type'
+        && x < n.x + n.width + clear && x + s > n.x - clear && y < n.y + n.height + clear && y + s > n.y - clear)) continue
       glyphIcon(g.icons.scattered, x, y, s, iconInk(g.icons.opacity), 'scattered-icon')
     }
   }
@@ -572,7 +658,7 @@ export function composeSlide(family: GlobalDesignFamily, brand: any, slide: any,
     'family-highlight': { background: accent, color: textOnImage ? on(accent) : p.onAccent, paddingX: 8, paddingY: 0 },
     'family-emphasis': { color: accent, fontWeight: 700 },
   }
-  return { width: W, height: H, background: pageBackground, nodes, groups: [], classes, composition: plan.composition }
+  return { width: W, height: H, background: pageBackground, nodes, groups: [], classes, composition: plan.composition, free }
 }
 
 /** Sample copy for library previews: four beats so a family shows several compositions, not one layout. */
@@ -583,11 +669,22 @@ export const SAMPLE_DECK = [
   { headline: 'Ready when you are', body: 'Turn the idea into your next action.', cta: 'Save this post' },
 ]
 
-/** Preview of one sample beat with placeholder imagery. */
+/**
+ * Sample imagery for study previews, composed exactly like a real post's photo or cutout.
+ * Photos from Pexels (free to use): landscape by Bob Krustev (#163915); potted plant by Gül Işık (#2266851),
+ * background removed with the app's subject pipeline.
+ */
+export const SAMPLE_IMAGES = {
+  photo: { url: '/samples/landscape.jpg', width: 1600, height: 1066 },
+  cutout: { url: '/samples/cutout.png', width: 637, height: 543 },
+}
+
+/** Preview of one sample beat, with a sample photo or cutout wherever the study places imagery. */
 export function previewSlide(family: GlobalDesignFamily, brand: any, sampleIndex = 0) {
   const deck = { format: 'carousel', slides: SAMPLE_DECK }
   const plans = planSlides(family, deck)
   const i = Math.max(0, Math.min(SAMPLE_DECK.length - 1, sampleIndex))
-  try { return composeSlide(family, brand, SAMPLE_DECK[i], plans[i], i, SAMPLE_DECK.length, { preview: true }) }
+  const sample = plans[i].cutout ? SAMPLE_IMAGES.cutout : SAMPLE_IMAGES.photo
+  try { return composeSlide(family, brand, SAMPLE_DECK[i], plans[i], i, SAMPLE_DECK.length, { preview: true, image: sample.url, imageSize: sample }) }
   catch { return composeSlide(family, brand, { headline: SAMPLE_DECK[i].headline }, { ...plans[i], composition: 'statement', withImage: false }, i, SAMPLE_DECK.length, { preview: true }) }
 }

@@ -78,7 +78,9 @@ export const grammarSchema = z.object({
     leading: oneOf(['tight', 'normal', 'loose'] as const, 'tight'),
     fill: oneOf(['solid', 'gradient'] as const, 'solid'),
     gradient: z.object({ from: oneOf(COLOR_ROLES, 'foreground'), to: oneOf(COLOR_ROLES, 'primary'), angle: z.coerce.number().min(0).max(360).catch(90) }).catch(HEADLINE_GRADIENT),
-  }).catch({ scale: 'large', weight: 'bold', case: 'none', tracking: 'normal', leading: 'tight', fill: 'solid', gradient: HEADLINE_GRADIENT }),
+    // A rectangle drawn around the whole headline: a border only, or a filled panel the headline sits on.
+    frame: oneOf(['none', 'outline', 'solid'] as const, 'none'),
+  }).catch({ scale: 'large', weight: 'bold', case: 'none', tracking: 'normal', leading: 'tight', fill: 'solid', gradient: HEADLINE_GRADIENT, frame: 'none' }),
   body: z.object({ scale: oneOf(['small', 'medium', 'large'] as const, 'medium') }).catch({ scale: 'medium' }),
   emphasis: oneOf(['none', 'color', 'background', 'underline'] as const, 'color'),
   alignment: someOf(['left', 'center', 'right'] as const, ['left']),
@@ -129,6 +131,8 @@ export const grammarSchema = z.object({
     composition: z.enum(COMPOSITIONS).catch('statement'), align: oneOf(['left', 'center', 'right'] as const, 'left'),
     anchor: oneOf(['top', 'center', 'bottom'] as const, 'center'), image: flag,
     imagePos: oneOf(['full', 'top', 'bottom', 'left', 'right', 'center'] as const, 'bottom'), callout: flag, badge: flag,
+    // Measured from the reference's pixels: its headline sits in a box. Absent on older studies.
+    frame: z.boolean().optional().catch(undefined),
   })).max(30)).catch([]),
 })
 /**

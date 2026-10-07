@@ -84,19 +84,23 @@ function planner(writeCopy, planAssets) {
     NextResponse: { json: (body, init) => ({ body, status: init?.status || 200 }) }, corsify: r => r,
     loadGenerationBrandContext: async (_db, body) => ({ id: 'kachica', name: 'KACHICA', ...body.brandContext }),
     chooseBrandFamily: async (_db, b) => b.family ? { family: b.family, design: { id: 'global-' + b.family.id } } : null,
-    studyForPlanning: study.studyForPlanning, familyGrammar: study.familyGrammar, familyImagery: study.familyImagery, familyCutouts: study.familyCutouts,
+    studyForPlanning: study.studyForPlanning, familyGrammar: study.familyGrammar, familyImagery: study.familyImagery, familyCutouts: study.familyCutouts, familyPhotoLed: study.familyPhotoLed,
     writeCopy, copyErrorResponse: error => ({ body: { error: error.message }, status: error.status || 500 }), planAssets,
   })
 }
 const GALLERY = [{ ref: 'g1', id: 'generated-phone', description: 'hand holding a smartphone' }, { ref: 'g2', id: 'generated-laptop', description: 'laptop with an open calendar' }]
 
-test('the copy plan reuses a fitting gallery cutout by reference, at most once per post, and only for cutout studies', () => {
+test('the copy plan describes isolated subjects and may reuse one fitting gallery cutout per post', () => {
   const forest = family(FOREST_IMAGERY)
   const { designPlanningPrompt, sanitizeDesignPlan } = planner()
   const prompt = designPlanningPrompt(forest, GALLERY)
   assert.match(prompt, /transparent cutout/); assert.match(prompt, /BRAND GALLERY CUTOUTS/); assert.match(prompt, /g1 = "hand holding a smartphone"/)
-  const photoPrompt = designPlanningPrompt(study.reconcileStudy(seeds[2]))
-  assert.doesNotMatch(photoPrompt, /GALLERY|"reuse"/); assert.match(photoPrompt, /English stock search/)
+  assert.match(prompt, /Prefer new subjects made for this post/)
+  const framed = family({ mode: 'contained', usage: 'Photographs inside frames beside the copy.' }, { positions: ['bottom'] })
+  const photoPrompt = designPlanningPrompt(framed)
+  assert.doesNotMatch(photoPrompt, /GALLERY|"reuse"/, 'no gallery block without saved cutouts')
+  assert.match(photoPrompt, /ONE isolated subject/); assert.match(photoPrompt, /English stock search/)
+  assert.match(designPlanningPrompt(study.reconcileStudy(seeds[2])), /full-bleed photograph behind the copy/, 'a photo-led study asks for photographic scenes')
   const plan = sanitizeDesignPlan(forest, { format: 'carousel', slides: [
     { headline: 'One', design: { composition: 'image-led', image: { reuse: 'g1' } } },
     { headline: 'Two', design: { composition: 'stacked', image: { subject: 'a hand with a phone', reuse: 'g1' } } },
@@ -104,10 +108,12 @@ test('the copy plan reuses a fitting gallery cutout by reference, at most once p
     { headline: 'Four', design: { composition: 'stacked', image: { subject: 'saved copy', reuse: 'generated-laptop' } } },
   ] }, GALLERY)
   const images = plan.slides.map(s => s.design.image)
-  assert.deepEqual(images[0], { subject: 'hand holding a smartphone', queries: [], kind: 'cutout', reuse: 'generated-phone' })
+  assert.deepEqual(images[0], { subject: 'hand holding a smartphone', queries: [], reuse: 'generated-phone' })
   assert.equal(images[1].reuse, undefined, 'the same cutout is not reused twice in one post')
   assert.equal(images[2].reuse, undefined, 'unknown refs are dropped')
-  assert.equal(images[3].reuse, 'generated-laptop', 're-planning saved copy keeps a real gallery id')
+  assert.equal(images[3].reuse, undefined, 'new images are preferred: at most one reuse per post')
+  const replanned = sanitizeDesignPlan(forest, { format: 'single', headline: 'Saved', design: { composition: 'image-led', image: { subject: 'saved copy', reuse: 'generated-laptop' } } }, GALLERY)
+  assert.equal(replanned.design.image.reuse, 'generated-laptop', 're-planning saved copy keeps a real gallery id')
 })
 
 test('planning loads the brand cutouts once and threads the chosen reuse into the asset plan', async () => {
@@ -121,9 +127,11 @@ test('planning loads the brand cutouts once and threads the chosen reuse into th
   assert.deepEqual(queries, [['assets', { brand_id: 'brand_kachica', source: 'ai_generated', status: 'ready', treatment: 'isolated_subject' }]])
   assert.match(prompt, /g1 = "hand holding a smartphone"/)
   assert.equal(planned.design.image.reuse, 'generated-phone')
-  const photoQueries = queries.length
+  const before = queries.length
   await planner(async () => ({ copy: { format: 'single', headline: 'Escape', design: { composition: 'statement', image: null } } }), async () => ({ slots: [] })).handlePlanPost(db, { brandContext: { family: study.reconcileStudy(seeds[2]) }, idea: { topic: 'x' } })
-  assert.equal(queries.length, photoQueries, 'photo studies never read the cutout gallery')
+  assert.equal(queries.length, before + 1, 'photo studies read the gallery too, since most of their images are cutouts')
+  await planner(async () => ({ copy: { format: 'single', headline: 'Só texto', design: { composition: 'statement', image: null } } }), async () => ({ slots: [] })).handlePlanPost(db, { brandContext: { family: study.reconcileStudy(seeds[1]) }, idea: { topic: 'x' } })
+  assert.equal(queries.length, before + 1, 'a study without imagery never reads the gallery')
 })
 
 test('saved cutouts are offered by subject: instruction-like descriptions and duplicates are skipped', async () => {
@@ -203,5 +211,149 @@ test('the logo is sized by its mark and lines up with the copy; CTAs are text, a
     const marker = list.find(n => n.designRole === 'marker' && n.x === glyph.x && Math.abs(n.y - glyph.y) < n.height)
     assert.ok(Math.abs((glyph.y + glyph.height / 2) - (marker.y + marker.height / 2)) <= 1, 'number centred in its circle')
     assert.ok(glyph.height < marker.height)
+  }
+})
+
+test('one logo per slide, always in a corner (never a tile inside the copy), and wordmarks are sized by area', () => {
+  const textOnly = study.reconcileStudy(seeds[1])
+  const f = { ...textOnly, study: { ...textOnly.study, grammar: { ...textOnly.study.grammar, badge: 'logo', branding: { logo: 'top-left', slideNumber: 'none', handle: 'top-right' } } } }
+  const variants = aspect => ({ source: '/api/uploads/logo', inkLightness: .5, imageAspect: aspect, bounds: { x: 0, y: 0, width: 1, height: 1 }, originalTransparent: 'orig', whiteTransparent: 'white', blackTransparent: 'black' })
+  const carousel = { format: 'carousel', slides: [{ headline: 'Transformamos dados em crescimento', body: 'A nossa metodologia em 4 etapas.' }, { headline: 'Etapa um', body: 'Diagnóstico.' }] }
+  const render = aspect => generation.renderGlobalPost(f, { ...brand, logo: '/api/uploads/logo', logoVariants: variants(aspect), website: 'https://kachica.pt' }, carousel, { slots: [] }, { id: 'global-x' }, crypto.randomUUID)
+  const logos = page => page.nodes.filter(n => n.designRole === 'logo' || n.designRole === 'badge-logo')
+  // A 4:1 wordmark: no tile, one logo per slide, about 4% of the width tall and 16% wide.
+  const wordmark = render(4.22)
+  for (const page of wordmark.pages) assert.equal(logos(page).length, 1)
+  assert.equal(wordmark.pages[0].nodes.some(n => n.designRole === 'badge'), false)
+  const word = logos(wordmark.pages[0])[0]
+  assert.ok(word.height <= 45 && word.width <= 190, `wordmark ${word.width}×${word.height}`)
+  // A square mark in a study that recorded a logo tile: still only the corner logo, on every slide.
+  const square = render(1.2)
+  for (const page of square.pages) {
+    assert.deepEqual(logos(page).map(n => n.designRole), ['logo'])
+    assert.equal(page.nodes.some(n => /^badge/.test(n.designRole || '')), false)
+  }
+  // A centred logo position moves to a corner.
+  const centred = { ...f, study: { ...f.study, grammar: { ...f.study.grammar, branding: { logo: 'top-center', slideNumber: 'none', handle: 'none' } } } }
+  const centredLogo = generation.renderGlobalPost(centred, { ...brand, logo: '/api/uploads/logo', logoVariants: variants(1.2) }, carousel, { slots: [] }, { id: 'global-x' }, crypto.randomUUID).pages[0].nodes.find(n => n.designRole === 'logo')
+  assert.ok(centredLogo.x < 200 && centredLogo.y < 200, 'top-left, not top-centre')
+  // A list slide whose plan carries the tile flag still shows the corner logo, because lists never draw the tile.
+  const listPlan = { ...f, study: { ...f.study, grammar: { ...f.study.grammar, references: [{ composition: 'statement', align: 'left', anchor: 'top', image: false, imagePos: 'bottom', callout: false, badge: true }, { composition: 'list', align: 'left', anchor: 'top', image: false, imagePos: 'bottom', callout: false, badge: true }] } } }
+  const listed = generation.renderGlobalPost(listPlan, { ...brand, logo: '/api/uploads/logo', logoVariants: variants(1.2) }, { format: 'carousel', slides: [{ headline: 'Capa clara' }, { headline: 'Três razões', body: '1. Um\n2. Dois\n3. Três' }] }, { slots: [] }, { id: 'global-x' }, crypto.randomUUID)
+  for (const page of listed.pages) assert.equal(logos(page).length, 1, page.globalComposition)
+  assert.equal(square.pages.some(p => p.nodes.some(n => n.designRole === 'handle')), false, 'still no website link')
+})
+
+test('AI cutouts are preferred: about one image in five is a stock photo, cutout-only studies never use stock, photo-led studies keep photos', () => {
+  const photo = family({ mode: 'contained', usage: 'Photographs inside frames beside the copy.' }, { positions: ['bottom'] })
+  const slides = Array.from({ length: 200 }, (_, i) => ({ headline: `Ideia número ${i} para o negócio`, body: 'Texto curto.' }))
+  const modes = slides.map(s => generation.globalLayoutPlan(photo, 'global-x', { format: 'single', ...s }).slots[0]).filter(s => s.needs_visual)
+  const stock = modes.filter(s => s.treatment === 'environmental').length / modes.length
+  assert.ok(stock > .1 && stock < .3, `stock share ${stock}`)
+  assert.ok(modes.filter(s => s.imageMode === 'cutout').every(s => s.frame.height < 1350), 'cutouts take the lower band, never the full frame')
+  const forest = family(FOREST_IMAGERY)
+  const forestSlots = slides.slice(0, 50).map(s => generation.globalLayoutPlan(forest, 'global-x', { format: 'single', ...s }).slots[0]).filter(s => s.needs_visual)
+  assert.ok(forestSlots.length && forestSlots.every(s => s.treatment === 'isolated_subject'))
+  // A study built on full-bleed photographs behind the copy keeps photographs: a cutout cannot recreate that look.
+  const background = study.reconcileStudy(seeds[2])
+  const backgroundSlots = slides.slice(0, 30).map(s => generation.globalLayoutPlan(background, 'global-x', { format: 'single', ...s }).slots[0]).filter(s => s.needs_visual)
+  assert.ok(backgroundSlots.length && backgroundSlots.every(s => s.treatment === 'environmental' && s.background))
+})
+
+test('an enumeration written as a sentence becomes a designed list with its lead line', () => {
+  const { listParts } = load('lib/designs/global/compose.ts', ['listParts'], { familyGrammar: study.familyGrammar, familyImagery: study.familyImagery, familyCutouts: study.familyCutouts, resolveBrandTokens: () => ({}), countLines: () => 1, clean: s => String(s ?? ''), lightness: () => 0, on: () => '#fff', hex: () => true })
+  assert.deepEqual(listParts({ body: 'Descubra cada fase: Descoberta, Estratégia, Implementação e Optimização' }), { lead: 'Descubra cada fase', items: ['Descoberta', 'Estratégia', 'Implementação', 'Optimização'] })
+  assert.deepEqual(listParts({ body: 'Três passos:\n1. Diagnóstico\n2. Plano\n3. Execução' }), { lead: 'Três passos:', items: ['Diagnóstico', 'Plano', 'Execução'] })
+  assert.deepEqual(listParts({ body: 'A Ikarus Pay é a plataforma local: segura, simples e adaptada ao mercado angolano de hoje, com suporte presencial em todo o país.' }).items.length, 0, 'long clauses stay prose')
+  assert.deepEqual(listParts({ body: 'Uma frase normal, sem lista.' }).items, [])
+  // The slide from the screenshot: the cover becomes a list with a lead, in the study's list style.
+  const textOnly = study.reconcileStudy(seeds[1])
+  const cover = { headline: 'A nossa metodologia em 4 passos', body: 'Descubra cada fase: Descoberta, Estratégia, Implementação e Optimização', design: { composition: 'statement' } }
+  const post = generation.renderGlobalPost(textOnly, brand, { format: 'single', ...cover }, { slots: [] }, { id: 'global-x' }, crypto.randomUUID)
+  assert.equal(post.nodes.filter(n => n.designRole === 'item').length, 4)
+  assert.ok(post.nodes.some(n => n.designRole === 'body' && n.text === 'Descubra cada fase'), 'the lead stays as the intro line')
+})
+
+test('single-weight display fonts are set at their real weight, so the browser never fakes a wider bold', () => {
+  const textOnly = study.reconcileStudy(seeds[1])
+  const f = { ...textOnly, study: { ...textOnly.study, grammar: { ...textOnly.study.grammar, headline: { ...textOnly.study.grammar.headline, weight: 'black' } } } }
+  const prumo = { id: 'prumo', name: 'PRUMO', fonts: ['Anton', 'Impact', 'Roboto'], designTokens: { primary: '#f9e183', background: '#ffffff', textPrimary: '#000000' } }
+  const post = generation.renderGlobalPost(f, prumo, { format: 'single', headline: 'Pronto para elevar a sua equipa?', supportingText: 'Contacte-nos e agende a próxima sessão de formação BIM.', cta: 'Envie-nos uma mensagem' }, { slots: [] }, { id: 'global-x' }, crypto.randomUUID)
+  const headline = post.nodes.find(n => n.designRole === 'headline'), body = post.nodes.find(n => n.designRole === 'body')
+  assert.equal(headline.fontFamily, 'Anton'); assert.equal(headline.fontWeight, 400)
+  assert.ok(body.y >= headline.y + headline.height, 'the body starts below the headline')
+})
+
+test('study previews show a sample photo or cutout instead of an empty placeholder', () => {
+  const { previewSlide } = require('./globalDesigns.test.cjs').compose
+  const photoStudy = study.reconcileStudy(seeds[2]), cutoutStudy = family(FOREST_IMAGERY)
+  const images = f => [0, 1, 2, 3].map(i => previewSlide(f, {}, i)).flatMap(p => p.nodes.filter(n => n.type === 'image' && n.designRole === 'image'))
+  const photos = images(photoStudy), cutouts = images(cutoutStudy)
+  assert.ok(photos.length && cutouts.length)
+  assert.ok([...photos, ...cutouts].every(n => n.src.startsWith('/samples/')))
+  assert.ok(cutouts.every(n => n.src === '/samples/cutout.png' && Math.abs(n.width / n.height - 637 / 543) < .01))
+  assert.equal([0, 1, 2, 3].some(i => [photoStudy, cutoutStudy].some(f => previewSlide(f, {}, i).nodes.some(n => n.designRole === 'image-placeholder'))), false)
+})
+
+test('a text slide that leaves a large empty band gets an AI cutout there, never over the copy', () => {
+  const forest = family(FOREST_IMAGERY, { frequency: 'rare' })
+  const subject = { subject: 'engineer holding a tablet', queries: ['engineer tablet'] }
+  const list = { headline: 'Relatórios periódicos', body: '1. Gráficos de progresso\n2. Cronograma 4D\n3. Indicadores de qualidade' }
+  const deck = slides => ({ format: 'carousel', slides })
+  const layout = generation.globalLayoutPlan(forest, 'global-x', deck([{ headline: 'Capa', design: { composition: 'statement', image: null } }, { ...list, design: { composition: 'list', image: subject } }]), brand)
+  const slot = layout.slots[1]
+  assert.equal(slot.plan.fill, true); assert.equal(slot.needs_visual, true); assert.equal(slot.treatment, 'isolated_subject')
+  assert.match(slot.brief, /complements the copy/)
+  // Without a planned subject there is nothing meaningful to generate, so the space stays empty.
+  assert.equal(generation.globalLayoutPlan(forest, 'global-x', deck([{ headline: 'Capa' }, list]), brand).slots[1].needs_visual, false)
+  const copy = deck([{ headline: 'Capa', design: { composition: 'statement', image: null } }, { ...list, design: { composition: 'list', image: subject } }])
+  const resolved = { slots: layout.slots.map(s => ({ slot_id: s.slot_id, treatment: s.treatment, resolvedAsset: s.needs_visual ? { url: '/gen', subject: { url: '/cut', width: 500, height: 600 } } : null })) }
+  const page = generation.renderGlobalPost(forest, brand, copy, resolved, { id: 'global-x' }, crypto.randomUUID).pages[1]
+  const image = page.nodes.find(n => n.designRole === 'image'), lastCopy = Math.max(...page.nodes.filter(n => ['headline', 'item', 'marker'].includes(n.designRole)).map(n => n.y + n.height))
+  assert.equal(image.src, '/cut'); assert.ok(image.y >= lastCopy, 'below the copy'); assert.equal(image.y + image.height, 1350, 'standing on the bottom edge')
+  assert.equal(page.globalComposition, 'list', 'the slide keeps its composition')
+  // If the cutout could not be made, the slide is simply its text layout, with no warning.
+  const missing = generation.renderGlobalPost(forest, brand, copy, { slots: [] }, { id: 'global-x' }, crypto.randomUUID)
+  assert.equal(missing.pages[1].globalComposition, 'list'); assert.equal(missing.pages[1].nodes.some(n => n.designRole === 'image'), false)
+  assert.equal(missing.validation.warnings.some(w => /Slide 2/.test(w)), false)
+  // A typography-only study never gets fill images.
+  const textOnly = study.reconcileStudy(seeds[1])
+  assert.equal(generation.globalLayoutPlan(textOnly, 'global-x', deck([{ headline: 'Capa' }, { ...list, design: { composition: 'list', image: subject } }]), brand).slots[1].needs_visual, false)
+})
+
+test('every post carries the brand, and list numbers line up with the first line of their item', () => {
+  const textOnly = study.reconcileStudy(seeds[1])
+  const bare = { ...textOnly, study: { ...textOnly.study, grammar: { ...textOnly.study.grammar, alignment: ['left'], branding: { logo: 'none', slideNumber: 'none', handle: 'none' } } } }
+  const withLogo = { ...brand, logo: '/api/uploads/logo', logoVariants: { source: '/api/uploads/logo', inkLightness: .5, imageAspect: 3, bounds: { x: 0, y: 0, width: 1, height: 1 }, originalTransparent: 'orig', whiteTransparent: 'white', blackTransparent: 'black' } }
+  const list = { format: 'single', headline: 'Resultados sustentáveis', body: '1. Redução de resíduos até 30%\n2. Eficiência energética melhorada 20%\n3. Otimização de materiais 15%' }
+  const post = generation.renderGlobalPost(bare, withLogo, list, { slots: [] }, { id: 'global-x' }, crypto.randomUUID)
+  const logo = post.nodes.find(n => n.designRole === 'logo')
+  assert.ok(logo && logo.x === post.nodes.find(n => n.designRole === 'headline').x && logo.y < 200, 'logo top-left, on the copy edge')
+  assert.ok(generation.renderGlobalPost(bare, brand, list, { slots: [] }, { id: 'global-x' }, crypto.randomUUID).nodes.some(n => n.designRole === 'brand-name'), 'a brand without a logo shows its name')
+  const glyphs = post.nodes.filter(n => n.designRole === 'marker-glyph'), items = post.nodes.filter(n => n.designRole === 'item')
+  assert.equal(glyphs.length, 3)
+  glyphs.forEach((glyph, i) => {
+    const firstLine = items[i].fontSize * items[i].lineHeight
+    assert.ok(Math.abs((glyph.y + glyph.height / 2) - (items[i].y + firstLine / 2)) <= 3, `number ${i + 1} sits on its item's first line`)
+  })
+})
+
+test('a studied headline box frames the headline (outline or filled panel), and a preview never shows two brand marks', () => {
+  const textOnly = study.reconcileStudy(seeds[1])
+  const boxed = frame => ({ ...textOnly, study: { ...textOnly.study, grammar: { ...textOnly.study.grammar, headline: { ...textOnly.study.grammar.headline, frame }, badge: 'logo' } } })
+  const copy = { format: 'single', headline: 'Sumol+Compal', supportingText: 'Obras de reabilitação a decorrer.' }
+  const outlined = generation.renderGlobalPost(boxed('outline'), brand, copy, { slots: [] }, { id: 'global-x' }, crypto.randomUUID).nodes
+  const frameNode = outlined.find(n => n.designRole === 'headline-frame'), headline = outlined.find(n => n.designRole === 'headline')
+  assert.ok(frameNode && frameNode.stroke && frameNode.fill === '#00000000', 'an outlined box')
+  assert.ok(headline.x > frameNode.x && headline.y > frameNode.y && headline.x + headline.width < frameNode.x + frameNode.width && headline.y + headline.height < frameNode.y + frameNode.height, 'the headline sits inside its box')
+  const body = outlined.find(n => n.designRole === 'body')
+  assert.ok(body.y >= frameNode.y + frameNode.height, 'the copy below starts after the box')
+  const solid = generation.renderGlobalPost(boxed('solid'), brand, copy, { slots: [] }, { id: 'global-x' }, crypto.randomUUID).nodes
+  assert.ok(solid.find(n => n.designRole === 'headline-frame').fill !== '#00000000' && !solid.find(n => n.designRole === 'headline').fillType, 'a filled panel with solid lettering')
+  // A brand without a logo in a study with a badge: the preview shows the initial tile OR the name, never both.
+  const { previewSlide } = require('./globalDesigns.test.cjs').compose
+  for (let i = 0; i < 4; i++) {
+    const nodes = previewSlide(boxed('none'), { name: 'Your brand' }, i).nodes
+    assert.ok(!(nodes.some(n => n.designRole === 'badge-mark') && nodes.some(n => n.designRole === 'brand-name')), `sample ${i + 1} has one brand mark`)
   }
 })

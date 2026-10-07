@@ -284,3 +284,37 @@ test('every OpenAI image is a transparent PNG whose canvas follows the target ar
  assert.deepEqual(requests.map(r=>r.size),['1024x1536','1536x1024','1024x1024','1024x1024'])
  assert.ok(requests.every(r=>r.background==='transparent'&&r.output_format==='png'))
 })
+
+test('an OpenAI account without credits is reported plainly and not called again for the rest of the post',async()=>{
+ let calls=0
+ const e=engine(async()=>{calls++;return new Response(JSON.stringify({error:{type:'insufficient_quota',code:'credit_balance_exhausted',message:'You have no credits remaining.'}}),{status:429})},null,{OPENAI_API_KEY:'test-only'})
+ await assert.rejects(e.generateImageOpenAI('subject'),/OpenAI has no credits left.*platform\.openai\.com/)
+ await assert.rejects(e.generateImageOpenAI('subject'),/no credits left/)
+ assert.equal(calls,1,'the second slide does not repeat the failing call')
+})
+
+test('when AI generation fails, a stock photo of the same subject is used to be cut out locally instead of leaving the space empty',async()=>{
+ const queries=[]
+ const e=engine(async url=>{queries.push(new URL(url).searchParams.get('query'));return {ok:true,json:async()=>({results:[{id:'leaf',urls:{regular:'https://images.example/leaf',raw:'https://images.example/leaf'},width:2000,height:2000,alt_description:'green leaf isolated on white'}]})}},async()=>{throw Error('OpenAI has no credits left')},{UNSPLASH_ACCESS_KEY:'key'})
+ const result=await e.resolveSlot(null,{...slot,slot_id:'fill',needs_visual:true,preferred_source:'ai_generated',treatment:'isolated_subject',search_queries:['green leaf'],search_keywords:['leaf'],subject_description:'green leaf'},null,'key',null,new Set())
+ assert.equal(result.source,'unsplash');assert.equal(result.treatment,'isolated_subject','the photo is cut out afterwards')
+ assert.match(queries[0],/green leaf isolated white background/)
+ assert.match(result.warning,/no credits left; used a stock photo cut out locally instead/)
+})
+
+test('when OpenAI fails, fal then Pollinations draw the subject on a studio backdrop before stock is used',async()=>{
+ const png=await require('sharp')({create:{width:64,height:64,channels:3,background:'#dddddd'}}).png().toBuffer()
+ const calls=[]
+ const fetch=async(url,options={})=>{
+  calls.push(String(url).replace(/\?.*/,''))
+  if(String(url).startsWith('https://fal.run/'))return new Response(JSON.stringify({detail:'User is locked. Reason: Exhausted balance.'}),{status:403})
+  if(String(url).startsWith('https://gen.pollinations.ai/image/')){assert.match(decodeURIComponent(url),/plain uniform light grey seamless studio background/);assert.match(url,/width=768&height=1024/);return new Response(png,{status:200,headers:{'content-type':'image/png'}})}
+  throw Error('unexpected '+url)
+ }
+ const e=engine(fetch,async()=>{throw Error('OpenAI has no credits left')},{FAL_KEY:'fal-test',POLLINATIONS_API_KEY:'poll-test',UNSPLASH_ACCESS_KEY:'stock'})
+ const result=await e.resolveSlot(null,{...slot,slot_id:'a',needs_visual:true,preferred_source:'ai_generated',treatment:'isolated_subject',subject_description:'hard hat on a stack of blueprints',frame_aspect:.6},null,'key',null,new Set())
+ assert.deepEqual(calls,['https://fal.run/fal-ai/flux/schnell','https://gen.pollinations.ai/image/'+encodeURIComponent('Realistic commercial studio photograph of hard hat on a stack of blueprints. One complete subject, centred, fully inside the frame with clear margin on every side, on a plain uniform light grey seamless studio background, soft even lighting, no shadow on the background, no text, no logos, no watermark, no frame.')])
+ assert.equal(result.source,'ai_generated');assert.equal(result.treatment,'isolated_subject','the backdrop is removed afterwards')
+ assert.match(result.resolvedAsset.url,/^data:image\/png;base64,/,'kept as an inline image, not an expiring link')
+ assert.match(result.warning,/no credits left; fal: HTTP 403 \(no balance left\); generated with Pollinations instead/)
+})

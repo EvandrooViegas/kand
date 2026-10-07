@@ -171,86 +171,79 @@ async function searchStock(slot:VisualSlot,unsplashKey:string|null,pexelsKey:str
 }
 
 // ─── AI image generation ──────────────────────────────────────────────────────
-// Primary:  fal.ai fast-sdxl  (requires FAL_KEY with credit)
-// Fallback: Pollinations.AI   (free, no key required)
+// OpenAI (native transparent PNG) first. When it has no credits or fails, fal (FLUX schnell) and then Pollinations
+// (FLUX) generate the subject on a plain studio backdrop, and prepareSubjectAssets cuts it out locally.
 
-async function generateImageFal(
-  prompt: string,
-  apiKey: string,
-): Promise<ResolvedAsset | null> {
-  try {
-    const submitRes = await fetch('https://queue.fal.run/fal-ai/fast-sdxl', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Key ${apiKey}`,
-        'Content-Type':  'application/json',
-      },
-      body: JSON.stringify({
-        prompt,
-        image_size:          'square_hd',
-        num_inference_steps: 28,
-        num_images:          1,
-      }),
-    })
+/** A short brief for models without transparency: one subject on a plain backdrop that background removal can lift. */
+function studioPrompt(slot: VisualSlot): string {
+  const subject = String(slot.subject_description || slot.visual_purpose || 'a simple object').replace(/^object-only:\s*/i, '').slice(0, 300)
+  const style = slot.image_style === 'drawing' ? 'Clean editorial illustration' : 'Realistic commercial studio photograph'
+  return `${style} of ${subject}. One complete subject, centred, fully inside the frame with clear margin on every side, on a plain uniform light grey seamless studio background, soft even lighting, no shadow on the background, no text, no logos, no watermark, no frame.`
+}
 
-    if (!submitRes.ok) {
-      const e = await submitRes.text()
-      console.error('[resolver] fal.ai submit error:', e)
-      return null
-    }
+const sizeFor = (aspect?: number) => typeof aspect === 'number' && aspect < .8 ? { fal: 'portrait_4_3', width: 768, height: 1024 } : typeof aspect === 'number' && aspect > 1.25 ? { fal: 'landscape_4_3', width: 1024, height: 768 } : { fal: 'square_hd', width: 1024, height: 1024 }
 
-    const { request_id, status_url, response_url } = await submitRes.json()
-    if (!request_id && !status_url) return null
-
-    const poll      = response_url ?? `https://queue.fal.run/fal-ai/fast-sdxl/requests/${request_id}`
-    const statusUrl = status_url   ?? `https://queue.fal.run/fal-ai/fast-sdxl/requests/${request_id}/status`
-    const deadline  = Date.now() + 90_000
-
-    while (Date.now() < deadline) {
-      await new Promise(r => setTimeout(r, 3000))
-      const statusRes = await fetch(statusUrl, { headers: { Authorization: `Key ${apiKey}` } })
-      if (!statusRes.ok) break
-      const st = await statusRes.json()
-      if (st.status === 'COMPLETED' || st.status === 'completed') break
-      if (st.status === 'FAILED'    || st.status === 'failed')    return null
-    }
-
-    const resultRes = await fetch(poll, { headers: { Authorization: `Key ${apiKey}` } })
-    if (!resultRes.ok) return null
-    const result = await resultRes.json()
-
-    const img = result?.images?.[0]
-    if (!img?.url) return null
-
-    return {
-      source:        'ai_generated',
-      url:           img.url,
-      thumbnail_url: img.url,
-      width:         img.width  ?? 1024,
-      height:        img.height ?? 1024,
-      asset_id:      null,
-      unsplash_id:   null,
-      alt:           prompt,
-    }
-  } catch (err: any) {
-    console.error('[resolver] fal.ai generation error:', err?.message)
-    return null
+async function generateImageFal(prompt: string, aspect?: number): Promise<ResolvedAsset> {
+  const key = process.env.FAL_KEY?.trim()
+  if (!key) throw new Error('fal: FAL_KEY is not configured')
+  console.info('[ai-call] service=fal model=flux/schnell purpose=image-generation transparent=false referenceImages=false')
+  const res = await fetch('https://fal.run/fal-ai/flux/schnell', {
+    method: 'POST', signal: AbortSignal.timeout(90000),
+    headers: { Authorization: `Key ${key}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt, image_size: sizeFor(aspect).fal, num_images: 1, num_inference_steps: 4, enable_safety_checker: true }),
+  })
+  if (!res.ok) {
+    const detail = await res.text().catch(() => '')
+    throw new Error('fal: HTTP ' + res.status + (/balance|credit|locked|exhausted/i.test(detail) || res.status === 402 ? ' (no balance left)' : res.status === 401 || res.status === 403 ? ' (check FAL_KEY)' : res.status === 429 ? ' (rate limit)' : ''))
   }
+  const image = (await res.json())?.images?.[0]
+  if (!image?.url) throw new Error('fal: returned no image')
+  // fal links expire: the bytes are kept as an inline image, which persistInlineImages stores like any upload.
+  return requestGeneratedImage('fal', image.url, { method: 'GET' }, prompt, { width: image.width, height: image.height })
+}
+
+// OpenAI image calls run at most two at a time, so a carousel does not trip the per-minute image limit. An account
+// with no credits is remembered for a few minutes so the other slides of the post do not repeat the failing call.
+const IMAGE_CONCURRENCY = 2
+let imageCallsRunning = 0
+const imageCallsWaiting: (() => void)[] = []
+let creditsExhaustedUntil = 0
+export const NO_CREDITS = 'OpenAI has no credits left, so AI images cannot be generated. Add credits at https://platform.openai.com/settings/organization/billing'
+async function withImageSlot<T>(task: () => Promise<T>): Promise<T> {
+  if (imageCallsRunning >= IMAGE_CONCURRENCY) await new Promise<void>(resolve => imageCallsWaiting.push(resolve))
+  imageCallsRunning++
+  try { return await task() } finally { imageCallsRunning--; imageCallsWaiting.shift()?.() }
 }
 
 /** AI images are always transparent PNG cutouts. `aspect` (width / height of the target area) picks the canvas shape. */
 async function generateImageOpenAI(prompt: string, aspect?: number): Promise<ResolvedAsset> {
   const key = process.env.OPENAI_API_KEY
   if (!key) throw new Error('GPT Image 2.5 requires OPENAI_API_KEY in the server environment')
+  if (Date.now() < creditsExhaustedUntil) throw new Error(NO_CREDITS)
   const dimensions = typeof aspect === 'number' && aspect > 1.25 ? '1536x1024' : typeof aspect === 'number' && aspect < .8 ? '1024x1536' : '1024x1024'
-  console.info(`[ai-call] service=openai purpose=image-generation transparent=true size=${dimensions} referenceImages=false`)
-  const res = await fetch('https://api.openai.com/v1/images/generations', {
-    method: 'POST', signal: AbortSignal.timeout(180000),
-    headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model: 'gpt-image-2.5-sunburst', prompt, n: 1,
-      size: dimensions, quality: 'high', output_format: 'png', background: 'transparent' }),
+  const call = () => withImageSlot(() => {
+    console.info(`[ai-call] service=openai purpose=image-generation transparent=true size=${dimensions} referenceImages=false`)
+    return fetch('https://api.openai.com/v1/images/generations', {
+      method: 'POST', signal: AbortSignal.timeout(180000),
+      headers: { Authorization: 'Bearer ' + key, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'gpt-image-2.5-sunburst', prompt, n: 1,
+        size: dimensions, quality: 'high', output_format: 'png', background: 'transparent' }),
+    })
   })
-  if (!res.ok) { await res.body?.cancel(); throw new Error('GPT Image 2.5: HTTP ' + res.status + (res.status === 401 ? ' (invalid OpenAI key)' : res.status === 403 ? ' (model access denied)' : res.status === 429 ? ' (quota or rate limit)' : '')) }
+  let res = await call()
+  // A 429 is either an empty account (stop) or a short rate limit (wait as told, up to 20 seconds, and try once more).
+  for (let retried = false; res.status === 429; retried = true) {
+    const detail = await res.json().catch(() => ({}))
+    if (detail?.error?.type === 'insufficient_quota' || /credit|quota|billing/i.test(String(detail?.error?.code || ''))) {
+      creditsExhaustedUntil = Date.now() + 5 * 60_000
+      throw new Error(NO_CREDITS)
+    }
+    if (retried) throw new Error('GPT Image 2.5: rate limited by OpenAI; try again in a minute')
+    const wait = Math.min(20, Math.max(1, Number(res.headers.get('retry-after')) || 10))
+    await new Promise(resolve => setTimeout(resolve, wait * 1000))
+    res = await call()
+  }
+  if (!res.ok) { await res.body?.cancel(); throw new Error('GPT Image 2.5: HTTP ' + res.status + (res.status === 401 ? ' (invalid OpenAI key)' : res.status === 403 ? ' (model access denied)' : '')) }
   const reader = res.body!.getReader(), chunks: Uint8Array[] = []
   let size = 0
   try {
@@ -273,13 +266,26 @@ async function generateImageOpenAI(prompt: string, aspect?: number): Promise<Res
   return {source:'ai_generated',url,thumbnail_url:url,width:metadata.width,height:metadata.height,asset_id:null,unsplash_id:null,alt:prompt}
 }
 
-async function generateImagePollinations(prompt: string): Promise<ResolvedAsset | null> {
-  const key = process.env.POLLINATIONS_API_KEY
+async function generateImagePollinations(prompt: string, aspect?: number): Promise<ResolvedAsset> {
+  const key = process.env.POLLINATIONS_API_KEY?.trim()
   if (!key) throw new Error('Pollinations: POLLINATIONS_API_KEY is not configured')
-  return requestGeneratedImage('Pollinations', 'https://gen.pollinations.ai/image/'+encodeURIComponent(prompt)+'?model=flux&width=1024&height=1024&seed='+Math.floor(Math.random()*2147483647), {method:'GET',headers:{Authorization:'Bearer '+key}},prompt)
+  const { width, height } = sizeFor(aspect)
+  console.info('[ai-call] service=pollinations model=flux purpose=image-generation transparent=false referenceImages=false')
+  return requestGeneratedImage('Pollinations', 'https://gen.pollinations.ai/image/'+encodeURIComponent(prompt)+`?model=flux&width=${width}&height=${height}&nologo=true&seed=`+Math.floor(Math.random()*2147483647), {method:'GET',headers:{Authorization:'Bearer '+key}},prompt,{width,height})
 }
 
-async function requestGeneratedImage(provider: string, url: string, options: any, prompt: string): Promise<ResolvedAsset> {
+/** fal, then Pollinations: the subject on a studio backdrop, cut out locally afterwards. Throws with every reason. */
+async function generateFallbackImage(slot: VisualSlot, aspect?: number): Promise<{ asset: ResolvedAsset; provider: string; skipped: string[] }> {
+  const prompt = studioPrompt(slot), reasons: string[] = []
+  // Providers without a key are skipped silently; only real failures are reported.
+  const providers = ([['fal', 'FAL_KEY', generateImageFal], ['Pollinations', 'POLLINATIONS_API_KEY', generateImagePollinations]] as const).filter(([, key]) => process.env[key]?.trim())
+  for (const [provider, , run] of providers) {
+    try { return { asset: await run(prompt, aspect), provider, skipped: [...reasons] } } catch (error) { reasons.push((error as Error).message) }
+  }
+  throw new Error(reasons.join('; '))
+}
+
+async function requestGeneratedImage(provider: string, url: string, options: any, prompt: string, dimensions: { width?: number; height?: number } = {}): Promise<ResolvedAsset> {
   const res = await fetch(url,{...options,signal:AbortSignal.timeout(90000)})
   if (!res.ok) { await res.body?.cancel(); throw new Error(provider+': HTTP '+res.status+(res.status===401||res.status===403?' (check token/model access)':res.status===429?' (rate limit)':res.status===402?' (credits exhausted)':'')) }
   if (!res.headers.get('content-type')?.startsWith('image/')) {await res.body?.cancel();throw new Error(provider+': response was not an image')}
@@ -288,13 +294,7 @@ async function requestGeneratedImage(provider: string, url: string, options: any
   try {while(true){const {done,value}=await reader.read();if(done)break;size+=value.length;if(size>6*1024*1024)throw new Error(provider+': image exceeds size limit');chunks.push(value)}}finally{await reader.cancel()}
   const bytes=Buffer.concat(chunks)
   const src='data:'+res.headers.get('content-type')!.split(';')[0]+';base64,'+bytes.toString('base64')
-  return {source:'ai_generated',url:src,thumbnail_url:src,width:1024,height:1024,asset_id:null,unsplash_id:null,alt:prompt}
-}
-
-async function generateImageHuggingFace(prompt: string): Promise<ResolvedAsset | null> {
-  if (!process.env.HF_TOKEN) throw new Error('Hugging Face: HF_TOKEN is not configured')
-  const model=process.env.HF_IMAGE_MODEL || 'stabilityai/stable-diffusion-3-medium-diffusers'
-  return requestGeneratedImage('Hugging Face','https://router.huggingface.co/hf-inference/models/'+model,{method:'POST',headers:{Authorization:'Bearer '+process.env.HF_TOKEN,'Content-Type':'application/json'},body:JSON.stringify({inputs:prompt})},prompt)
+  return {source:'ai_generated',url:src,thumbnail_url:src,width:dimensions.width||1024,height:dimensions.height||1024,asset_id:null,unsplash_id:null,alt:prompt}
 }
 
 function buildGenerationBrief(slot: VisualSlot, nativeTransparency = false): string {
@@ -346,15 +346,37 @@ async function resolveCutout(db: any, slot: VisualSlot, brand_id: string | null,
       if (reused) return { ...cutoutBase, resolvedAsset: { ...reused, source: 'ai_generated', thumbnail_url: reused.subject?.url || reused.url, unsplash_id: null, alt: slot.subject_description || slot.visual_purpose }, warning: note }
     } catch (error) { console.warn('[resolver] Generated library search unavailable:', (error as Error).message) }
   }
-  // One generation only. Never retry or change the selected image source automatically.
+  // One generation only: the image is never regenerated for quality.
+  let failure = 'AI image generation returned no image'
   try {
     const asset = await generateImage(buildGenerationBrief(subjectSlot, true), slot.frame_aspect)
     if (asset) {
       if (usedPhotoIds.has(asset.url)) return { ...cutoutBase, resolvedAsset: null, warning: 'Duplicate image omitted; no additional generation was requested.' }
       usedPhotoIds.add(asset.url)
+      return { ...cutoutBase, resolvedAsset: asset, warning: note }
     }
-    return { ...cutoutBase, resolvedAsset: asset, warning: asset ? note : 'AI image generation returned no image' }
-  } catch (error) { return { ...cutoutBase, resolvedAsset: null, warning: [note, (error as Error).message].filter(Boolean).join('; ') } }
+  } catch (error) { failure = (error as Error).message }
+  // OpenAI unavailable (no credits, rate limit, outage): another AI provider draws the subject on a studio backdrop
+  // and prepareSubjectAssets cuts it out, so it is still a transparent AI cutout saved to the gallery.
+  try {
+    const { asset, provider, skipped } = await generateFallbackImage(subjectSlot, slot.frame_aspect)
+    if (!usedPhotoIds.has(asset.url)) {
+      usedPhotoIds.add(asset.url)
+      return { ...cutoutBase, resolvedAsset: asset, warning: [note, failure, ...skipped, `generated with ${provider} instead`].filter(Boolean).join('; ') }
+    }
+  } catch (error) { failure = [failure, (error as Error).message].filter(Boolean).join('; ') }
+  // No AI provider available: a stock photo of the same subject is cut out locally afterwards (prepareSubjectAssets),
+  // so the slide still gets a transparent subject instead of an empty space.
+  const unsplashKey = process.env.UNSPLASH_ACCESS_KEY?.trim() || null, pexelsKey = process.env.PEXELS_API_KEY?.trim() || null
+  const queries = stockQueries(slot)
+  if ((unsplashKey || pexelsKey) && queries.length) {
+    try {
+      const isolated = { ...slot, search_queries: [...queries.map(q => `${q} isolated white background`), ...queries].slice(0, 3) }
+      const stock = await searchStock(isolated, unsplashKey, pexelsKey, usedPhotoIds)
+      if (stock) return { ...cutoutBase, source: stock.source, resolvedAsset: stock, warning: [note, failure, 'used a stock photo cut out locally instead'].filter(Boolean).join('; ') }
+    } catch {}
+  }
+  return { ...cutoutBase, resolvedAsset: null, warning: [note, failure].filter(Boolean).join('; ') }
 }
 
 // ─── Uploaded-asset lookup ────────────────────────────────────────────────────

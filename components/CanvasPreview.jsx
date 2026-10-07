@@ -4,6 +4,7 @@ import { textGradientStyle } from '@/lib/textGradient'
 
 import { parseStyledText, renderStyledText } from '@/lib/styleParser'
 import { createElement, useRef, useEffect, useState } from 'react'
+import { useCanvasFonts } from '@/components/useCanvasFonts'
 
 export function buildGradientCssClient(node) {
   const stops = (node.stops || [{ color: '#6366f1', position: 0, alpha: 100 }, { color: '#ec4899', position: 100, alpha: 100 }])
@@ -32,6 +33,7 @@ export function buildFilterCssClient(filters) {
 export function CanvasPreview({ canvas, containerWidth, onClick }) {
   const containerRef = useRef(null)
   const [scale, setScale] = useState(1)
+  useCanvasFonts(canvas)
 
   useEffect(() => {
     const updateScale = () => {

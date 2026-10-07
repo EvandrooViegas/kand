@@ -60,6 +60,21 @@ Families saved before grammars existed (and the bundled seeds before version 3) 
 - `reconcileStudy` then completes the grammar and removes literal hex colours from the study text.
 - `referenceStyle` and `typography.*Fallback` are used only for unbranded library previews.
 
+### Measured from the pixels (`lib/designs/global/referenceMetrics.ts`)
+
+Vision models misread some layout facts, for example reading centred copy as left-aligned, or an outlined box as "a thin rule". After the model call, each reference is measured in code, with no extra AI call:
+- **Copy alignment:** from the edges of its text lines.
+- **Boxes:** an outlined rectangle in a saturated colour that encloses text.
+- **Rules:** thin separator lines that are not a box's edges.
+- **Coloured copy:** whether any text is set in the accent colour.
+
+`applyReferenceMetrics` then corrects the study:
+- **Alignment** is set when the measured references agree; references that could not be measured follow them.
+- **Headline box:** `grammar.headline.frame` is set, and each reference records whether it has one (`references[].frame`). Only slides that follow a boxed reference (the cover follows the first) get the box.
+- **Highlight colour:** removed when no reference sets copy in colour.
+- **Line decorations:** removed when they were really box edges.
+- **Prose:** recurring rules and anti-patterns that contradict the measured alignment are dropped.
+
 ## Post generation
 
 | Stage | Request | Model calls |
@@ -86,16 +101,24 @@ For each slide the model returns:
 
 ### Imagery: photographs and AI cutouts
 
-`familyCutouts` reads how often a study's subjects are transparent cutouts: `never`, `some` or `always`.
-- The study model states it as `grammar.imagery.cutout`, and the Design Study editor exposes it as *Subjects*.
-- Older studies are read from their imagery prose, because the mode label often says `fullBleed` or `mixed` for what the prose calls a cutout.
-- With `some`, the plan chooses `kind: "cutout" | "photo"` per slide.
+AI-generated transparent cutouts are the preferred imagery, except in photo-led studies (`familyPhotoLed`: background imagery, or full-bleed photos that fill the frame). Those keep photographs, because a cutout cannot recreate a full-canvas photo. Otherwise `planSlides` decides per slide, deterministically:
+- **Cutout-only studies** (`grammar.imagery.cutout: "always"`, the editor's *AI cutouts only*): every image is a cutout.
+- **All other studies:** about one image in five (`STOCK_SHARE = .2`) stays a stock photograph; the rest are cutouts.
+- `familyCutouts` reads the study's setting. Older studies without it are read from their imagery prose.
+- The plan describes every image as one isolated subject, plus stock queries for the photo case.
 
 AI images are only ever transparent PNG cutouts:
 - **Cutout slides:** the resolver uses the gallery cutout the plan chose, else a saved cutout that matches the subject (`findGeneratedAsset`), else exactly one OpenAI generation with `background: "transparent"`. The canvas shape follows the target area (portrait, landscape or square).
+- **AI unavailable:** OpenAI image calls run at most two at a time. A rate limit is retried once after the wait OpenAI asks for (up to 20 s). An account with no credits stops further calls for 5 minutes and shows a notice in Creation. When OpenAI cannot make the image, the fallbacks are tried in order; providers without a key are skipped:
+  1. **fal** (`FAL_KEY`, FLUX schnell).
+  2. **Pollinations** (`POLLINATIONS_API_KEY`, FLUX).
+  3. **Stock:** Pexels or Unsplash, searched as "… isolated white background".
+
+  fal and Pollinations draw the subject on a plain studio backdrop with a short prompt (`studioPrompt`). Their output is kept as an inline image, since fal links expire. `prepareSubjectAssets` cuts the result out locally, so it is still a transparent AI cutout and is saved to the gallery. A stock photo is cut out the same way. A photo that could not be cut out is never placed as a cutout. The slot's warning lists each provider that failed and which one was used.
 - **Photo slides:** gallery photos, then Unsplash/Pexels. A photograph is never generated. When no photo fits, a global-design slot (`cutout_fallback`) uses a transparent cutout instead and is composed as one.
-- **Saving:** every new cutout is saved to the brand's `assets` (Gallery → *AI cutouts (PNG)*) with its description and tags. The next plan lists up to 24 of them so the copy model can reuse one with no extra call. The editor's *Gallery* source inserts or replaces images from the same gallery.
+- **Saving:** every new cutout is saved to the brand's `assets` (Gallery → *AI cutouts (PNG)*) with its description and tags. The next plan lists up to 24 of them; new subjects are preferred and a post reuses at most one. The editor's *Gallery* source inserts or replaces images from the same gallery.
 - **Composition:** a cutout keeps its proportions and stands on the lower edge of its area. It never sits behind the copy like a background photo; a full-frame position becomes the lower band. No overlay or mask is applied.
+- **Empty space:** `globalLayoutPlan` dry-runs each text slide (statement, list, closing). If its copy leaves an empty band of at least 22% of the height above or below it, the slide gets a fill cutout of its planned subject there. The plan gives every slide a subject for this. The copy never moves. The cutout is fitted at render time into the band the real copy leaves: on the bottom edge below the copy, or just above the headline, on the side away from the text. A fill cutout that could not be made is simply left out.
 - **No image at all:** if nothing could be found or generated, the slide is composed with the study's typography and the reason is added to the canvas warnings, instead of failing the post.
 
 ### Compose (`lib/designs/global/compose.ts`, deterministic)
@@ -107,13 +130,18 @@ AI images are only ever transparent PNG cutouts:
 
 `composeSlide` then builds the slide:
 - **Brand roles:** dark, light, accent and on-accent colours come from the brand (`brandPalette`).
+- **Headline box:** `grammar.headline.frame` draws a rectangle around the headline: `outline` (border in the accent) or `solid` (accent panel, solid lettering). Its padding is part of the headline's measured block.
 - **Text:** copy is measured and fitted as a group. Complete copy is never cut; text that cannot fit fails with a clear error.
 - **Images:** placed in a deterministic frame (`imageFrame`). The asset planner uses the same frame for its briefs.
 - **Decorations:** placed on the sides the copy leaves free.
-- **Branding:** slide number and logo go where the study puts them. A brand with a logo shows the logo instead of its website link (in the link's place when the study has no logo position). The logo version is chosen by contrast with the slide: the original artwork when it reads, otherwise its white or black silhouette (`inkLightness` is measured when the variants are generated). Brands without a logo show their name and website link.
+- **Branding:** slide number and logo go where the study puts them. The logo always sits in a corner: a centred position moves to the left corner, and no logo tile is drawn inside the copy. A study that places no branding at all still gets the logo (or the brand name) top-left. A brand with a logo shows the logo instead of its website link (in the link's place when the study has no logo position). The logo version is chosen by contrast with the slide: the original artwork when it reads, otherwise its white or black silhouette (`inkLightness` is measured when the variants are generated). Brands without a logo show their name and website link.
 - **CTA:** a slide shows only its own CTA, and the copy leaves it empty unless the post calls for an action. Nothing on an Instagram graphic is clickable, so CTAs are Instagram actions (save, share, comment, message, follow, link in bio); web-button wording such as "Saiba mais" or "Learn more" is removed in code.
 
 Every output node is an independent, editable Canvas node (`text`, `shape`, `image`, `gradient`) with a `designRole`.
+
+### Lists
+
+A slide with 3–6 items becomes a designed list (the study's markers, and cards when its containers use them), whatever composition was proposed. `listParts` reads explicit arrays, numbered or bulleted lines, and enumerations written as a sentence ("Descubra cada fase: Descoberta, Estratégia, Implementação e Optimização"). The text before the colon stays as the intro line. When space is short, the headline gives up room first; then markers, padding and item text scale down together. The copy prompt asks for steps, phases and tips as separate lines.
 
 ### Build fallback
 
@@ -139,6 +167,13 @@ Each AI call logs `[ai-call] service=… model=… purpose=… referenceImages=�
 - Reconstructions and the raw grammar JSON sit in a collapsed *Advanced* section.
 - There are no variant names, roles or template routes.
 - Brand pickers preview the same four sample beats in the brand's identity.
+
+## Fonts
+
+- **Loading:** previews and the editor load every Google font a canvas uses (`components/useCanvasFonts.js`), one request per weight. Google rejects a whole request that names a weight the family lacks, so one bad weight can't block the rest.
+- **Measuring:** the editor measures text heights only after the fonts have loaded. In a composed slide, a copy block that measures taller than planned pushes the copy below it down instead of overlapping it.
+- **Weights:** fonts published in one weight (Anton, Bebas Neue, Impact…) are set at that weight, so the browser never fakes a wider bold.
+- **Export:** PNG export fetches brand Google fonts from Fontsource by name. System fonts such as Impact are not published there and export as Inter.
 
 ## Limits
 

@@ -5,7 +5,7 @@ import { ChevronLeft, ChevronRight, ZoomIn } from 'lucide-react'
 import { CanvasPreview } from '@/components/CanvasPreview'
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { resolveVariant, referencePreviewBrand, SAMPLE_COPY } from '@/lib/designs/global/resolve'
-import { previewSlide, SAMPLE_DECK } from '@/lib/designs/global/compose'
+import { previewSlide, SAMPLE_DECK, SAMPLE_IMAGES } from '@/lib/designs/global/compose'
 const DEMO_BRAND = { name: 'Your brand', website: 'https://yourbrand.com', colors: ['#ed5125', '#101327', '#ffe05b'] }
 export const COMPOSITION_LABELS = { statement: 'Statement', stacked: 'Stacked', split: 'Split', 'image-led': 'Image-led', 'backdrop-type': 'Backdrop type', list: 'List', closing: 'Closing' }
 
@@ -28,24 +28,15 @@ export default function GlobalDesignPreview({ family, brand = {}, sample = 0, re
     if (!visible) return null
     const previewBrand = previewBrandFor(family, brand)
     try {
-      if (reconstruction) return resolveVariant(family, reconstruction, previewBrand, SAMPLE_COPY, 0, '', { preview: true })
+      if (reconstruction) return resolveVariant(family, reconstruction, previewBrand, SAMPLE_COPY, 0, SAMPLE_IMAGES.photo.url, { preview: true })
       return previewSlide(family, previewBrand, sample)
     } catch { return null }
   }, [family, brand, sample, reconstruction, visible])
-  useEffect(() => {
-    if (!canvas) return
-    for (const font of new Set(canvas.nodes.filter(n => n.type === 'text').map(n => n.fontFamily))) {
-      if ([...document.querySelectorAll('link[data-design-font]')].some(link => link.dataset.designFont === font)) continue
-      const link = document.createElement('link')
-      link.rel = 'stylesheet'; link.dataset.designFont = font
-      link.href = `https://fonts.googleapis.com/css2?family=${encodeURIComponent(font)}:ital,wght@0,400;0,700;0,900;1,400;1,700&display=swap`
-      document.head.appendChild(link)
-    }
-  }, [canvas])
-  const photo = canvas?.nodes.some(n => n.designRole === 'image-placeholder' || (reconstruction && n.type === 'shape' && reconstruction.nodes.some(r => r.src === '{{image.primary}}' && r.id === n.id)))
+  // Sample images stand in for the post's own imagery; say so, so nobody mistakes them for the brand's photos.
+  const photo = canvas?.nodes.some(n => n.type === 'image' && String(n.src || '').startsWith('/samples/'))
   return <div ref={ref} className="relative w-full overflow-hidden rounded-lg bg-slate-100" style={{ aspectRatio: `${family.width}/${family.height}` }}>
     {canvas ? <CanvasPreview canvas={canvas} /> : <span role="status" className="absolute inset-0 flex items-center justify-center text-xs text-slate-400">{visible ? 'Preview unavailable' : 'Loading preview…'}</span>}
-    {photo && <span className="absolute bottom-2 right-2 rounded bg-black/70 px-2 py-1 text-[10px] text-white">Replaceable photo area</span>}
+    {photo && <span className="absolute bottom-2 right-2 rounded bg-black/70 px-2 py-1 text-[10px] text-white">Sample image</span>}
   </div>
 }
 

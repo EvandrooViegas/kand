@@ -2,6 +2,7 @@
 import { DEFAULT_TEXT_GRADIENT, buildTextGradientCss, textGradientStyle } from '@/lib/textGradient'
 import DesignLibrary from '@/components/DesignLibrary'
 import GalleryPicker from '@/components/GalleryPicker'
+import { useCanvasFonts } from '@/components/useCanvasFonts'
 import { useEffect, useState, useRef, useLayoutEffect, useCallback } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { useTheme } from 'next-themes'
@@ -31,6 +32,7 @@ import { v4 as uuidv4 } from 'uuid'
 import { KandLogo, KandMark } from '@/components/logo'
 
 const BEBAS = { fontFamily: "'Bebas Neue', sans-serif", letterSpacing: '0.01em' }
+const STACKED_COPY = /^(eyebrow|eyebrow-pill|headline|headline-frame|body|cta|item|item-card|marker|marker-glyph|marker-dot|badge|badge-logo|badge-mark|callout-card|accent-line)$/
 const MIN_ZOOM = 0.08
 const MAX_ZOOM = 4
 const ZOOM_STEP = 0.1
@@ -327,6 +329,8 @@ function Editor() {
   const [, setHistoryTick] = useState(0)
   const canvasRefObj = useRef(canvasState)
   canvasRefObj.current = canvasState
+  // Text is measured only once the canvas's own fonts have loaded, never with a fallback font.
+  const fontsReady = useCanvasFonts(canvasState)
 
   const pushHistory = (stateToPush) => {
     if (!stateToPush) return
@@ -1109,7 +1113,7 @@ function Editor() {
 
   // Adaptive text height: measure all text nodes via a hidden mirror div, update height
   useLayoutEffect(() => {
-    if (!canvas || !measureRef.current) return
+    if (!canvas || !measureRef.current || !fontsReady) return
     const el = measureRef.current
     const updates = []
     for (const n of canvas.nodes || []) {
@@ -1137,11 +1141,19 @@ function Editor() {
           const prev = nodes.find((n) => n.id === u.id)
           if (!prev) continue
           nodes = applyPatchWithReflow(nodes, u.id, { height: u.height }, c.groups || [])
+          // Composed designs (nodes carry a designRole): a copy block that measures taller in the real font pushes
+          // the copy below it down instead of overlapping it.
+          const grow = u.height - prev.height
+          if (grow > 0 && prev.designRole && !(c.groups || []).some((g) => g.nodeIds.includes(u.id))) {
+            const bottom = prev.y + prev.height
+            nodes = nodes.map((n) => n.id !== u.id && STACKED_COPY.test(n.designRole || '') && n.y >= bottom - 2
+              && n.x < prev.x + prev.width && n.x + n.width > prev.x ? { ...n, y: n.y + grow } : n)
+          }
         }
         return { ...c, nodes }
       })
     }
-  }, [canvas?.nodes, tagsToHtml])
+  }, [canvas?.nodes, tagsToHtml, fontsReady])
 
   const addText = () => {
     const newNode = {

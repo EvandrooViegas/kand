@@ -92,6 +92,9 @@ async function runPostGeneration({ idea, brandContext, brandId, keepCopy, onStag
     resolved = { designId: planned.plan.designId, layoutPlan: planned.plan.layoutPlan, post_id: planned.plan.post_id, format: planned.plan.format, slots: planned.plan.slots.map(s => ({ slot_id: s.slot_id, slot_label: s.slot_label, needs_visual: false, visual_purpose: '', source: 'none', resolvedAsset: null, warning: null })) }
   }
   onResolve({ loading: false, error: null, resolved, skipped: !planned.needsVisuals })
+  // An empty OpenAI account blocks every AI image; say so instead of leaving it in the collapsed details.
+  const credits = resolved.slots?.find(s => /no credits left/i.test(s.warning || ''))
+  if (credits) toast.warning('The OpenAI account has no credits left (add credits at platform.openai.com → Billing). Images were generated with fal or Pollinations, or taken from stock, instead.', { duration: 12000 })
 
   onStage('build')
   try {

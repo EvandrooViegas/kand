@@ -12,7 +12,7 @@ function load(file, names, dependencies = {}) {
 const types = load('lib/designs/global/types.ts', ['familySchema', 'variantSchema', 'referenceSchema', 'studySchema', 'imageryStrategySchema', 'grammarSchema', 'COMPOSITIONS', 'DECORATION_KINDS', 'COLOR_TOKENS', 'COLOR_ROLES', 'SLOT_NAMES'], { z })
 const { INITIAL_GLOBAL_FAMILIES: seeds } = load('lib/designs/global/seeds.ts', ['INITIAL_GLOBAL_FAMILIES'])
 const resolve = load('lib/designs/global/resolve.ts', ['resolveBrandTokens', 'resolveVariant', 'referencePreviewBrand', 'contentSlots', 'countLines', 'clean', 'lightness', 'on', 'hex', 'SAMPLE_COPY'])
-const study = load('lib/designs/global/study.ts', ['variantImageMode', 'familyImagery', 'familyCutouts', 'familyGrammar', 'deriveGrammar', 'reconcileStudy', 'studyForPlanning'], { ...types })
+const study = load('lib/designs/global/study.ts', ['variantImageMode', 'familyImagery', 'familyCutouts', 'familyPhotoLed', 'familyGrammar', 'deriveGrammar', 'reconcileStudy', 'studyForPlanning'], { ...types })
 const compose = load('lib/designs/global/compose.ts', ['planSlides', 'composeSlide', 'imageFrame', 'brandPalette', 'listItems', 'previewSlide', 'SAMPLE_DECK'], { ...resolve, ...study })
 const validate = load('lib/designs/global/validate.ts', ['validatePost', 'validatePage'])
 const store = load('lib/designs/global/store.ts', ['DesignLibraryError', 'ensureGlobalDesignLibrary', 'getGlobalVersion', 'listGlobalDesigns', 'getGlobalRecord', 'saveGlobalDraft', 'publishGlobalDesign', 'retireGlobalDesign', 'selectBrandFamilies', 'hydrateBrandFamilies'], { INITIAL_GLOBAL_FAMILIES: seeds, ...types, ...study })
@@ -174,6 +174,8 @@ function analyzerWith(handler) {
     Groq: class {}, sharp: () => ({ rotate() { return this }, resize() { return this }, jpeg() { return this }, async toBuffer() { return Buffer.from('image') } }),
     readFile: async () => Buffer.from('reference'), join: require('node:path').join, randomUUID: crypto.randomUUID,
     retrySeconds: () => 1, budgetedCompletion: handler,
+    // Pixel measurement needs real images; these tests use a fake sharp, so it is skipped here and tested separately.
+    measureReference: async () => null, applyReferenceMetrics: study => study,
   })
 }
 const studyResponse = (request, overrides = {}) => {
@@ -229,7 +231,7 @@ const imagesIn = request => request.messages[1].content.filter(item => item.type
 const studyAnalyzer = (budgetedCompletion, sides = []) => load('lib/designs/global/analyze.ts', ['analyzeDesignReferences'], {
   ...types, z, ...study, Groq: class {}, readFile: async () => Buffer.from('reference'), join: require('node:path').join, randomUUID: crypto.randomUUID, retrySeconds: () => 1,
   sharp: () => ({ rotate() { return this }, resize(o) { sides.push(o.width); return this }, jpeg() { return this }, async toBuffer() { return Buffer.from('image') } }),
-  budgetedCompletion,
+  budgetedCompletion, measureReference: async () => null, applyReferenceMetrics: study => study,
 })
 
 test('study requests fit the input-token limit by batching references, and images keep full quality', async () => {

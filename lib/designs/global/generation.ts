@@ -29,18 +29,31 @@ export async function chooseBrandFamily(db: any, brand: any, content: any, desig
 
 const slidesOf = (copy: any) => Array.isArray(copy.slides) && copy.slides.length ? copy.slides : [copy]
 
-/** Deterministic: the study grammar decides each slide's composition and whether it carries imagery. No model call. */
-export function globalLayoutPlan(family: GlobalDesignFamily, designId: string, copy: any) {
+/**
+ * Deterministic: the study grammar decides each slide's composition and whether it carries imagery. No model call.
+ * A text slide whose copy leaves a large empty band also gets an AI cutout there, when the plan gave it a subject.
+ */
+export function globalLayoutPlan(family: GlobalDesignFamily, designId: string, copy: any, brand: any = {}) {
   const slides = slidesOf(copy)
   const imagery = familyImagery(family), grammar = familyGrammar(family)
-  const plans = planSlides(family, copy)
+  const plans = planSlides(family, copy).map((plan, index) => {
+    const slide = slides[index], subject = slide?.design?.image?.subject
+    if (plan.withImage || imagery.mode === 'none' || plan.composition === 'backdrop-type' || !subject) return plan
+    try {
+      const content = { ...slide, cta: slide.cta || '' }
+      const free = composeSlide(family, brand, content, plan, index, slides.length, { preview: true }).free
+      return free ? { ...plan, withImage: true, cutout: true, fill: true, fillBox: free.box, fillSide: free.side } as any : plan
+    } catch { return plan }
+  })
   const behaviour = [imagery.usage, imagery.cropBehavior, imagery.subjectPlacement, imagery.textRelationship].filter(Boolean).join(' ')
   const slots = slides.map((slide: any, index: number) => {
-    const plan = plans[index], frame = imageFrame(family, plan)
+    const plan: any = plans[index], frame = plan.fill ? plan.fillBox : imageFrame(family, plan)
     const mode = !frame ? 'none' : plan.cutout ? 'cutout' : frame.width * frame.height >= family.width * family.height * .8 ? 'background' : 'contained'
     const role = `Imagery ${grammar.imagery.dominance === 'dominates' ? 'dominates the composition' : grammar.imagery.dominance === 'supports' ? 'supports the typography' : 'shares the composition with typography'}.`
     const grounded = !!frame && frame.y + frame.height >= family.height - 1 && plan.imagePos !== 'top'
-    const brief = !frame ? '' : mode === 'cutout'
+    const brief = !frame ? '' : plan.fill
+      ? `Transparent PNG cutout that complements the copy of a ${family.width}×${family.height} slide: one isolated subject with no background, standing in the empty ${plan.fillSide === 'top' ? 'area above the headline' : 'area below the copy, on the bottom edge of the design'} (about ${frame.width}×${frame.height}). ${plan.fillSide === 'bottom' ? 'The subject may be cut off by the bottom edge of the image, but its top, left and right contours stay complete. ' : ''}No text, frame, backdrop or scenery.`
+      : mode === 'cutout'
       ? `Transparent PNG cutout for a ${family.width}×${family.height} composition: one isolated subject with no background, placed in a ${frame.width}×${frame.height} area (${Math.round(frame.width / frame.height * 100) / 100}:1) ${grounded ? 'standing on the bottom edge of the design' : 'beside the copy'}. ${grounded ? 'The subject may be cut off by the bottom edge of the image (a person from the waist up, a hand or object rising from below), but its top, left and right contours stay complete. ' : ''}${role} ${behaviour} No text, frame, backdrop or scenery.`
       : `Photograph for a ${family.width}×${family.height} composition, filling a ${frame.width}×${frame.height} area (${Math.round(frame.width / frame.height * 100) / 100}:1). ${role} ${behaviour} Keep the areas behind text quiet; do not put typography in the image.`
     return {
@@ -59,7 +72,7 @@ export function globalLayoutPlan(family: GlobalDesignFamily, designId: string, c
 
 /** Compose → validate. Copy that cannot fit its composition is tried in a calmer composition of the same study before failing. */
 export function renderGlobalPost(family: GlobalDesignFamily, brand: any, copy: any, resolvedPlan: any, design: any, id: () => string, name?: string) {
-  const layout = globalLayoutPlan(family, design.id, copy)
+  const layout = globalLayoutPlan(family, design.id, copy, brand)
   const slides = slidesOf(copy)
   const grammar = familyGrammar(family)
   const notes: string[] = []
@@ -69,22 +82,30 @@ export function renderGlobalPost(family: GlobalDesignFamily, brand: any, copy: a
     const asset = resolved?.resolvedAsset
     // A photo slot the resolver filled with a generated cutout is composed as a cutout.
     const cutout = slot.imageMode === 'cutout' || (slot.needs_visual && resolved?.treatment === 'isolated_subject')
-    const image = slot.needs_visual ? (cutout && asset?.subject?.url) || asset?.url || '' : ''
+    // A cutout needs a transparent image: an AI PNG, or a photo whose subject was cut out. A photo that could not be
+    // cut out is never placed as if it were one.
+    const usable = !cutout || !!asset?.subject?.url || asset?.source === 'ai_generated'
+    const image = slot.needs_visual && usable ? (cutout && asset?.subject?.url) || asset?.url || '' : ''
     const imageSize = cutout && asset ? (asset.subject?.url ? asset.subject : asset.width && asset.height ? asset : undefined) : undefined
     // A slide shows only its own CTA; the post-level CTA belongs to the caption, not to every last slide.
     const content = { ...slide, cta: slide.cta || '' }
     // No image could be found or generated: the slide keeps the study's typography instead of failing the whole post.
     const textOnly = (['statement', 'closing', 'backdrop-type', 'stacked'] as const).find(c => (grammar.compositions as string[]).includes(c)) || 'statement'
-    if (slot.needs_visual && !image) notes.push(`${slides.length > 1 ? `Slide ${index + 1}: ` : ''}no fitting image was available${resolved?.warning ? ` (${resolved.warning})` : ''}, so it was composed without imagery.`)
-    const base = slot.needs_visual && !image ? { ...slot.plan, withImage: false, cutout: false, composition: textOnly } : { ...slot.plan, cutout }
+    // A fill cutout is optional: without its image the slide is simply the text layout it already was.
+    const fill = !!slot.plan.fill
+    if (slot.needs_visual && !image && !fill) notes.push(`${slides.length > 1 ? `Slide ${index + 1}: ` : ''}no fitting image was available${resolved?.warning ? ` (${resolved.warning})` : ''}, so it was composed without imagery.`)
+    const noFill = { ...slot.plan, withImage: false, cutout: false, fill: false }
+    const base = slot.needs_visual && !image ? (fill ? noFill : { ...slot.plan, withImage: false, cutout: false, composition: textOnly }) : { ...slot.plan, cutout }
     // Fallbacks keep the slide's imagery decision, so the study's image behaviour is never swapped:
     // optional ornaments (logo badge, callout card) give way first, then a calmer composition.
     const plain = { ...base, badge: false, callout: false }
-    const attempts = [base, ...(base.badge || base.callout ? [plain] : []), { ...plain, composition: base.withImage ? 'image-led' : 'statement', anchor: 'center' }]
+    const attempts = base.fill
+      ? [base, noFill, { ...noFill, badge: false, callout: false, composition: 'statement', anchor: 'center' }]
+      : [base, ...(base.badge || base.callout ? [plain] : []), { ...plain, composition: base.withImage ? 'image-led' : 'statement', anchor: 'center' }]
     let lastError: any
     for (const plan of attempts) {
       try {
-        const page = composeSlide(family, brand, content, plan, index, slides.length, { image, imageSize })
+        const { free, ...page } = composeSlide(family, brand, content, plan, index, slides.length, { image, imageSize })
         return { ...page, nodes: page.nodes.map(n => ({ ...n, id: id() })), id: id(), name: `${index + 1}. ${page.composition}`, order: index, type: index === 0 ? 'top_peer' : index === slides.length - 1 ? 'bottom_peer' : 'content', globalComposition: page.composition }
       } catch (error: any) { if (error.status !== 422) throw error; lastError = error }
     }
