@@ -4,11 +4,16 @@ import { planSlides, composeSlide, imageFrame } from './compose'
 import { validatePost } from './validate'
 import type { GlobalDesignFamily } from './types'
 
-/** `content` can be the idea (before copy exists) or the copy; selection is stable for the same text. */
-export async function chooseBrandFamily(db: any, brand: any, content: any, designId?: string) {
+/**
+ * `content` can be the idea (before copy exists) or the copy; selection is stable for the same text.
+ * With `imagery`, designs that show images are preferred (the user attached photos to the post).
+ */
+export async function chooseBrandFamily(db: any, brand: any, content: any, designId?: string, options: { imagery?: boolean } = {}) {
   // Explicit legacy selections keep older posts and saved designs editable.
   if (designId && !designId.startsWith('global-')) return null
-  const families = await hydrateBrandFamilies(db, brand)
+  const hydrated = await hydrateBrandFamilies(db, brand)
+  const pictured = options.imagery && !designId ? hydrated.filter(f => familyImagery(f.family).mode !== 'none') : []
+  const families = pictured.length ? pictured : hydrated
   // Brands that have not opted into the Global Design Library continue to use their saved legacy/starter designs.
   // One selected study is enough: it composes varied layouts by itself.
   if (!families.length) return null

@@ -123,6 +123,22 @@ module.exports = {
     				'0%, 49%': { opacity: '1' },
     				'50%, 100%': { opacity: '0' }
     			},
+    			'bk-indeterminate': {
+    				from: { transform: 'translateX(-100%)' },
+    				to: { transform: 'translateX(250%)' }
+    			},
+    			'bk-art': {
+    				from: { opacity: '0', transform: 'translateY(32px)' },
+    				to: { opacity: '1', transform: 'translateY(0)' }
+    			},
+    			'bk-page': {
+    				from: { opacity: '0', transform: 'translateY(8px)' },
+    				to: { opacity: '1', transform: 'translateY(0)' }
+    			},
+    			'bk-pop': {
+    				from: { opacity: '0', transform: 'scale(0.9)' },
+    				to: { opacity: '1', transform: 'scale(1)' }
+    			},
     			'bk-rise': {
     				from: { opacity: '0', transform: 'translateY(14px)' },
     				to: { opacity: '1', transform: 'translateY(0)' }
@@ -134,7 +150,11 @@ module.exports = {
     			'bk-swing': 'bk-swing 5.5s ease-in-out infinite',
     			'bk-blink': 'bk-blink 1.05s step-end infinite',
     			'bk-rise': 'bk-rise 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both',
-    			'bk-enter': 'bk-rise 0.8s cubic-bezier(0.2, 0.7, 0.2, 1) both'
+    			'bk-enter': 'bk-rise 0.8s cubic-bezier(0.2, 0.7, 0.2, 1) both',
+    			'bk-art': 'bk-art 1.1s cubic-bezier(0.2, 0.7, 0.2, 1) 0.25s both',
+    			'bk-page': 'bk-page 0.35s cubic-bezier(0.2, 0.7, 0.2, 1) backwards',
+    			'bk-pop': 'bk-pop 0.3s cubic-bezier(0.2, 0.8, 0.2, 1.2) both',
+    			'bk-indeterminate': 'bk-indeterminate 1.3s ease-in-out infinite'
     		}
     	}
     },

@@ -1,0 +1,376 @@
+CAROUSEL MANAGER + POST EDITOR: how they work today (brief for a redesign)
+Product: Batkle (an AI tool that makes on-brand Instagram posts and carousels for small businesses)
+
+==========================================================================================
+0. WHAT THIS DOCUMENT IS
+==========================================================================================
+This describes the two screens where a user edits a generated post: the CAROUSEL MANAGER (for
+multi-slide posts) and the POST EDITOR (the canvas editor used for every slide). It lists every
+area, control, interaction and state as they exist in the current build, so a new design can
+keep all the functionality while changing how it looks and is organised. Section 9 lists the
+problems seen in the current UI.
+
+Quick product context: the user adds their brand (from their website), the AI suggests post
+ideas, and one click produces the copy plus a finished design, either a single post or a
+carousel (usually 1080x1350, about 5 slides). Every element stays editable. The user reviews,
+tweaks and publishes. Users are small-business owners and marketers, not designers.
+
+==========================================================================================
+1. HOW THE USER GETS HERE
+==========================================================================================
+- On the Creation page each generated post has a preview dialog: the slide shown large with
+  left/right arrows, "Slide 2 of 5", a strip of slide thumbnails, then caption + hashtags (with a
+  Copy button) and the buttons "Open in editor", "Rebuild design - keep copy" and "New version".
+- "Open in editor" opens a NEW BROWSER TAB:
+    single post  -> Post Editor            (/editor/<id>)
+    carousel     -> Carousel Manager       (/carousel/<id>)
+- The back arrow in both screens goes to the Studio page (a list of all canvases), not back
+  to the brand's Creation page.
+- Edits save automatically, and the Creation preview shows the latest saved version.
+
+==========================================================================================
+2. KEY CONCEPTS (vocabulary used on these screens)
+==========================================================================================
+- Post / canvas: one saved design. It has a name, a size (width x height in px), a background
+  colour, and either one set of layers (single post) or a list of slides (carousel).
+- Slide (called "page" in the UI): one image in a carousel. Each slide has its own layers,
+  groups, classes and background. All slides share the same size.
+- Slide types are assigned automatically by position:
+    first slide  = "Top Peer"    (the hook / cover slide)        colour code lime  #D4FF00
+    middle       = "Content"     (explanation slides)            colour code indigo #6366F1
+    last slide   = "Bottom Peer" (the call-to-action slide)      colour code olive #9AB800
+  ("Peer" is internal jargon; it means cover / closing slide.)
+- Layer (node): one element on a slide. There are 4 kinds:
+    Text      - styled text; height grows automatically with the content
+    Image     - photo or transparent cutout PNG; crop, mask shape, filters
+    Shape     - rectangle or circle; fill, stroke, corner radius
+    Gradient  - a linear or radial gradient block
+  Every layer has x, y, width, height, rotation, and a stacking order.
+- Group: 2+ layers bound together that move as one and can auto-stack horizontally or
+  vertically with set gaps (like a flex row/column).
+- Class: a reusable named style (like CSS), e.g. ".highlight". A text class can set colour,
+  a background highlight box (padding, radius, shadow), underline, letter spacing and
+  uppercase. It can be applied to a whole text layer or only to selected words (e.g. to
+  highlight 2 words of a headline). Image/shape/gradient classes also exist.
+- Dynamic key: an optional name on a text or image layer (e.g. "title_1") so a developer can
+  replace that content through the render API and get PNGs back. This is a developer feature.
+- Design: the visual style the post was generated with (picked from the Design Library).
+  Switching design re-lays-out every slide with the new style; manual layout edits are lost.
+- What a generated slide usually contains: a background (colour, gradient or photo), an
+  eyebrow label, a headline (often with highlighted words), body text, sometimes a CTA pill,
+  list items / numbered markers / badges, decorative shapes, an image or cutout, and the
+  brand logo.
+
+==========================================================================================
+3. CAROUSEL MANAGER (/carousel/<id>), full-screen, three columns
+==========================================================================================
+The Carousel Manager is a frame around the Post Editor: the middle column is the editor
+(loaded as an embedded page). When embedded, the editor HIDES its own top bar, so the
+Carousel Manager's top bar is the only one.
+
+3.1 TOP BAR
+  [<- back]  [logo]  (Carousel) pill  [post name - editable text field]
+                                     ... [Design: <name>]  [Undo design]  [theme]  [Save]
+  - Design: <name>  opens the design picker (see 6.1). Applies to every slide.
+  - Undo design     appears only right after a design change; restores the previous version.
+  - Theme toggle    light / dark mode for the app chrome.
+  - Save            dark pill reading "Save" when there are unsaved changes, greyed "Saved"
+                    otherwise. Changes also autosave 2 seconds after the last edit.
+
+3.2 LEFT COLUMN (fixed 240 px): size + slide list
+  a) CANVAS SIZE
+     - Preset chips: 1:1 (1080x1080), 4:5 (1080x1350), 9:16 (1080x1920), 16:9 (1920x1080),
+       4:3 (1080x810). The active one is highlighted.
+     - Width / Height number fields. Note: "Applies to all pages instantly."
+  b) [+ Add Content Page] button. Inserts a blank slide just before the last (CTA) slide and
+     selects it.
+  c) SLIDE LIST, vertical cards in order. Each card:
+     - thin colour bar on top in the slide-type colour
+     - live thumbnail of the slide at the correct aspect ratio
+     - number badge "01", "02"... + type label ("TOP PEER" / "CONTENT" / "BOTTOM PEER")
+     - editable slide name (inline text field, e.g. "Page 2")
+     - actions: move up, move down, duplicate, delete (delete is disabled for the last
+       remaining slide)
+     - selected card: full opacity, coloured border; others are dimmed to 70%
+     - click a card to edit that slide in the middle column
+     - after any reorder, the first/last slides become Top/Bottom Peer automatically
+
+3.3 MIDDLE COLUMN: the Post Editor for the selected slide
+  - Thin info bar on top: coloured dot, slide type, slide name, and size (e.g. 1080x1350).
+  - Below: the full Post Editor (section 4) without its top bar.
+  - Switching slides keeps unsaved edits from the previous slide (nothing is lost) and
+    resets undo history for the new slide.
+  - Empty state (no slide selected): layers icon + "Select a page from the left panel".
+
+3.4 RIGHT COLUMN (fixed 240 px), three tabs: API | KEYS | CLASSES
+  - API: example JSON request for rendering the whole carousel through the API, with a Copy
+    button; the line "POST to /api/render -> returns .zip"; and an "Output ZIP" list of the
+    file names it would produce (00-top-peer.png, 01-page-2.png, ... 04-bottom-peer.png),
+    highlighting the selected slide.
+  - KEYS: every dynamic key used anywhere in the carousel, each with chips naming the slides
+    that use it (clicking a chip jumps to that slide). Empty state explains how to add one.
+  - CLASSES: every custom class across all slides, with its type and slide chips.
+  These three tabs are developer tools; a typical marketer never needs them.
+
+==========================================================================================
+4. POST EDITOR (/editor/<id>): the canvas editor
+==========================================================================================
+Used directly for single posts, and embedded inside the Carousel Manager for each slide.
+Desktop-only. Layout: top bar + three side-by-side panels with draggable dividers
+(default widths: left 18%, canvas 58%, right 24%).
+
+4.1 TOP BAR (only when NOT inside the Carousel Manager)
+  [<- back] [logo] (Editor) pill [post name field]
+      ... [Design: <name>] [undo] [redo] | [zoom in] 54% [zoom out] [fit] | [theme]
+          [API] [Render] [Export] [Save]
+  - If a single carousel slide is opened directly, the left side shows a breadcrumb instead:
+    (Carousel) > <slide name> [SLIDE TYPE badge], and back returns to the carousel.
+  - Undo / Redo: 50 steps.
+  - Zoom: 8% to 400%; Ctrl/Cmd + scroll wheel also zooms; "fit" fits the slide to the window.
+    The editor auto-fits on load and on window resize until the user zooms manually.
+  - API: opens the API Usage dialog (6.3).  Render: opens the Test Render dialog (6.4).
+  - Export: downloads the post as a .kand.json file (NOT as images; see 9).
+  - Save / Saved: same as the Carousel Manager; autosaves after 2 seconds.
+
+4.2 LEFT PANEL: ADD, LAYERS, ASSETS
+  a) ADD (heading)
+     [T Text]  [Image]  [Gradient]  [Rect] [Circle]
+     Each new element appears in the centre of the slide and is selected.
+     - Text: "New text", Inter 72px bold, centred.
+     - Image: opens the Add Image dialog (6.2).
+     - Gradient: a 600x400 purple gradient block with rounded corners.
+     - Rect / Circle: a 300x300 indigo shape.
+  b) LAYERS (heading)  + a [Group] button that appears when 2+ layers are selected.
+     Hint: "Ctrl+click to multi-select. Drag into groups for HTML flow."
+     - Groups are shown first as collapsible folders: chevron, folder icon, group name,
+       member count, ungroup icon. Members are listed indented underneath.
+     - Then ungrouped layers, front-most at the top. Each row has: drag grip, a 44 px
+       preview tile (image thumbnail / text sample in its font and colour / shape or
+       gradient swatch), a label (the text content, "Image", "Rectangle", "Circle",
+       "Gradient", or "{key}" if it has a dynamic key), and a "DYN" badge for dynamic layers.
+     - Click selects; Ctrl/Cmd+click toggles multi-select; Shift+click adds.
+     - Drag rows to reorder stacking; drag a layer onto a group header to add it to the
+       group; drag within a group to reorder members; while dragging a group member a
+       dashed "Drop here to remove from group" zone appears.
+     - Selected rows are highlighted (lime tint, dark border).
+  c) ASSETS (only after the user drops image files onto the editor in this session): a
+     2-column grid of the uploaded images with a count badge; click one to place it.
+
+4.3 CENTRE: THE CANVAS
+  - Light dotted-grid background; the slide sits centred with a dark border and shadow.
+  - Click a layer to select it. Click empty space to clear selection. Drag on empty space
+    to draw a blue selection rectangle (marquee) that selects every layer it touches.
+  - Alt+click cycles through layers stacked under the pointer.
+  - Selected layer: 3 px solid indigo outline (other selected layers: dashed). It shows:
+      * one resize handle (bottom-right corner, filled indigo square)
+      * a rotate handle (small circle on a stem above the top edge); rotation snaps to
+        45-degree steps near those angles or while holding Shift
+      * a small indigo label above it showing "{dynamic_key}" if it has one
+  - Moving: drag the layer. Pink guide lines appear and it snaps (within 8 px) to the slide
+    edges/centre and to other layers' edges/centres. Grouped layers move together.
+  - Resizing: images keep their aspect ratio; text layers only change width (height follows
+    the text automatically).
+  - Max size box (optional): if a layer has a max width/height, a pink dashed box with its
+    own handle shows the limit.
+  - Selected group: a dashed olive box around all members.
+  - TEXT EDITING: double-click a text layer to type directly on the canvas. All text is
+    pre-selected. A floating toolbar appears just above the selection:
+      [Class... dropdown] | [B] [I] [U] | [align L] [C] [R] | [colour swatch + hex field +
+      transparent] | Size [__] (press Enter)
+    Styles apply only to the highlighted words. Esc or clicking outside finishes editing.
+    Pasting inserts plain text.
+  - IMAGE CROP: double-click a selected image (or "Crop on Canvas" in the panel) to enter
+    crop mode: amber dashed outline, four amber edge handles to trim each side, and a
+    "Done" tag at the top-right.
+  - Dropping image files anywhere on the editor shows a full-screen overlay "DROP IMAGES -
+    Upload to your session library"; files go to the ASSETS list (max 6 MB each).
+
+4.4 RIGHT PANEL: two tabs, PROPS | CANVAS
+  PROPS changes with the selection:
+
+  a) Nothing selected -> CANVAS settings
+     - Size presets (chips): Square, Portrait 4:5, Story 9:16, Landscape 16:9, OG Image,
+       Twitter Header, LinkedIn Banner, A4 Portrait. Plus Width / Height fields.
+     - Background colour.
+     - Color Mode for the whole render: Color, Grayscale/B&W, Sepia, Invert, High Contrast.
+     - Tip about dynamic keys.
+
+  b) Several layers selected -> "N SELECTED", [Create group], [Clear selection].
+
+  c) A group selected -> GROUP panel
+     - Group name; Stack direction (horizontal / vertical); Align items (free / start /
+       center / end); Move earlier / Move later for a selected member.
+     - "Spacing between items": one card per gap ("Headline -> Body") with Gap X / Gap Y.
+     - [Ungroup all].
+
+  d) One layer selected -> header with the layer type ("TEXT", "IMAGE"...) and a delete
+     button; a row of 4 stacking buttons (bring to front, forward, backward, send to back);
+     then the type-specific controls below; then for every type:
+     X, Y, Width, Height, Max Width, Max Height, Rotation; "Class Name" (non-text layers);
+     "Dynamic Key" (text and image layers).
+
+     TEXT controls
+       - Content: a plain-text box (editing here removes inline word styling; the hint says
+         to double-click on canvas for inline styles).
+       - Whole Node Class dropdown; "Apply Class to Selection" chips + [Clear] (works only
+         while editing text on canvas with words highlighted).
+       - Font family (13 Google fonts: Inter, Roboto, Poppins, Oswald, Montserrat, Playfair
+         Display, Bebas Neue, Dancing Script, Pacifico, Lobster, Raleway, Lato, Open Sans;
+         generated posts also use the brand's own fonts).
+       - Font size; weight buttons (only the weights the font has: Light, Regular, Bold...);
+         italic / underline / strikethrough toggles.
+       - Text fill: Solid colour or Gradient (full gradient editor, plus spread %, spread
+         behaviour, reverse colours, space evenly).
+       - Alignment (left / center / right); letter spacing; line height; transform
+         (none / uppercase / lowercase / capitalize).
+       - Text shadow toggle -> offset X/Y, blur, colour.
+
+     IMAGE controls
+       - Image source: [Replace] (upload), [URL], [Gallery] (brand gallery picker inline).
+       - Shape / Mask: a 4-column grid of 12 visual swatches: None, Circle, Round, Pill,
+         Triangle up, Triangle down, Diamond, Pentagon, Hexagon, Star, Arrow,
+         Parallelogram. Corner radius field when "None".
+       - Cut / Crop: Left / Right / Top / Bottom sliders (0-90%), [Reset Crop],
+         [Crop on Canvas].
+       - Image Filters (sliders + Reset): brightness, contrast, saturate, grayscale, sepia,
+         hue rotate, blur, opacity.
+
+     SHAPE controls: fill colour, stroke colour, stroke width, corner radius (rectangles).
+
+     GRADIENT controls: live preview strip; type linear / radial; angle slider (linear) or
+     focal point X/Y (radial); shape rectangle / ellipse; corner radius; colour stops (each
+     with colour, position %, alpha slider, remove; [+ Add]); 12 preset swatches (Sunset,
+     Purple Haze, Ocean, Pink Bloom, Forest, Fire, Glass, Fade Out, Solar, Neon Glow,
+     Spotlight, Halo).
+
+  CANVAS tab (developer-leaning)
+     - CLASSES: create a class (type: text / image / shape / gradient + name), then edit
+       each class in its own card. Text class fields: text colour, background (+ None),
+       underline, letter spacing, text transform, padding X/Y, radius, background shadow.
+       Image class: mask, radius, filters. Shape class: fill, stroke, stroke width, radius.
+       Gradient class: type, angle.
+     - DYNAMIC KEYS: every text/image layer with a key field, plus a live JSON preview of
+       the API payload.
+
+4.5 COLOUR PICKER (used everywhere)
+  A small swatch (opens the native colour picker; checkerboard behind it shows
+  transparency) + a text field for hex/rgb/hsl + a "transparent" quick button.
+
+==========================================================================================
+5. KEYBOARD AND MOUSE SHORTCUTS
+==========================================================================================
+  Ctrl/Cmd+C / V      copy / paste layers (pasted 20 px offset; works across slides)
+  Ctrl/Cmd+A          select all layers
+  Ctrl/Cmd+Z          undo        Ctrl/Cmd+Shift+Z or Ctrl/Cmd+Y   redo
+  Delete / Backspace  delete selected layers
+  Ctrl/Cmd+scroll     zoom
+  Double-click        text: edit inline     image: crop mode
+  Esc                 leave text editing
+  Alt+click           select the next layer underneath
+  Shift while rotate  snap to 45 degrees
+  Ctrl/Cmd+click      add/remove from selection (canvas and layer list)
+  Drag on empty area  marquee select (Shift/Ctrl adds to the selection)
+
+==========================================================================================
+6. DIALOGS
+==========================================================================================
+6.1 Design picker ("Choose a brand design")
+  Subtitle: "One family keeps every carousel slide consistent. Applying a design replaces
+  manual layout edits." Left: search field, a link to switch to "legacy designs", and a
+  2-column grid of design cards (preview rendered in the brand's colours, fonts and logo +
+  name). Right: a large zoomable preview of the chosen design with 4 dots to flip through
+  sample slides, and the note "Preview uses sample content and your brand identity."
+  Bottom: [Apply design] ("Applying..." while busy). Errors show inline.
+
+6.2 Add Image (tabs: Gallery | URL | Upload)
+  - Gallery: the brand's library: "Transparent cutouts (PNG)" first, on a checkerboard, then
+    "Brand photos"; 4-column grid; click to place.
+  - URL: a field + [Add Image].
+  - Upload: a dashed click-to-upload area ("PNG, JPG, WEBP up to 6MB").
+  Images are placed centred, fitted to 500 px on the long side.
+
+6.3 API Usage (tabs: JSON | cURL)
+  The endpoint, request body and example response; copy buttons. Developer-only.
+
+6.4 Test Dynamic Render
+  Left: editable JSON request body + [Render]. Right: the rendered image result and its URL.
+  Developer-only.
+
+==========================================================================================
+7. SAVING AND STATES
+==========================================================================================
+- Autosave 2 seconds after the last change, in the background (no reload). The Save button
+  doubles as the status indicator (Save / Saved). Errors show as toasts ("Save failed").
+- Changing the carousel size saves immediately and reloads the slide editor.
+- Feedback uses small toast notifications (bottom of screen): "Copied", "Grouped",
+  "Design applied to every slide", "Uploaded", errors, etc.
+- Loading states are plain text: "Loading carousel...", "Loading canvas...".
+- Undo history is per slide and resets when switching slides.
+
+==========================================================================================
+8. CURRENT VISUAL STYLE (two styles are in use)
+==========================================================================================
+A) The Carousel Manager and Post Editor still use the OLD style (brand name "Kand"):
+   - Bebas Neue condensed caps for panel headings ("ADD", "LAYERS", "TEXT", "CANVAS").
+   - Neon lime #D4FF00 hover/selection fill, thick near-black 2 px borders, hard offset
+     "brutalist" shadows (6px 6px 0 black), cream background #FAF7F2 (dark: #0E0D0B).
+   - Indigo #6366F1 for selection outlines and dynamic-key badges, pink #EC4899 for snap
+     guides and max-size boxes, amber #F59E0B for crop mode.
+   - Tiny type everywhere (9-11 px labels, uppercase, wide tracking).
+
+B) The rest of the app (Creation page, brand pages, the post preview) uses the NEW Batkle
+   style, which the editor does not match yet:
+   - Fonts: Bricolage Grotesque (display, bold, tight tracking) and DM Sans (body).
+   - Colours: ink #14131A, butter yellow #FFD84D for primary buttons (hover #FFCD24), white
+     surfaces on a warm cream page (#F4F1EA), hairlines #E2DED2, muted text #5B5766.
+     Dark mode: background #14131A, surface #211F2A, chip #2E2C39, text #F6F3EA.
+   - Soft layered shadows, rounded-lg buttons (32-36 px tall), 11 px uppercase eyebrows,
+     compact density sized for a 13" laptop.
+
+==========================================================================================
+9. PROBLEMS IN THE CURRENT UI (for the redesign to solve)
+==========================================================================================
+1. Two visual languages: the editor feels like a different product from the rest of Batkle,
+   and still shows the old "Kand" logo.
+2. Developer features sit next to everyday tools: API payloads, dynamic keys, classes,
+   Max Width/Height, the Render test, JSON export and "HTML flow" groups are all prominent,
+   though most users are marketers who want to change words, swap a photo, adjust a colour
+   and download.
+3. No way to download the finished slides as images from these screens. "Export" gives a
+   JSON file; PNG/ZIP output only exists through the API. Users need a clear
+   "Download slides" (PNG per slide / ZIP) action.
+4. Inside the Carousel Manager the editor's top bar is hidden, so undo/redo and zoom controls
+   disappear (only keyboard shortcuts remain), and there are two stacked bars (carousel bar
+   + slide info bar).
+5. Jargon: "Top Peer / Bottom Peer", "page" vs "slide", "node", "Whole Node Class".
+6. Three columns of 240 px plus the editor's own two side panels leave the slide small;
+   the carousel's slide list is a tall vertical column of large cards, while slides are
+   naturally a horizontal sequence (like Instagram).
+7. The canvas size appears in two places with different preset lists (carousel: 5, editor:
+   8), and most presets are irrelevant for Instagram.
+8. Text styling is split three ways (sidebar content box, floating toolbar, class chips),
+   and editing text in the sidebar box silently removes inline word styling.
+9. Only one resize handle (bottom-right); no side or corner handles elsewhere.
+10. Very small text and controls, and long scrolling property panels with every option
+    visible at once (no grouping or progressive disclosure).
+11. No mobile/tablet layout.
+12. The back arrow goes to Studio (the canvas list) instead of back to the brand's Creation
+    page, and the editor opens in a new tab.
+13. No caption/hashtags in the editor; they only appear in the Creation preview.
+
+==========================================================================================
+10. MUST KEEP (functionality the new design has to cover)
+==========================================================================================
+- Slide management: view all slides in order with thumbnails, select, add, duplicate,
+  delete, reorder, rename; automatic cover / content / CTA roles.
+- Change design for the whole post (with preview) and undo that change.
+- Post size (at least Instagram 1:1, 4:5, 9:16).
+- Add text, image (gallery, upload, URL, drag-and-drop), gradient, rectangle, circle.
+- Layer list with stacking order, multi-select, grouping, drag to reorder.
+- Canvas interactions: select, marquee, move with snapping guides, resize, rotate, inline
+  text editing with a floating format toolbar, on-canvas crop, zoom/fit.
+- All property controls listed in 4.4 (text, image, shape, gradient, group, canvas).
+- Undo/redo, copy/paste, keyboard shortcuts, autosave with a visible saved state.
+- Light and dark mode.
+- Developer tools (classes, dynamic keys, API, render test, JSON export) can move into an
+  "Advanced" / "Developer" area but must still be reachable.

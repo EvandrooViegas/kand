@@ -41,9 +41,21 @@ export interface Flow {
  */
 export const getFlows = cache(async (): Promise<Flow[]> => {
   const db = await connectToMongo()
-  const flows = await db.collection('flows').find({}, { projection: { _id: 0, id: 1, name: 1, 'brandContext.name': 1, 'brandContext.logo': 1 } }).toArray()
+  const flows = await db.collection('flows').find({}, { projection: { _id: 0, id: 1, name: 1, 'brandContext.name': 1, 'brandContext.logo': 1, 'brandContext.logoVariants.originalTransparent': 1, 'brandContext.logoVariants.inkLightness': 1 } }).toArray()
   // Strip non-serialisable _id before passing to client
   return flows.map(({ _id, ...f }: any) => f) as Flow[]
+})
+
+/**
+ * Number of gallery images saved for a brand — for use in React Server Components only.
+ */
+export const getGalleryCount = cache(async (flowId: string): Promise<number | null> => {
+  try {
+    const db = await connectToMongo()
+    return await db.collection('assets').countDocuments({ brand_id: `brand_${flowId}` })
+  } catch {
+    return null
+  }
 })
 
 /**

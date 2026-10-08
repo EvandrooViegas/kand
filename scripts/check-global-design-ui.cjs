@@ -53,7 +53,7 @@ async function main() {
 
     const flow = await call('/flows', 'POST', { name: 'Temporary Global Design QA', brandContext: { name: 'QA Brand', colors: ['#18284a', '#ffffff', '#f3cb4a'], fonts: ['Inter'], profileLanguage: 'en' } })
     assert.equal(flow.status, 200); flowId = flow.data.id
-    await page.goto(base + `/flow/${flowId}/brand-information`, { waitUntil: 'networkidle2', timeout: 120000 })
+    await page.goto(base + `/app/${flowId}/brand-information`, { waitUntil: 'networkidle2', timeout: 120000 })
     await page.waitForSelector('[role="tab"]', { timeout: 120000 })
     await page.evaluate(() => [...document.querySelectorAll('[role="tab"]')].find(e => e.textContent === 'Post design').click())
     await page.waitForFunction(() => document.body.innerText.includes('0 selected'), { timeout: 120000 })
@@ -80,7 +80,7 @@ async function main() {
     let pageNumber = 0
     for (const entry of Object.values(zip.files)) if (!entry.dir) require('node:fs').writeFileSync(path.join(output, `global-carousel-${pageNumber++}.png`), await entry.async('nodebuffer'))
     await page.setViewport({ width: 1440, height: 1100 })
-    await page.goto(base + `/flow/${flowId}/brand-information`, { waitUntil: 'networkidle2', timeout: 120000 })
+    await page.goto(base + `/app/${flowId}/brand-information`, { waitUntil: 'networkidle2', timeout: 120000 })
     await page.waitForSelector('[role="tab"]', { timeout: 120000 })
     await page.evaluate(() => [...document.querySelectorAll('[role="tab"]')].find(e => e.textContent === 'Post design').click())
     await page.waitForFunction(() => document.body.innerText.includes('3 selected'), { timeout: 120000 })

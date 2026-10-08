@@ -4,7 +4,8 @@ import * as React from "react"
 import * as AlertDialogPrimitive from "@radix-ui/react-alert-dialog"
 
 import { cn } from "@/lib/utils"
-import { buttonVariants } from "@/components/ui/button"
+import { appButton } from "@/components/app/ui"
+import { popupContentClass, popupOverlayClass } from "@/components/ui/dialog"
 
 const AlertDialog = AlertDialogPrimitive.Root
 
@@ -15,7 +16,7 @@ const AlertDialogPortal = AlertDialogPrimitive.Portal
 const AlertDialogOverlay = React.forwardRef(({ className, ...props }, ref) => (
   <AlertDialogPrimitive.Overlay
     className={cn(
-      "fixed inset-0 z-50 bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0",
+      popupOverlayClass,
       className
     )}
     {...props}
@@ -28,10 +29,7 @@ const AlertDialogContent = React.forwardRef(({ className, ...props }, ref) => (
     <AlertDialogOverlay />
     <AlertDialogPrimitive.Content
       ref={ref}
-      className={cn(
-        "fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=closed]:slide-out-to-top-[48%] data-[state=open]:slide-in-from-left-1/2 data-[state=open]:slide-in-from-top-[48%] sm:rounded-lg",
-        className
-      )}
+      className={cn(popupContentClass, className)}
       {...props} />
   </AlertDialogPortal>
 ))
@@ -42,7 +40,7 @@ const AlertDialogHeader = ({
   ...props
 }) => (
   <div
-    className={cn("flex flex-col space-y-2 text-center sm:text-left", className)}
+    className={cn("flex flex-col gap-1.5 text-left", className)}
     {...props} />
 )
 AlertDialogHeader.displayName = "AlertDialogHeader"
@@ -52,34 +50,34 @@ const AlertDialogFooter = ({
   ...props
 }) => (
   <div
-    className={cn("flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2", className)}
+    className={cn("flex flex-col-reverse gap-2 sm:flex-row sm:justify-end", className)}
     {...props} />
 )
 AlertDialogFooter.displayName = "AlertDialogFooter"
 
 const AlertDialogTitle = React.forwardRef(({ className, ...props }, ref) => (
-  <AlertDialogPrimitive.Title ref={ref} className={cn("text-lg font-semibold", className)} {...props} />
+  <AlertDialogPrimitive.Title ref={ref} className={cn("font-bk-display text-[22px] font-bold leading-tight tracking-[-0.03em] text-bk-fg", className)} {...props} />
 ))
 AlertDialogTitle.displayName = AlertDialogPrimitive.Title.displayName
 
 const AlertDialogDescription = React.forwardRef(({ className, ...props }, ref) => (
   <AlertDialogPrimitive.Description
     ref={ref}
-    className={cn("text-sm text-muted-foreground", className)}
+    className={cn("text-[15px] leading-relaxed text-bk-muted", className)}
     {...props} />
 ))
 AlertDialogDescription.displayName =
   AlertDialogPrimitive.Description.displayName
 
 const AlertDialogAction = React.forwardRef(({ className, ...props }, ref) => (
-  <AlertDialogPrimitive.Action ref={ref} className={cn(buttonVariants(), className)} {...props} />
+  <AlertDialogPrimitive.Action ref={ref} className={cn(appButton("primary", "md"), className)} {...props} />
 ))
 AlertDialogAction.displayName = AlertDialogPrimitive.Action.displayName
 
 const AlertDialogCancel = React.forwardRef(({ className, ...props }, ref) => (
   <AlertDialogPrimitive.Cancel
     ref={ref}
-    className={cn(buttonVariants({ variant: "outline" }), "mt-2 sm:mt-0", className)}
+    className={cn(appButton("outline", "md"), className)}
     {...props} />
 ))
 AlertDialogCancel.displayName = AlertDialogPrimitive.Cancel.displayName

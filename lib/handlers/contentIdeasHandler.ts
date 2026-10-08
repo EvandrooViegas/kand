@@ -7,6 +7,8 @@ import { randomUUID } from 'node:crypto'
 import { loadGenerationBrandContext, EXTRACTED_CONTEXT_RULES } from '@/lib/services/generationBrandContext'
 import { contentLanguage, languageIssues } from '@/lib/services/contentLanguage'
 import { chooseAngle, ideaHistory, topicSimilarity } from '@/lib/services/contentAngles'
+import { readIdeaRequest, ideaRequestBlock, formatRule, finalFormat, IDEA_REQUEST_RULE, type FormatChoice } from '@/lib/services/ideaRequest'
+import { postImageIds, prepareIdeaImages, postImagesBlock } from '@/lib/services/postImages'
 
 const SYSTEM_PROMPT = `You are an expert Instagram content strategist.
 
@@ -101,7 +103,25 @@ Prioritize ideas that:
 
 Do not make every idea directly promotional.
 
-Return exactly this JSON structure:
+${IDEA_JSON_SHAPE}`
+}
+
+/** Prompt for an idea the user typed: their subject, grounded in the brand profile. */
+function buildRequestPrompt(brandJson: string, request: string, format: FormatChoice, formatReason?: string): string {
+  return `Turn the user's own post idea into exactly ONE Instagram content brief for this brand.
+
+BRAND INFORMATION (English research notes; facts only):
+
+${brandJson}
+
+${ideaRequestBlock(request, format, formatReason)}
+
+For the idea, follow the exact structure defined in the system instructions.
+
+${IDEA_JSON_SHAPE}`
+}
+
+const IDEA_JSON_SHAPE = `Return exactly this JSON structure:
 
 {
   "ideas": [
@@ -118,7 +138,6 @@ Return exactly this JSON structure:
     }
   ]
 }`
-}
 
 export async function handleGenerateContentIdeas(body: any, db: any) {
   try {
@@ -147,17 +166,29 @@ export async function handleGenerateContentIdeas(body: any, db: any) {
     }
     const history = ideaHistory(body.existingIdeas, saved, body.existingTopics)
     const language = contentLanguage(brandContext)
-    // The angle is chosen in code: least-used pillar on the least-covered service, project, differentiator or topic.
-    const angle = chooseAngle(brandContext, history)
+    // A typed idea sets the subject. Without one, the angle is chosen in code:
+    // least-used pillar on the least-covered service, project, differentiator or topic.
+    const { request, format } = readIdeaRequest(body)
+    // Attached photos (at most four) shape the idea like a typed idea does; several photos need a carousel.
+    const imageIds = postImageIds(body.images)
+    if (imageIds.length > 1 && format === 'single') throw Object.assign(new Error('A single post shows one photo. Choose Carousel or Auto to use all your photos.'), { status: 400 })
+    const images = imageIds.length ? await prepareIdeaImages(db, brandContext, imageIds) : []
+    const formatChoice: FormatChoice = images.length > 1 ? 'carousel' : format
+    const formatReason = images.length > 1 && format !== 'carousel' ? 'the user attached several photos' : undefined
+    const angle = request || images.length ? null : chooseAngle(brandContext, history)
     const angleBlock = angle ? `\nANGLE FOR THIS IDEA (required):
 - Pillar: ${angle.pillar}
 - Build it on this ${angle.facet.kind === 'company' ? 'part of the company' : angle.facet.kind}: "${angle.facet.label}"${angle.facet.detail && angle.facet.detail !== angle.facet.label ? ` (${angle.facet.detail})` : ''}
-- Preferred format: ${angle.format} (change it only if the content clearly needs the other format)
-Use concrete details from the brand information about this ${angle.facet.kind}; do not drift to another service or topic.\n` : ''
+${formatRule(formatChoice, angle.format)}
+Use concrete details from the brand information about this ${angle.facet.kind}; do not drift to another service or topic.\n` : !request && formatChoice !== 'auto' ? `\n${formatRule(formatChoice, undefined, formatReason)}\n` : ''
     const previous = history.slice(0, 30).map(i => `- [${i.angle?.pillar || i.pillar || '?'}] ${String(i.topic).slice(0, 160)}`).join('\n')
-    const userPrompt = buildUserPrompt(brandJson) + angleBlock
-      + (previous ? `\nPREVIOUS IDEAS (the new idea must cover a clearly different subject and angle, not a rewording):\n${previous}\n` : '')
+    const userPrompt = (request
+      ? buildRequestPrompt(brandJson, request, formatChoice, formatReason)
+      : buildUserPrompt(brandJson) + angleBlock
+        + (previous ? `\nPREVIOUS IDEAS (the new idea must cover a clearly different subject and angle, not a rewording):\n${previous}\n` : ''))
+      + (images.length ? `\n${postImagesBlock(images)}\n` : '')
       + `\n${language.rules}`
+    const systemPrompt = SYSTEM_PROMPT + '\n\n' + EXTRACTED_CONTEXT_RULES + (request ? '\n\n' + IDEA_REQUEST_RULE : '') + '\n\n' + language.rules
 
     let raw = ''
     let feedback = ''
@@ -166,7 +197,7 @@ Use concrete details from the brand information about this ${angle.facet.kind}; 
     for (let attempt = 0; attempt < 2; attempt++) {
       const response = await availableGroqCompletion(groq,{
         messages: [
-          { role: 'system', content: SYSTEM_PROMPT + '\n\n' + EXTRACTED_CONTEXT_RULES + '\n\n' + language.rules },
+          { role: 'system', content: systemPrompt },
           { role: 'user', content: userPrompt + (feedback ? `\nThe previous attempt was rejected: ${feedback}. Return a corrected idea.` : '') },
         ],
         max_tokens: 1800,
@@ -225,20 +256,28 @@ Use concrete details from the brand information about this ${angle.facet.kind}; 
 
       idea=Array.isArray(parsed.ideas)?parsed.ideas.find((i:any)=>i&&typeof i.topic==='string'&&i.topic.trim()):null
       if(!idea){ if(attempt===0){feedback='no idea with a topic was returned';continue} return corsify(NextResponse.json({error:'No usable idea returned'},{status:502})) }
-      // Code-level checks: one language, and a subject that is not a rewording of an existing idea.
+      // Code-level checks: one language, and (for suggestions) a subject that is not a rewording of an existing idea.
+      // A typed idea may revisit a subject on purpose, so it is never rejected as a repeat.
       const problems=[...languageIssues([idea.topic,idea.hook,idea.coreMessage],language)]
-      const duplicate=history.find(i=>topicSimilarity(String(i.topic),idea.topic)>=.5)
+      const duplicate=request||images.length?null:history.find(i=>topicSimilarity(String(i.topic),idea.topic)>=.5)
       if(duplicate)problems.push(`the topic repeats an existing idea ("${String(duplicate.topic).slice(0,120)}"); choose a different subject within the angle`)
       if(!problems.length||attempt===1){ if(problems.length)console.warn('[content-ideas] accepted after retry with:',problems.join('; ')); break }
       feedback=problems.join('; ')
     }
-    return corsify(NextResponse.json({ideas:[{...idea,id:'idea-'+randomUUID(),...(angle?{angle:{pillar:angle.pillar,facet:angle.facet.label,kind:angle.facet.kind}}:{})}]}))
+    const ideaId='idea-'+randomUUID()
+    // Each photo belongs to one post: reserve it for this idea, refusing a photo another idea took meanwhile.
+    if(images.length){
+      const reserved=await db.collection('assets').updateMany({id:{$in:imageIds},brand_id:`brand_${brandContext.id}`,reserved_for:{$exists:false}},{$set:{reserved_for:ideaId,updated_at:new Date()}})
+      if(reserved.modifiedCount!==imageIds.length)throw Object.assign(new Error('A photo is already used in another post. Each photo can be used once.'),{status:409})
+    }
+    // The user's own words and photos travel with the brief, so the copywriter and planner see them too.
+    return corsify(NextResponse.json({ideas:[{...idea,id:ideaId,format:finalFormat(idea.format,formatChoice,angle?.format),...(angle?{angle:{pillar:angle.pillar,facet:angle.facet.label,kind:angle.facet.kind}}:{}),...(request?{userRequest:request}:{}),...(images.length?{images:images.map(({ref,...image})=>image)}:{})}]}))
   } catch (error: any) {
     console.error('Content ideas generation error:', error)
     return corsify(
       NextResponse.json(
         { error: error.status===429?'AI quota reached. Retry in '+retrySeconds(error)+' seconds.':error.message || 'Failed to generate content ideas' },
-        { status: error.status===429?429:500,headers:error.status===429?{'Retry-After':String(retrySeconds(error))}:{} }
+        { status: error.status===429?429:error.status>=400&&error.status<500?error.status:500,headers:error.status===429?{'Retry-After':String(retrySeconds(error))}:{} }
       )
     )
   }

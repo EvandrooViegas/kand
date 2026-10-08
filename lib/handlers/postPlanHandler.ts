@@ -4,6 +4,8 @@ import { loadGenerationBrandContext } from '@/lib/services/generationBrandContex
 import { chooseBrandFamily } from '@/lib/designs/global/generation'
 import { studyForPlanning, familyGrammar, familyImagery, familyPhotoLed } from '@/lib/designs/global/study'
 import type { GlobalDesignFamily } from '@/lib/designs/global/types'
+import { listItems } from '@/lib/designs/global/compose'
+import { loadPostImages, postImageIds, uploadPlanningBlock, assignUploads, ideaForCopy, type PostImage } from '@/lib/services/postImages'
 import { writeCopy, copyErrorResponse } from './copywritingHandler'
 import { planAssets } from './assetPlannerHandler'
 
@@ -23,7 +25,7 @@ export interface GalleryCutout { ref: string; id: string; description: string }
 const CUTOUT_SUBJECT = 'ONE isolated subject with no background (a person, hands, a product or an object doing or showing something concrete for this slide), complete silhouette, no scene, no backdrop, no text'
 
 /** Planning instructions appended to the copy request. Only the saved study is sent, never reference images or coordinates. */
-export function designPlanningPrompt(family: GlobalDesignFamily, gallery: GalleryCutout[] = []) {
+export function designPlanningPrompt(family: GlobalDesignFamily, gallery: GalleryCutout[] = [], uploads: PostImage[] = []) {
   const study = studyForPlanning(family)
   // Images are AI-generated transparent cutouts; about one in five may become a stock photo of the same subject.
   // Studies built on a full-canvas photograph keep photographs, described as scenes.
@@ -31,6 +33,7 @@ export function designPlanningPrompt(family: GlobalDesignFamily, gallery: Galler
   const image = photoLed
     ? `{"subject": "one concrete, realistic scene for a full-bleed photograph behind the copy, with quiet space where the text sits", "queries": ["2-4 word English stock search", "alternative wording, same scene"]}`
     : `{"subject": "${CUTOUT_SUBJECT}", "queries": ["2-4 word English stock search for the same subject", "alternative wording"]${gallery.length ? ', "reuse": "gallery ref or omit"' : ''}}`
+  const uploadImage = uploads.length ? ` or {"upload": "<user photo ref>"}` : ''
   const imageRule = photoLed
     ? 'This study is built on full-bleed photographs behind the copy: describe each image as a photographic scene.'
     : 'Images are AI-generated transparent cutouts (PNGs with no background standing on the design surface); describe each as one isolated subject. A few may become stock photographs of the same subject, so also give stock queries.'
@@ -41,8 +44,8 @@ Prefer new subjects made for this post. Set "reuse" to a ref only when that cuto
 DESIGN STUDY: ${JSON.stringify(study)}
 COMPOSITIONS this study allows: ${study.compositions.map(c => `"${c}" = ${COMPOSITION_GUIDE[c]}`).join('; ')}.
 Add "design" to every carousel slide (for a single post, add a top-level "design"):
-"design": {"composition": "<one of ${study.compositions.join(', ')}>", "emphasis": ["one or two exact words from the headline to highlight"], "image": null or ${image}}
-Rules: choose the composition that serves each slide's content, and vary compositions across a carousel while respecting the recurring rules; never give every slide the same composition unless the study demands it. "image" must be null when imagery mode is "none"; image-led and split always need an image. Give every other slide an image subject too: the layout shows it where the composition carries imagery or where the copy leaves empty space, and ignores it otherwise. ${imageRule} Image subjects are written in English. Never put words, logos or brand marks in image subjects. Avoid the anti-patterns.${galleryBlock}`
+"design": {"composition": "<one of ${study.compositions.join(', ')}>", "emphasis": ["one or two exact words from the headline to highlight"], "image": null or ${image}${uploadImage}}
+Rules: choose the composition that serves each slide's content, and vary compositions across a carousel while respecting the recurring rules; never give every slide the same composition unless the study demands it. "image" must be null when imagery mode is "none"; image-led and split always need an image. Give every other slide an image subject too: the layout shows it where the composition carries imagery or where the copy leaves empty space, and ignores it otherwise. ${imageRule} Image subjects are written in English. Never put words, logos or brand marks in image subjects. Avoid the anti-patterns.${galleryBlock}${uploadPlanningBlock(uploads)}`
 }
 
 /** A short subject label for a saved cutout. Descriptions that are generation instructions, not subjects, give ''. */
@@ -69,8 +72,11 @@ export async function galleryCutouts(db: any, flowId: string | undefined): Promi
 }
 
 
-/** Deterministically keeps only plan values that the study supports. Invalid choices fall back to rule-based composition. */
-export function sanitizeDesignPlan(family: GlobalDesignFamily, copy: any, gallery: GalleryCutout[] = []) {
+/**
+ * Deterministically keeps only plan values that the study supports. Invalid choices fall back to rule-based composition.
+ * The user's photos are then placed: each on exactly one slide (see assignUploads).
+ */
+export function sanitizeDesignPlan(family: GlobalDesignFamily, copy: any, gallery: GalleryCutout[] = [], uploads: PostImage[] = []) {
   const allowed = new Set(familyGrammar(family).compositions as string[])
   const imageryOn = familyImagery(family).mode !== 'none'
   const reused = new Set<string>()
@@ -87,13 +93,25 @@ export function sanitizeDesignPlan(family: GlobalDesignFamily, copy: any, galler
     const reuse = pick && !reused.size ? pick : undefined
     if (reuse) reused.add(reuse.id)
     const subject = typeof raw.image?.subject === 'string' && raw.image.subject.trim() ? raw.image.subject.trim() : reuse?.description || ''
-    const image = wantsImage && raw.image && subject
-      ? { subject: subject.slice(0, 500), queries: (Array.isArray(raw.image.queries) ? raw.image.queries : []).filter((q: any) => typeof q === 'string' && q.trim()).map((q: string) => q.trim().slice(0, 80)).slice(0, 3), ...(reuse ? { reuse: reuse.id } : {}) }
+    // A user photo ref is kept as given here; assignUploads validates it and enforces one slide per photo.
+    const upload = typeof raw.image?.upload === 'string' && raw.image.upload ? raw.image.upload : undefined
+    const image = wantsImage && raw.image && (subject || upload)
+      ? { subject: subject.slice(0, 500), queries: (Array.isArray(raw.image.queries) ? raw.image.queries : []).filter((q: any) => typeof q === 'string' && q.trim()).map((q: string) => q.trim().slice(0, 80)).slice(0, 3), ...(reuse && !upload ? { reuse: reuse.id } : {}), ...(upload ? { upload } : {}) }
       : null
     const { design, ...rest } = slide
     return { ...rest, ...(emphasis.length ? { emphasis } : {}), design: { ...(composition ? { composition } : {}), image } }
   }
-  return Array.isArray(copy.slides) && copy.slides.length ? { ...copy, slides: copy.slides.map(clean) } : clean(copy)
+  const place = (slides: any[]) => uploads.length || slides.some(s => s.design?.image?.upload)
+    ? assignUploads(slides, uploads, familyGrammar(family).compositions as string[], s => listItems(s).length >= 3).slides
+    : slides
+  if (Array.isArray(copy.slides) && copy.slides.length) return { ...copy, slides: place(copy.slides.map(clean)) }
+  return place([clean(copy)])[0]
+}
+
+/** Uploaded photos that no slot of the asset plan shows. */
+export function unplacedUploads(plan: any, uploads: PostImage[]) {
+  const shown = new Set((plan?.slots || []).filter((s: any) => s.user_upload && s.selected?.asset_id).map((s: any) => s.selected.asset_id))
+  return uploads.filter(u => !shown.has(u.id))
 }
 
 /**
@@ -106,22 +124,29 @@ export async function handlePlanPost(db: any, body: any) {
     if (!idea) return corsify(NextResponse.json({ error: 'idea (content brief) is required' }, { status: 400 }))
     const brandContext = await loadGenerationBrandContext(db, body)
     if (!brandContext) return corsify(NextResponse.json({ error: 'Brand not found' }, { status: 400 }))
-    const selection = await chooseBrandFamily(db, brandContext, body.copy || idea, body.designId)
+    // Photos attached to the idea, re-read from the brand's records (never trusted from the request).
+    const uploads = await loadPostImages(db, brandContext.id, postImageIds((idea.images || []).map((i: any) => i?.id)), idea.id)
+    const selection = await chooseBrandFamily(db, brandContext, body.copy || idea, body.designId, { imagery: uploads.length > 0 })
+    if (uploads.length && selection && familyImagery(selection.family).mode === 'none') {
+      return corsify(NextResponse.json({ error: 'The designs selected for this brand use typography only, so they cannot show your photos. Add a design with images in Brand profile → Post design.' }, { status: 422 }))
+    }
     // Saved transparent cutouts are offered whenever the study uses imagery, since most images are cutouts.
     const gallery = selection && familyImagery(selection.family).mode !== 'none' ? await galleryCutouts(db, brandContext.id) : []
+    const brief = ideaForCopy(idea, uploads)
     let copy = body.copy
     if (!copy) {
       if (selection) {
         const allowed = new Set(familyGrammar(selection.family).compositions as string[])
-        const design = { prompt: designPlanningPrompt(selection.family, gallery), validate: (parsed: any) => {
+        const design = { prompt: designPlanningPrompt(selection.family, gallery, uploads), validate: (parsed: any) => {
           const slides = parsed.format === 'carousel' ? parsed.slides : [parsed]
           if (!slides.some((s: any) => allowed.has(s?.design?.composition))) throw Error('Missing "design" plan with a valid composition')
         } }
-        copy = sanitizeDesignPlan(selection.family, (await writeCopy(brandContext, idea, design)).copy, gallery)
-      } else copy = (await writeCopy(brandContext, idea)).copy
-    } else if (selection) copy = sanitizeDesignPlan(selection.family, copy, gallery)
-    const plan = await planAssets(db, { brandContext, copy, idea, brand_id: `brand_${brandContext.id}`, designId: selection?.design.id || body.designId })
-    return corsify(NextResponse.json({ copy, plan, needsVisuals: plan.slots.some((s: any) => s.needs_visual), imageMode: plan.layoutPlan?.imageMode || null }))
+        copy = sanitizeDesignPlan(selection.family, (await writeCopy(brandContext, brief, design)).copy, gallery, uploads)
+      } else copy = (await writeCopy(brandContext, brief)).copy
+    } else if (selection) copy = sanitizeDesignPlan(selection.family, copy, gallery, uploads)
+    const plan = await planAssets(db, { brandContext, copy, idea, uploads, brand_id: `brand_${brandContext.id}`, designId: selection?.design.id || body.designId })
+    const unplaced = unplacedUploads(plan, uploads)
+    return corsify(NextResponse.json({ copy, plan, needsVisuals: plan.slots.some((s: any) => s.needs_visual), imageMode: plan.layoutPlan?.imageMode || null, unplacedImages: unplaced.length }))
   } catch (error: any) {
     return copyErrorResponse(error, 'Post planning failed')
   }

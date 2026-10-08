@@ -1,7 +1,7 @@
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const crypto = require('node:crypto')
-const { load, seeds, types, generation, study } = require('./globalDesigns.test.cjs')
+const { load, seeds, types, generation, study, compose } = require('./globalDesigns.test.cjs')
 
 const STUDY = { personality: 'p', composition: 'c', spaceDensity: 's', typography: 't', colorContrast: 'cc', colorRoles: {}, decorative: 'd', hierarchy: 'h', logoPlacement: 'Small top-left anchor', distinctive: [], familyRules: [], variantRules: [], avoid: [] }
 // Shaped like the published "Deep Forest" study: the mode says fullBleed, the prose describes a cutout.
@@ -79,6 +79,7 @@ test('a photo slot filled with a generated cutout is composed as a cutout, and a
   assert.match(missing.validation.warnings.join(' '), /no fitting image was available \(quota\)/)
 })
 
+const photoHelpers = load('lib/services/postImages.ts', ['loadPostImages', 'postImageIds', 'uploadPlanningBlock', 'assignUploads', 'ideaForCopy'], { hydrateBrandFamilies: async () => [], familyImagery: study.familyImagery })
 function planner(writeCopy, planAssets) {
   return load('lib/handlers/postPlanHandler.ts', ['handlePlanPost', 'designPlanningPrompt', 'sanitizeDesignPlan', 'galleryCutouts', 'cutoutLabel'], {
     NextResponse: { json: (body, init) => ({ body, status: init?.status || 200 }) }, corsify: r => r,
@@ -86,6 +87,7 @@ function planner(writeCopy, planAssets) {
     chooseBrandFamily: async (_db, b) => b.family ? { family: b.family, design: { id: 'global-' + b.family.id } } : null,
     studyForPlanning: study.studyForPlanning, familyGrammar: study.familyGrammar, familyImagery: study.familyImagery, familyCutouts: study.familyCutouts, familyPhotoLed: study.familyPhotoLed,
     writeCopy, copyErrorResponse: error => ({ body: { error: error.message }, status: error.status || 500 }), planAssets,
+    ...photoHelpers, listItems: compose.listItems,
   })
 }
 const GALLERY = [{ ref: 'g1', id: 'generated-phone', description: 'hand holding a smartphone' }, { ref: 'g2', id: 'generated-laptop', description: 'laptop with an open calendar' }]

@@ -30,7 +30,8 @@ export function buildFilterCssClient(filters) {
   return `brightness(${f.brightness}%) contrast(${f.contrast}%) saturate(${f.saturate}%) grayscale(${f.grayscale}%) sepia(${f.sepia}%) hue-rotate(${f.hueRotate}deg) blur(${f.blur}px) opacity(${f.opacity}%)`
 }
 
-export function CanvasPreview({ canvas, containerWidth, onClick }) {
+/** Scaled, read-only render of a canvas. For carousels, `pageIndex` picks the slide (default: the first). */
+export function CanvasPreview({ canvas, containerWidth, onClick, pageIndex = 0 }) {
   const containerRef = useRef(null)
   const [scale, setScale] = useState(1)
   useCanvasFonts(canvas)
@@ -68,9 +69,10 @@ export function CanvasPreview({ canvas, containerWidth, onClick }) {
     canvas.colorMode === 'high-contrast' ? 'contrast(160%)' : 'none'
   
   const isCarousel = canvas.type === 'carousel'
-  const firstPage = isCarousel ? canvas.pages?.[0] : null
+  const firstPage = isCarousel ? (canvas.pages?.[pageIndex] || canvas.pages?.[0]) : null
   const nodes = (isCarousel ? firstPage?.nodes : canvas.nodes) || []
   const bg = (isCarousel ? firstPage?.background : canvas.background) || '#ffffff'
+  const classes = (isCarousel && firstPage?.classes) || canvas.classes || {}
 
   return (
     <div 
@@ -119,8 +121,8 @@ export function CanvasPreview({ canvas, containerWidth, onClick }) {
           }
           return (
             <div key={n.id} style={style}>
-              {n.type === 'text' ? <div style={{width:'100%',display:'block',textAlign:n.textAlign || 'left'}}>{renderStyledText(parseStyledText(n.text || '',canvas.classes || {}),createElement,{canvasClasses:canvas.classes || {}})}</div> : n.type === 'image' && n.src ? (
-                <img src={n.src} alt="" style={{ width: '100%', height: '100%', objectFit: n.objectFit || 'cover', filter: buildFilterCssClient(n.filters) }} />
+              {n.type === 'text' ? <div style={{width:'100%',display:'block',textAlign:n.textAlign || 'left'}}>{renderStyledText(parseStyledText(n.text || '',classes),createElement,{canvasClasses:classes})}</div> : n.type === 'image' && n.src ? (
+                <img src={n.src} alt="" loading="lazy" decoding="async" style={{ width: '100%', height: '100%', objectFit: n.objectFit || 'cover', filter: buildFilterCssClient(n.filters) }} />
               ) : null}
             </div>
           )

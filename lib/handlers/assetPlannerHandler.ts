@@ -57,6 +57,8 @@ export interface VisualSlot {
   frame_aspect?:    number
   /** A photo slot that may use a generated transparent cutout when no gallery or stock photo fits. */
   cutout_fallback?: boolean
+  /** The slot shows a photo the user attached to the idea (`selected`); nothing else may fill it. */
+  user_upload?: boolean
 }
 
 export interface AssetPlan {
@@ -291,14 +293,20 @@ export async function planAssets(db: any, body: any) {
     if (!globalSelection) await refinePhotoBriefs(aiSlots,layoutPlan.slots,copy,idea)
     if (!globalSelection) layoutPlan.slots=layoutPlan.slots.map((layout:any,index:number)=>aiSlots[index].needs_visual===false?{...layout,needs_visual:false,background:false,frame:null,spec:{...layout.spec,background:{...layout.spec.background,type:'solid'},elements:layout.spec.elements.filter((e:any)=>e.type!=='image')}}:layout)
 
-    // Load uploaded assets for this brand (for matching)
+    // Load uploaded assets for this brand (for matching). Photos attached to a post idea belong to that post only.
     let uploadedAssets: any[] = []
     if (brand_id) {
       uploadedAssets = await db.collection('assets')
-        .find({ brand_id, $or: [{ status: 'ready' }, { 'description_tags.0': { $exists: true } }] })
+        .find({ brand_id, source: { $ne: 'post_upload' }, $or: [{ status: 'ready' }, { 'description_tags.0': { $exists: true } }] })
         .limit(500)
         .toArray()
     }
+    // The user's photos: global designs place them where the composition plan put them; older layouts take them in
+    // order, one per image slot. Either way each photo fills exactly one slot.
+    const uploads: any[] = Array.isArray(body.uploads) ? body.uploads : []
+    const queue = globalSelection ? [] : [...uploads]
+    const uploadFor = (layout: any) => !layout.needs_visual ? undefined
+      : globalSelection ? uploads.find(u => u.id === layout.planned?.upload) : queue.shift()
 
     // Enrich each slot with ranked candidates from the asset library
     const usedAssets = new Set<string>()
@@ -313,13 +321,15 @@ export async function planAssets(db: any, body: any) {
         ? Array.from(new Set<string>(value.filter((v: any) => typeof v === 'string').map((v: string) => v.trim().toLowerCase()).filter(Boolean))) : []
       const keywords = needsVisual ? cleanTerms(s.search_keywords).slice(0, 8) : []
       const preferWebsite = layout.treatment === 'environmental'
-      const candidates = needsVisual && s.needs_visual && (preferWebsite || s.preferred_source === 'uploaded_asset')
+      const upload = uploadFor(layout)
+      const candidates = !upload && needsVisual && s.needs_visual && (preferWebsite || s.preferred_source === 'uploaded_asset')
         ? findCandidates(uploadedAssets.filter(a=>a.source!=='ai_generated' && !assetKeys(a).some(key => usedAssets.has(key))), keywords, 3, preferWebsite).filter(a=>a.score>=.85)
         : []
       const selectedAsset = candidates.length ? uploadedAssets.find(a => a.id === candidates[0].asset_id) : null
       if (selectedAsset) assetKeys(selectedAsset).forEach(key => usedAssets.add(key))
+      const uploaded: AssetCandidate | null = upload ? { asset_id: upload.id, url: upload.url, thumbnail_url: upload.thumbnail_url || upload.url, filename: 'photo', tags: [], score: 1 } : null
 
-      return {
+      const slot: VisualSlot = {
         slot_id:          layout.slot_id,
         slot_label:       s.slot_label     ?? s.slot_id,
         needs_visual:     needsVisual,
@@ -340,6 +350,9 @@ export async function planAssets(db: any, body: any) {
         candidates,
         selected:         candidates[0] ?? null,
       }
+      // The user's photo fills this slot as a photograph: no search, no generation, no cutout.
+      return uploaded ? { ...slot, needs_visual: true, treatment: 'environmental', preferred_source: 'uploaded_asset', candidates: [uploaded], selected: uploaded,
+        user_upload: true, cutout_fallback: false, subject_description: upload.description || slot.subject_description, source_reason: 'Photo the user attached to this idea.' } : slot
     })
 
     const plan: AssetPlan = {

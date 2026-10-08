@@ -23,9 +23,9 @@ export function contentLanguage(brand: any = {}): ContentLanguage {
   const evidence = `${brand.about || ''} ${brand.targetAudience || ''}`
   let code = match?.[2] || 'en'
   // Explicit variants win; otherwise the site's country and the profile decide.
-  if (code === 'pt') code = /pt-?br|brasil|brazil/i.test(raw) || host.endsWith('.br') || /\b(brasil|brazil|são paulo|rio de janeiro)\b/i.test(evidence) && !/\bportugal\b/i.test(evidence) ? 'pt-BR' : 'pt-PT'
-  if (code === 'en') code = /en-?gb|british|uk\b/i.test(raw) || host.endsWith('.uk') ? 'en-GB' : 'en-US'
-  if (code === 'es') code = /es-?es|spain|españa/i.test(raw) || host.endsWith('.es') ? 'es-ES' : 'es'
+  if (code === 'pt') code = /pt-?pt|portugal/i.test(raw) ? 'pt-PT' : /pt-?br|brasil|brazil/i.test(raw) || host.endsWith('.br') || /\b(brasil|brazil|são paulo|rio de janeiro)\b/i.test(evidence) && !/\bportugal\b/i.test(evidence) ? 'pt-BR' : 'pt-PT'
+  if (code === 'en') code = /en-?us|americ/i.test(raw) ? 'en-US' : /en-?gb|british|uk\b/i.test(raw) || host.endsWith('.uk') ? 'en-GB' : 'en-US'
+  if (code === 'es') code = /es-?419|latin/i.test(raw) ? 'es' : /es-?es|spain|españa/i.test(raw) || host.endsWith('.es') ? 'es-ES' : 'es'
   const label = code === 'pt-PT' ? 'Portuguese — European (pt-PT)' : code === 'pt-BR' ? 'Portuguese — Brazilian (pt-BR)' : code === 'en-GB' ? 'English — British (en-GB)' : code === 'en-US' ? 'English — American (en-US)' : `${name} (${code})`
   const variant = code === 'pt-PT' ? PT_PT : code === 'pt-BR' ? PT_BR : code === 'en-GB' ? 'British spelling (organise, colour, centre).' : ''
   const english = code.startsWith('en')

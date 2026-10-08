@@ -3,10 +3,10 @@ import { useEffect, useState, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogTrigger,
-} from '@/components/ui/dialog'
+import { Popup, shortName, usePopup } from '@/components/app/popup'
+import { appButton } from '@/components/app/ui'
+import { appField } from '@/components/app/field'
+import { cn } from '@/lib/utils'
 import { Plus, Trash2, Pencil, Copy, Moon, Sun, ArrowUpRight, ArrowRight, Upload, Download, Layers, Image as ImageIcon, Sparkles } from 'lucide-react'
 import { toast } from 'sonner'
 import { KandLogo, KandMark } from '@/components/logo'
@@ -43,6 +43,7 @@ function EmptyState({ onNew }) {
 
 function Dashboard() {
   const router = useRouter()
+  const popup = usePopup()
   const [canvases, setCanvases] = useState([])
   const [loading, setLoading] = useState(true)
   const [open, setOpen] = useState(false)
@@ -118,9 +119,19 @@ function Dashboard() {
   }
 
   const deleteCanvas = async (id) => {
-    if (!confirm('Delete this design?')) return
-    await fetch(`/api/canvases/${id}`, { method: 'DELETE' })
-    toast.success('Deleted'); load()
+    const name = canvases.find(c => c.id === id)?.name
+    const deleted = await popup.confirm({
+      title: name ? `Delete “${shortName(name)}”?` : 'Delete this design?',
+      description: 'The design is removed permanently. This cannot be undone.',
+      tone: 'danger',
+      confirmLabel: 'Delete design',
+      busyLabel: 'Deleting…',
+      action: async () => {
+        const res = await fetch(`/api/canvases/${id}`, { method: 'DELETE' })
+        if (!res.ok) throw new Error('The design could not be deleted. Please try again.')
+      },
+    })
+    if (deleted) { toast.success('Deleted'); load() }
   }
   
   const duplicateCanvas = async (id) => {
@@ -139,7 +150,7 @@ function Dashboard() {
           <div className="flex items-center gap-4">
             <nav className="hidden md:flex gap-7 text-sm font-medium">
               <a href="#api-docs" className="text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition">Docs</a>
-              <button onClick={() => router.push('/flow')} className="text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition">Flow</button>
+              <button onClick={() => router.push('/app')} className="text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition">App</button>
               <button onClick={() => router.push('/renders')} className="text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition">Renders</button>
               <button onClick={() => router.push('/case-studies')} className="text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-slate-200 transition">Case Studies</button>
             </nav>
@@ -149,33 +160,39 @@ function Dashboard() {
               <Button variant="ghost" size="sm" className="hidden sm:inline-flex text-slate-600 dark:text-slate-400" onClick={() => importFileRef.current?.click()} disabled={importing}>
                 <Upload className="w-4 h-4 mr-1.5" />{importing ? 'Importing…' : 'Import'}
               </Button>
-              <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) { setName(''); setCanvasType('single') } }}>
-                <DialogTrigger asChild>
-                  <Button className="bg-slate-900 hover:bg-slate-800 dark:bg-slate-50 dark:hover:bg-slate-200 dark:text-slate-900 text-white rounded-lg px-4 h-9 font-medium">
-                    <Plus className="w-4 h-4 mr-1.5" />New
-                  </Button>
-                </DialogTrigger>
-                <DialogContent className="rounded-xl border-slate-200 dark:border-slate-800">
-                  <DialogHeader><DialogTitle>Create new design</DialogTitle></DialogHeader>
-                  <div className="space-y-4 py-4">
-                    <div className="grid grid-cols-2 gap-3">
-                      <button type="button" onClick={() => setCanvasType('single')} className={`p-3 rounded-lg border-2 transition ${canvasType === 'single' ? 'border-slate-900 dark:border-slate-50 bg-slate-50 dark:bg-slate-900' : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'}`}>
-                        <ImageIcon className="w-5 h-5 mx-auto mb-2" />
-                        <div className="text-sm font-medium">Single</div>
+              <Button onClick={() => setOpen(true)} className="bg-slate-900 hover:bg-slate-800 dark:bg-slate-50 dark:hover:bg-slate-200 dark:text-slate-900 text-white rounded-lg px-4 h-9 font-medium">
+                <Plus className="w-4 h-4 mr-1.5" />New
+              </Button>
+              <Popup
+                open={open}
+                onOpenChange={(v) => { setOpen(v); if (!v) { setName(''); setCanvasType('single') } }}
+                title="Create new design"
+                description="Pick a format and give the design a name."
+                size="sm"
+                footer={<>
+                  <button type="button" onClick={() => setOpen(false)} className={appButton('outline', 'md')}>Cancel</button>
+                  <button type="button" onClick={createCanvas} className={appButton('primary', 'md')}>Create design</button>
+                </>}
+              >
+                <div className="space-y-4">
+                  <div role="radiogroup" aria-label="Format" className="grid grid-cols-2 gap-3">
+                    {[['single', 'Single', ImageIcon], ['carousel', 'Carousel', Layers]].map(([value, label, Icon]) => (
+                      <button
+                        key={value}
+                        type="button"
+                        role="radio"
+                        aria-checked={canvasType === value}
+                        onClick={() => setCanvasType(value)}
+                        className={cn('rounded-xl border-2 p-4 text-[14px] font-bold transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-bk-fg', canvasType === value ? 'border-bk-fg bg-bk-alt' : 'border-bk-line hover:border-bk-field')}
+                      >
+                        <Icon className="mx-auto mb-2 size-5" />
+                        {label}
                       </button>
-                      <button type="button" onClick={() => setCanvasType('carousel')} className={`p-3 rounded-lg border-2 transition ${canvasType === 'carousel' ? 'border-slate-900 dark:border-slate-50 bg-slate-50 dark:bg-slate-900' : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700'}`}>
-                        <Layers className="w-5 h-5 mx-auto mb-2" />
-                        <div className="text-sm font-medium">Carousel</div>
-                      </button>
-                    </div>
-                    <Input placeholder="Design name" value={name} onChange={(e) => setName(e.target.value)} autoFocus onKeyDown={(e) => e.key === 'Enter' && createCanvas()} className="rounded-lg" />
+                    ))}
                   </div>
-                  <DialogFooter>
-                    <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-                    <Button onClick={createCanvas} className="bg-slate-900 hover:bg-slate-800 dark:bg-slate-50 dark:hover:bg-slate-200 dark:text-slate-900 text-white">Create</Button>
-                  </DialogFooter>
-                </DialogContent>
-              </Dialog>
+                  <input aria-label="Design name" placeholder="Design name" value={name} onChange={(e) => setName(e.target.value)} autoFocus onKeyDown={(e) => e.key === 'Enter' && createCanvas()} className={appField()} />
+                </div>
+              </Popup>
             </div>
           </div>
         </div>

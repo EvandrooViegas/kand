@@ -18,6 +18,7 @@ import { handlePlanAssets } from '@/lib/handlers/assetPlannerHandler'
 import { handlePlanPost } from '@/lib/handlers/postPlanHandler'
 import { handleResolveAssets } from '@/lib/handlers/assetResolverHandler'
 import { handleDesignCanvas, handleSwitchDesign } from '@/lib/handlers/canvasDesignerHandler'
+import { handleUploadPostImage, handleDeletePostImage } from '@/lib/handlers/postImageHandler'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -84,6 +85,11 @@ async function handleRoute(request, { params }) {
     if (route === '/design-canvas' && method === 'POST') {
       return await handleDesignCanvas(db, await request.json())
     }
+
+    // Photos attached to a post idea: read on upload, used once by that post
+    if (route === '/post-images' && method === 'POST') return await handleUploadPostImage(db, await request.json())
+    const postImageMatch = route.match(/^\/post-images\/([^/]+)$/)
+    if (postImageMatch && method === 'DELETE') return await handleDeletePostImage(db, postImageMatch[1], new URL(request.url).searchParams.get('brand_id'))
 
     // Asset routes
     if (route === '/assets' && method === 'POST') return await handleUploadAsset(db, await request.json(), request)

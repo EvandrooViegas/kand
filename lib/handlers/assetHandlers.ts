@@ -25,6 +25,32 @@ function calcOrientation(w: number, h: number): string {
   return 'square'
 }
 
+/** Splits a base64 data URL without regex (regex on multi-MB strings blows the call stack). */
+export function parseDataUrl(data: string): { mime_type: string; buf: Buffer } | null {
+  const commaIdx     = data.indexOf(',')
+  const headerPart   = commaIdx !== -1 ? data.slice(0, commaIdx) : ''
+  const base64Part   = commaIdx !== -1 ? data.slice(commaIdx + 1) : ''
+  const colonIdx     = headerPart.indexOf(':')
+  const semicolonIdx = headerPart.indexOf(';')
+  const mime_type = (colonIdx !== -1 && semicolonIdx !== -1) ? headerPart.slice(colonIdx + 1, semicolonIdx) : ''
+  if (!mime_type || !base64Part) return null
+  return { mime_type, buf: Buffer.from(base64Part, 'base64') }
+}
+
+/** Saves an image and a 400 px JPEG thumbnail; returns their URLs. */
+export async function storeImageBytes(db: any, buf: Buffer, mime_type: string, baseUrl: string) {
+  const uploadId = uuidv4()
+  const thumbId  = uuidv4()
+  const now      = new Date()
+  await db.collection('uploads').insertOne({ id: uploadId, contentType: mime_type, bytes: new Binary(buf), createdAt: now })
+  await db.collection('uploads').insertOne({ id: thumbId, contentType: 'image/jpeg', bytes: new Binary(await makeThumbnail(buf)), createdAt: now })
+  return { url: `${baseUrl}/api/uploads/${uploadId}`, thumbnail_url: `${baseUrl}/api/uploads/${thumbId}` }
+}
+
+export function newAssetId() {
+  return `asset_${uuidv4().replace(/-/g, '').slice(0, 16)}`
+}
+
 // ─── route handlers ───────────────────────────────────────────────────────────
 
 export async function handleUploadAsset(db: any, body: any, request: Request) {
@@ -40,20 +66,11 @@ export async function handleUploadAsset(db: any, body: any, request: Request) {
     return corsify(NextResponse.json({ error: 'Description must be text with at most 2000 characters' }, { status: 400 }))
   }
 
-  // Parse data URL without regex (regex on multi-MB strings blows the call stack)
-  const commaIdx     = data.indexOf(',')
-  const headerPart   = commaIdx !== -1 ? data.slice(0, commaIdx) : ''
-  const base64Part   = commaIdx !== -1 ? data.slice(commaIdx + 1) : ''
-  const colonIdx     = headerPart.indexOf(':')
-  const semicolonIdx = headerPart.indexOf(';')
-  const mime_type: string = (colonIdx !== -1 && semicolonIdx !== -1)
-    ? headerPart.slice(colonIdx + 1, semicolonIdx) : ''
-
-  if (!mime_type || !base64Part) {
+  const parsed = parseDataUrl(data)
+  if (!parsed) {
     return corsify(NextResponse.json({ error: 'Invalid data URL' }, { status: 400 }))
   }
-
-  const buf = Buffer.from(base64Part, 'base64')
+  const { mime_type, buf } = parsed
 
   if (buf.length > 10 * 1024 * 1024) {
     return corsify(NextResponse.json({ error: 'Image too large (max 10MB)' }, { status: 413 }))
@@ -68,25 +85,11 @@ export async function handleUploadAsset(db: any, body: any, request: Request) {
     return corsify(NextResponse.json({ error: 'Could not read image metadata' }, { status: 400 }))
   }
 
-  const baseUrl     = getBaseUrl(request)
   const descriptionData=await indexAssetDescription(body.description??'')
-  const assetId     = `asset_${uuidv4().replace(/-/g, '').slice(0, 16)}`
-  const uploadId    = uuidv4()
-  const thumbId     = uuidv4()
+  const assetId     = newAssetId()
   const orientation = calcOrientation(width, height)
   const now         = new Date()
-
-  await db.collection('uploads').insertOne({
-    id: uploadId, contentType: mime_type, bytes: new Binary(buf), createdAt: now,
-  })
-
-  const thumbBuf = await makeThumbnail(buf)
-  await db.collection('uploads').insertOne({
-    id: thumbId, contentType: 'image/jpeg', bytes: new Binary(thumbBuf), createdAt: now,
-  })
-
-  const url           = `${baseUrl}/api/uploads/${uploadId}`
-  const thumbnail_url = `${baseUrl}/api/uploads/${thumbId}`
+  const { url, thumbnail_url } = await storeImageBytes(db, buf, mime_type, getBaseUrl(request))
 
   const assetDoc: any = {
     id: assetId,

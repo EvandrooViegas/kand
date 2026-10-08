@@ -17,7 +17,7 @@ test('flow selector reads only summaries without initializing every brand', asyn
     assert.equal(name, 'flows')
     return { find: (query, options) => {
       assert.deepEqual(query, {})
-      assert.deepEqual(options.projection, { _id: 0, id: 1, name: 1, 'brandContext.name': 1, 'brandContext.logo': 1 })
+      assert.deepEqual(options.projection, { _id: 0, id: 1, name: 1, 'brandContext.name': 1, 'brandContext.logo': 1, 'brandContext.logoVariants.originalTransparent': 1, 'brandContext.logoVariants.inkLightness': 1 })
       return { toArray: async () => [summary] }
     } }
   } }

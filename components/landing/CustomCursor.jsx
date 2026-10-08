@@ -1,7 +1,9 @@
 'use client'
 import { useEffect, useRef, useState } from 'react'
 
-const INTERACTIVE = 'a, button, summary, label, [role="button"]'
+const INTERACTIVE = 'a, button, summary, label, select, [role="button"], [role="checkbox"], [role="menuitem"], [role="tab"]'
+// Over text fields the normal I-beam is more useful than the custom cursor, so it steps aside there.
+const TEXT_FIELDS = 'input:not([type="button"]):not([type="submit"]):not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]), textarea, [contenteditable="true"]'
 
 /**
  * Dot + trailing ring cursor. Only mounts for a mouse/trackpad without reduced motion,
@@ -73,8 +75,10 @@ export default function CustomCursor() {
     }
 
     const onOver = (e) => {
-      const hovering = Boolean(e.target.closest?.(INTERACTIVE))
+      const text = Boolean(e.target.closest?.(TEXT_FIELDS))
+      const hovering = !text && Boolean(e.target.closest?.(INTERACTIVE))
       if ((root.dataset.hover === 'true') !== hovering) root.dataset.hover = String(hovering)
+      if ((root.dataset.text === 'true') !== text) root.dataset.text = String(text)
     }
     const onDown = () => (root.dataset.down = 'true')
     const onUp = () => (root.dataset.down = 'false')
@@ -103,7 +107,7 @@ export default function CustomCursor() {
   if (!enabled) return null
 
   return (
-    <div ref={rootRef} aria-hidden="true" className="bk-cursor pointer-events-none fixed left-0 top-0 z-[100]">
+    <div ref={rootRef} aria-hidden="true" className="bk-cursor pointer-events-none fixed left-0 top-0 z-[2147483647]">
       <div ref={ringRef} className="absolute left-0 top-0 will-change-transform">
         <div className="bk-cursor-ring" />
       </div>

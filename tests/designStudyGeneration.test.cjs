@@ -8,6 +8,7 @@ const noImage = seeds[1], background = seeds[2]
 const STUDY = { personality: 'p', composition: 'c', spaceDensity: 's', typography: 't', colorContrast: 'cc', colorRoles: {}, imagery: { mode: 'background', usage: 'Photos fill the canvas.', cropBehavior: 'Edge-to-edge crops.' }, decorative: 'd', hierarchy: 'h', logoPlacement: 'Small top-left anchor', distinctive: [], familyRules: [], variantRules: [], avoid: [] }
 const SUPPORTED = new Set(['text', 'shape', 'image', 'gradient'])
 
+const photoHelpers = load('lib/services/postImages.ts', ['loadPostImages', 'postImageIds', 'uploadPlanningBlock', 'assignUploads', 'ideaForCopy'], { hydrateBrandFamilies: async () => [], familyImagery: study.familyImagery })
 function planner(writeCopy, planAssets) {
   const nodeRes = { json: (body, init) => ({ body, status: init?.status || 200 }) }
   return load('lib/handlers/postPlanHandler.ts', ['handlePlanPost', 'designPlanningPrompt', 'sanitizeDesignPlan'], {
@@ -16,6 +17,7 @@ function planner(writeCopy, planAssets) {
     chooseBrandFamily: async (_db, brand) => brand.family ? { family: brand.family, design: { id: 'global-' + brand.family.id } } : null,
     studyForPlanning: study.studyForPlanning, familyGrammar: study.familyGrammar, familyImagery: study.familyImagery, familyCutouts: study.familyCutouts, familyPhotoLed: study.familyPhotoLed,
     writeCopy, copyErrorResponse: (error) => ({ body: { error: error.message }, status: error.status || 500 }), planAssets,
+    ...photoHelpers, listItems: compose.listItems,
   })
 }
 const derivedPlan = family => async (_db, { copy }) => {

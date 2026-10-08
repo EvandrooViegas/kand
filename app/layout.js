@@ -2,6 +2,7 @@ import './globals.css'
 import { Toaster } from '@/components/ui/sonner'
 import { ThemeProvider } from '@/components/theme-provider'
 import DeferredFonts from '@/components/DeferredFonts'
+import { PopupProvider } from '@/components/app/popup'
 
 export const metadata = {
   title: 'Kand — Make once. Render forever.',
@@ -39,7 +40,7 @@ export default function RootLayout({ children }) {
       <body className="bg-background text-foreground">
         <DeferredFonts href={GOOGLE_FONTS_HREF} />
         <ThemeProvider attribute="class" defaultTheme="light" enableSystem={false}>
-          {children}
+          <PopupProvider>{children}</PopupProvider>
           <Toaster position="top-center" richColors />
         </ThemeProvider>
       </body>

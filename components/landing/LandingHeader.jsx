@@ -8,11 +8,10 @@ import { BatkleLogo, Container, buttonClass, cn } from './brand'
 
 export const NAV_LINKS = [
   { href: '#how-it-works', label: 'How it works' },
-  { href: '#live-demo', label: 'Live demo' },
+  { href: '#demo', label: 'Demo' },
   { href: '#features', label: 'Features' },
   { href: '#pricing', label: 'Pricing' },
   { href: '#faq', label: 'FAQ' },
-  { href: '/flow', label: 'Flow' },
 ]
 
 const iconButton =
@@ -102,8 +101,8 @@ export default function LandingHeader() {
 
         <div className="flex items-center gap-2.5">
           <ThemeToggle />
-          <Link href="/flow" className={buttonClass('primary', 'sm', 'hidden sm:inline-flex')}>
-            Try Batkle
+          <Link href="/app" className={buttonClass('primary', 'sm', 'hidden sm:inline-flex')}>
+            Add your brand
           </Link>
           <button
             type="button"
@@ -137,8 +136,8 @@ export default function LandingHeader() {
               </li>
             ))}
           </ul>
-          <Link href="/flow" className={buttonClass('primary', 'md', 'mb-2 mt-4 w-full sm:hidden')}>
-            Try Batkle
+          <Link href="/app" className={buttonClass('primary', 'md', 'mb-2 mt-4 w-full sm:hidden')}>
+            Add your brand
           </Link>
         </Container>
       </div>

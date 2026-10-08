@@ -3,8 +3,8 @@ const assert = require('node:assert/strict')
 const fs = require('node:fs')
 const { stripTypeScriptTypes } = require('node:module')
 const load = path => stripTypeScriptTypes(fs.readFileSync(path, 'utf8').replace(/^import .*$/gm, '').replace(/export /g, ''))
-const strategy = new Function(load('lib/services/contentLanguage.ts') + load('lib/services/contentAngles.ts') + ';return {contentLanguage,languageIssues,copyTexts,chooseAngle,ideaHistory,topicSimilarity}')()
-const { contentLanguage, languageIssues, chooseAngle, ideaHistory, topicSimilarity } = strategy
+const strategy = new Function(load('lib/services/contentLanguage.ts') + load('lib/services/contentAngles.ts') + load('lib/services/ideaRequest.ts') + load('lib/services/postImages.ts') + ';return {contentLanguage,languageIssues,copyTexts,chooseAngle,ideaHistory,topicSimilarity,readIdeaRequest,ideaRequestBlock,formatRule,finalFormat,IDEA_REQUEST_RULE,postImageIds,prepareIdeaImages,postImagesBlock}')()
+const { contentLanguage, languageIssues, chooseAngle, ideaHistory, topicSimilarity, readIdeaRequest } = strategy
 const { EXTRACTED_CONTEXT_RULES } = new Function(load('lib/services/generationBrandContext.ts') + ';return {EXTRACTED_CONTEXT_RULES}')()
 
 // Shaped like a real saved profile: researched in English, brand language Portuguese, Portuguese website.
@@ -132,4 +132,41 @@ test('nothing on an Instagram graphic is clickable: button CTAs are removed in c
   assert.equal(await run('Clique aqui e descubra'), '')
   assert.equal(await run('Envie-nos uma mensagem'), 'Envie-nos uma mensagem')
   assert.equal(await run('Saiba mais pelo link na bio'), 'Saiba mais pelo link na bio')
+})
+
+test('a typed idea is cleaned and capped, and an unknown format falls back to auto', () => {
+  assert.deepEqual(readIdeaRequest({ userIdea: '  Antes e depois\n\n de uma   reabilitação  ', format: 'carousel' }), { request: 'Antes e depois de uma reabilitação', format: 'carousel' })
+  assert.deepEqual(readIdeaRequest({ userIdea: 42, format: 'reel' }), { request: '', format: 'auto' })
+  assert.equal(readIdeaRequest({ userIdea: 'x'.repeat(900) }).request.length, 600)
+})
+
+test('a typed idea becomes the subject of the brief, grounded in the brand, and is never rejected as a repeat', async () => {
+  const previous = [{ topic: 'Como a Prumo Soalheiro ganhou presença digital na construção civil', pillar: 'Projects / Cases' }]
+  const brief = { ideas: [{ topic: 'Antes e depois: a presença digital da Prumo Soalheiro', hook: 'Da obra para o digital', coreMessage: 'Um caso real da KACHICA.', format: 'single' }] }
+  const { run, requests } = handler('contentIdeasHandler', 'handleGenerateContentIdeas', [brief], { creationState: { ideas: previous } })
+  const result = await run({ brandContext: { id: 'flow-k' }, userIdea: 'Before and after of the Prumo Soalheiro project', format: 'carousel' })
+  assert.equal(result.status, 200)
+  assert.equal(requests.length, 1, 'revisiting a subject on request is not retried as a repeat')
+  const [system, user] = requests[0].messages.map(m => m.content)
+  assert.match(user, /THE USER'S IDEA[\s\S]*Before and after of the Prumo Soalheiro project/)
+  assert.match(user, /BRAND INFORMATION/)
+  assert.match(user, /- Format: carousel \(required: the user chose it\)/)
+  assert.doesNotMatch(user, /ANGLE FOR THIS IDEA|PREVIOUS IDEAS/, 'no code-chosen angle overrides the user')
+  assert.match(user, /OUTPUT LANGUAGE: Portuguese — European \(pt-PT\)/, 'written in the brand language whatever the idea language')
+  assert.match(system, /facts the user states about their own company may be used as stated/)
+  const idea = result.body.ideas[0]
+  assert.equal(idea.userRequest, 'Before and after of the Prumo Soalheiro project', 'the request travels to the copywriter')
+  assert.equal(idea.format, 'carousel', 'the chosen format wins over the model')
+  assert.equal(idea.angle, undefined)
+})
+
+test('a suggestion keeps its angle and honours a chosen format', async () => {
+  const brief = { ideas: [{ topic: 'Como a automação com IA reduz tarefas manuais', hook: 'Menos tarefas', coreMessage: 'A IA liberta tempo.', format: 'carousel' }] }
+  const { run, requests } = handler('contentIdeasHandler', 'handleGenerateContentIdeas', [brief])
+  const result = await run({ brandContext: { id: 'flow-k' }, userIdea: '   ', format: 'single' })
+  assert.equal(result.status, 200)
+  assert.match(requests[0].messages[1].content, /ANGLE FOR THIS IDEA \(required\)[\s\S]*- Format: single \(required: the user chose it\)/)
+  assert.equal(result.body.ideas[0].format, 'single')
+  assert.equal(result.body.ideas[0].userRequest, undefined)
+  assert.ok(result.body.ideas[0].angle)
 })

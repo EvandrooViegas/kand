@@ -4,7 +4,8 @@ import { useRouter } from 'next/navigation'
 import { useTheme } from 'next-themes'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
-import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Popup, usePopup } from '@/components/app/popup'
+import { appButton } from '@/components/app/ui'
 import {
   CheckCircle, Trash2, Moon, Sun, ArrowLeft, ExternalLink, Download,
   Clock, CheckCheck, ImageIcon, Layers, Eye, RotateCcw, Copy, Check
@@ -129,27 +130,30 @@ function RenderCard({ render, onApprove, onDelete, baseUrl }) {
         </div>
       </div>
 
-      {/* Fullscreen preview dialog */}
-      <Dialog open={preview} onOpenChange={setPreview}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader><DialogTitle>Render Preview</DialogTitle></DialogHeader>
-          <img src={`/api/rendered/${render.id}`} alt="render" className="w-full rounded-lg" />
-          <div className="flex gap-2 mt-2">
-            <Button variant="outline" className="flex-1" onClick={copyUrl}>
-              {copied ? <Check className="w-4 h-4 mr-2" /> : <Copy className="w-4 h-4 mr-2" />}Copy URL
-            </Button>
-            <a href={url} target="_blank" rel="noreferrer" className="flex-1">
-              <Button variant="outline" className="w-full"><ExternalLink className="w-4 h-4 mr-2" />Open</Button>
-            </a>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {/* Fullscreen preview popup */}
+      <Popup
+        open={preview}
+        onOpenChange={setPreview}
+        title="Render preview"
+        size="lg"
+        footer={<>
+          <button type="button" onClick={copyUrl} className={appButton('outline', 'md')}>
+            {copied ? <Check className="size-4" /> : <Copy className="size-4" />}Copy URL
+          </button>
+          <a href={url} target="_blank" rel="noreferrer" className={appButton('primary', 'md')}>
+            <ExternalLink className="size-4" />Open
+          </a>
+        </>}
+      >
+        <img src={`/api/rendered/${render.id}`} alt="Rendered design" className="w-full rounded-xl border border-bk-line" />
+      </Popup>
     </div>
   )
 }
 
 export default function RendersPage() {
   const router = useRouter()
+  const popup = usePopup()
   const [renders, setRenders] = useState([])
   const [loading, setLoading] = useState(true)
   const [baseUrl, setBaseUrl] = useState('')
@@ -176,8 +180,18 @@ export default function RendersPage() {
   }
 
   const del = async (id) => {
-    if (!confirm('Delete this render?')) return
-    await fetch(`/api/renders/${id}`, { method: 'DELETE' })
+    const deleted = await popup.confirm({
+      title: 'Delete this render?',
+      description: 'Its image and links stop working. This cannot be undone.',
+      tone: 'danger',
+      confirmLabel: 'Delete render',
+      busyLabel: 'Deleting…',
+      action: async () => {
+        const res = await fetch(`/api/renders/${id}`, { method: 'DELETE' })
+        if (!res.ok) throw new Error('The render could not be deleted. Please try again.')
+      },
+    })
+    if (!deleted) return
     setRenders(prev => prev.filter(r => r.id !== id))
     toast.success('Deleted')
   }

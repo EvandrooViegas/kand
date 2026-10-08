@@ -1,34 +1,4 @@
-/* Batkle landing page tokens. Colours are "r g b" so Tailwind can apply alpha. */
-.bk-root {
-  --bk-bg: 255 255 255;
-  --bk-alt: 246 245 241;
-  --bk-surface: 255 255 255;
-  --bk-chip: 246 245 241;
-  --bk-fg: 20 19 26;
-  --bk-muted: 91 87 102;
-  --bk-line: 230 227 218;
-  --bk-field: 207 203 189;
-  --bk-shadow-card: 0 1px 2px rgb(20 19 26 / 0.04), 0 22px 44px -28px rgb(20 19 26 / 0.22);
-  --bk-shadow-pop: 0 1px 2px rgb(20 19 26 / 0.05), 0 30px 60px -30px rgb(20 19 26 / 0.3);
-}
-
-.dark .bk-root {
-  --bk-bg: 20 19 26;
-  --bk-alt: 27 26 34;
-  --bk-surface: 33 31 42;
-  --bk-chip: 46 44 57;
-  --bk-fg: 246 243 234;
-  --bk-muted: 172 168 185;
-  --bk-line: 49 47 60;
-  --bk-field: 74 71 87;
-  --bk-shadow-card: 0 1px 0 rgb(255 255 255 / 0.03) inset, 0 22px 44px -26px rgb(0 0 0 / 0.7);
-  --bk-shadow-pop: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 30px 60px -28px rgb(0 0 0 / 0.8);
-}
-
-/* Keep overscroll on-palette. */
-body:has(.bk-root) { background-color: #fff; }
-.dark body:has(.bk-root) { background-color: #14131a; }
-
+/* Landing-only motion and cursor. Shared Batkle tokens and logo masks live in app/globals.css. */
 @media (prefers-reduced-motion: no-preference) {
   html:has(.bk-root) { scroll-behavior: smooth; }
 }
@@ -65,6 +35,13 @@ body:has(.bk-root) { background-color: #fff; }
   .bk-faq[open] .bk-faq-answer { animation: bk-fade-up 0.4s cubic-bezier(0.2, 0.7, 0.2, 1) both; }
 }
 
+/* Transparency grid behind the cutout in the Features section. */
+.bk-checker {
+  background-color: rgb(var(--bk-alt));
+  background-image: conic-gradient(rgb(var(--bk-line)) 25%, transparent 0 50%, rgb(var(--bk-line)) 0 75%, transparent 0);
+  background-size: 20px 20px;
+}
+
 /* Theme switch: the new theme grows out of the toggle button (see LandingHeader). */
 html.bk-theme-vt::view-transition-old(root),
 html.bk-theme-vt::view-transition-new(root) {
@@ -77,63 +54,4 @@ html.bk-theme-vt::view-transition-new(root) {
 @keyframes bk-theme-reveal {
   from { clip-path: circle(0 at var(--bk-vt-x) var(--bk-vt-y)); }
   to { clip-path: circle(var(--bk-vt-r) at var(--bk-vt-x) var(--bk-vt-y)); }
-}
-
-/* ---------- Custom cursor (fine pointers only, see CustomCursor.jsx) ---------- */
-html.bk-cursor-on,
-html.bk-cursor-on * { cursor: none !important; }
-
-.bk-cursor { opacity: 0; transition: opacity 0.2s ease; }
-.bk-cursor[data-visible='true'] { opacity: 1; }
-
-.bk-cursor-ring {
-  width: 36px;
-  height: 36px;
-  margin: -18px 0 0 -18px;
-  border-radius: 9999px;
-  border: 1.5px solid rgb(var(--bk-fg) / 0.35);
-  transition: transform 0.3s cubic-bezier(0.2, 0.7, 0.2, 1), background-color 0.3s ease, border-color 0.3s ease;
-}
-.bk-cursor[data-hover='true'] .bk-cursor-ring {
-  transform: scale(1.55);
-  background-color: rgb(255 216 77 / 0.24);
-  border-color: rgb(var(--bk-fg) / 0.6);
-}
-.bk-cursor[data-down='true'] .bk-cursor-ring { transform: scale(0.8); }
-.bk-cursor[data-hover='true'][data-down='true'] .bk-cursor-ring { transform: scale(1.3); }
-
-.bk-cursor-dot {
-  width: 8px;
-  height: 8px;
-  margin: -4px 0 0 -4px;
-  border-radius: 9999px;
-  background-color: #ffd84d;
-  box-shadow: 0 0 0 1.5px #14131a;
-  transition: transform 0.2s ease;
-}
-.bk-cursor[data-hover='true'] .bk-cursor-dot { transform: scale(0.6); }
-
-/* Single-colour logo PNGs used as masks so they take `currentColor`. */
-.bk-wordmark {
-  display: inline-block;
-  aspect-ratio: 2001 / 548;
-  background-color: currentColor;
-  -webkit-mask: url('/logo/batkle-wordmark-white.png') left center / contain no-repeat;
-  mask: url('/logo/batkle-wordmark-white.png') left center / contain no-repeat;
-}
-
-/* The bat body without its hanging bar, cropped from the 923x1200 artwork.
-   Sized by font-size: 1em is the body width. */
-.bk-bat {
-  display: inline-block;
-  width: 1em;
-  height: 1.4505em;
-  flex-shrink: 0;
-  background-color: currentColor;
-  -webkit-mask: url('/logo/batkle-bat-white.png') no-repeat;
-  mask: url('/logo/batkle-bat-white.png') no-repeat;
-  -webkit-mask-size: 1.5751em auto;
-  mask-size: 1.5751em auto;
-  -webkit-mask-position: -0.2867em -0.529em;
-  mask-position: -0.2867em -0.529em;
 }

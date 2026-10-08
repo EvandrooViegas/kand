@@ -409,10 +409,13 @@ async function resolveUploadedAsset(
     }
   }
 
-  // Fallback: fresh tag-overlap search if the planner had no candidate
+  // The user's own photo is never swapped for another image without saying so.
+  if (slot.user_upload) return { asset: null, warning: 'Your photo could not be used (it is missing or already shown on another slide)' }
+
+  // Fallback: fresh tag-overlap search if the planner had no candidate. Photos attached to a post idea belong to that post only.
   if (brand_id) {
     const assets = await db.collection('assets')
-      .find({ brand_id, $or: [{status:'ready'},{'description_tags.0':{$exists:true}}] })
+      .find({ brand_id, source: { $ne: 'post_upload' }, $or: [{status:'ready'},{'description_tags.0':{$exists:true}}] })
       .limit(500)
       .toArray()
 
@@ -476,6 +479,12 @@ async function resolveSlot(
     return { ...base, resolvedAsset: null, warning: null }
   }
 
+  // A slot for the user's photo shows that photo or nothing: no stock search, no generated image.
+  if (slot.user_upload) {
+    const { asset, warning } = await resolveUploadedAsset(db, slot, brand_id, usedPhotoIds)
+    return { ...base, treatment: 'environmental', source: 'uploaded_asset', resolvedAsset: asset, warning }
+  }
+
   // Background photos always consult the brand gallery, even for old stock-first plans.
   if(slot.treatment==='environmental' || slot.preferred_source==='unsplash' || slot.preferred_source==='uploaded_asset') {
     let galleryWarning:string|null = null
@@ -520,11 +529,11 @@ export async function handleResolveAssets(db: any, body: any) {
     if (brand_id) {
       try { const recent=await db.collection('assetImageHistory').find({brand_id}).sort({createdAt:-1}).limit(80).toArray();recent.forEach((item:any)=>usedPhotoIds.add(item.photoId)) } catch(error) {console.warn('[resolver] Image history unavailable')}
     }
-    const slots: ResolvedSlot[] = await Promise.all(
-      plan.slots.map(slot =>
-        resolveSlot(db, slot, brand_id ?? null, unsplashKey, falKey, usedPhotoIds).catch(error=>({slot_id:slot.slot_id,slot_label:slot.slot_label,needs_visual:slot.needs_visual,visual_purpose:slot.visual_purpose,source:slot.preferred_source,resolvedAsset:null,warning:(error as Error).message}))
-      )
-    )
+    const resolve = (slot: VisualSlot) => resolveSlot(db, slot, brand_id ?? null, unsplashKey, falKey, usedPhotoIds).catch(error=>({slot_id:slot.slot_id,slot_label:slot.slot_label,needs_visual:slot.needs_visual,visual_purpose:slot.visual_purpose,source:slot.preferred_source,resolvedAsset:null,warning:(error as Error).message}))
+    // The user's photos are placed first, one at a time, so each is reserved before any concurrent search runs.
+    const placed = new Map<string, ResolvedSlot>()
+    for (const slot of plan.slots.filter(s => s.user_upload)) placed.set(slot.slot_id, await resolve(slot))
+    const slots: ResolvedSlot[] = await Promise.all(plan.slots.map(slot => placed.get(slot.slot_id) ?? resolve(slot)))
 
     if (brand_id) {
       const history=slots.flatMap(s=>{const a=s.resolvedAsset;if(!a?.unsplash_id && !a?.pexels_id)return [];return [{brand_id,photoId:a.pexels_id?'pexels:'+a.pexels_id:'unsplash:'+a.unsplash_id,source:a.source,createdAt:new Date()}]})

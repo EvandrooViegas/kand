@@ -65,7 +65,9 @@ export function planSlides(family: GlobalDesignFamily, copy: any): SlidePlan[] {
     const proposed = g.compositions.includes(slide?.design?.composition) ? slide.design.composition as Composition : undefined
     const listy = listItems(slide).length >= 2
     const frequencyWants = { every: true, most: index === 0 || (!last && !listy), some: index % 2 === 0 && !last, rare: index === 0, never: false }[g.imagery.frequency]
-    let wantImage = hasImagery && (proposed ? proposed === 'image-led' || proposed === 'split' || (proposed === 'stacked' && (slide?.design?.image ? true : frequencyWants)) : slide?.design?.image === null ? g.imagery.frequency === 'every' : frequencyWants)
+    // A photo the user attached always shows on its slide, as a photograph.
+    const upload = hasImagery && !!slide?.design?.image?.upload
+    let wantImage = upload || (hasImagery && (proposed ? proposed === 'image-led' || proposed === 'split' || (proposed === 'stacked' && (slide?.design?.image ? true : frequencyWants)) : slide?.design?.image === null ? g.imagery.frequency === 'every' : frequencyWants))
     const pool = (image: boolean) => g.compositions.filter(c => image ? IMAGE_CAPABLE.includes(c) : TEXT_ONLY.includes(c))
     if (wantImage && !pool(true).length) wantImage = false
     // The references' own arrangements come first: the cover follows reference 1, list slides the list reference,
@@ -78,7 +80,7 @@ export function planSlides(family: GlobalDesignFamily, copy: any): SlidePlan[] {
     const observedFits = !!observed && g.compositions.includes(observed.composition) && (observed.composition !== 'list' || listy) && (!IMAGE_ONLY.includes(observed.composition) || (hasImagery && observed.image))
     let composition: Composition
     // Three or more items read better as a designed list (markers, cards) than as a sentence, whatever was proposed.
-    if (listItems(slide).length >= 3) { composition = 'list'; wantImage = false }
+    if (listItems(slide).length >= 3 && !upload) { composition = 'list'; wantImage = false }
     else if (proposed && (wantImage ? IMAGE_CAPABLE : TEXT_ONLY).includes(proposed)) composition = proposed
     else if (!proposed && observedFits) {
       composition = observed!.composition
@@ -122,7 +124,8 @@ export function planSlides(family: GlobalDesignFamily, copy: any): SlidePlan[] {
     // AI cutouts are the preferred imagery. Unless the study is cutout-only, about one image in five stays a stock
     // photograph, chosen per slide so the same copy always gets the same decision.
     // Studies built on a full-canvas photograph keep photographs: a cutout cannot recreate that look.
-    const stockPhoto = photoLed || (cutouts !== 'always' && hash(`stock:${slide?.headline || ''}:${index}`) % 100 < STOCK_SHARE * 100)
+    // A user's photo is never cut out: its scene is the point (a finished project, the team at work).
+    const stockPhoto = upload || photoLed || (cutouts !== 'always' && hash(`stock:${slide?.headline || ''}:${index}`) % 100 < STOCK_SHARE * 100)
     const cutout = wantImage && !stockPhoto
     plans.push({ composition, withImage: wantImage, align: followedAlign || align, anchor, imagePos: followedPos || imagePos, surface, beat: plans.filter(p => p.withImage).length, callout, badge, cutout, ...(frame === undefined ? {} : { frame }) })
   })

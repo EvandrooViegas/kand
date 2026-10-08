@@ -47,7 +47,7 @@ export function SectionTitle({ as: Tag = 'h2', className = '', children }) {
 }
 
 export function CardTitle({ as: Tag = 'h3', className = '', children }) {
-  return <Tag className={cn('font-bk-display text-[23px] font-bold leading-tight tracking-[-0.03em]', className)}>{children}</Tag>
+  return <Tag className={cn('font-bk-display text-[24px] font-bold leading-tight tracking-[-0.02em]', className)}>{children}</Tag>
 }
 
 export const liftClass =

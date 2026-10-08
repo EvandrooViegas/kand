@@ -1,7 +1,6 @@
 const {test}=require('node:test')
 const assert=require('node:assert/strict')
-const source=require('node:fs').readFileSync('components/Creation.jsx','utf8')
-const body=source.slice(source.indexOf('async function postJson('),source.indexOf('function PostPipelineCard('))
+const body=require('node:fs').readFileSync('lib/client/postGeneration.js','utf8').replace(/^import .*$/gm,'').replace(/^export /gm,'')
 function setup({needsVisuals=false,fail}={}) {
  const requests=[], stages=[], results={}
  const fetch=async(url,init)=>{
@@ -38,4 +37,17 @@ test('rebuilding with kept copy sends the copy so the server plans without writi
  const s=setup();await s.go({keepCopy:{headline:'Kept'}})
  assert.deepEqual(s.requests[0][1].copy,{headline:'Kept'})
  assert.equal(s.requests[1][1].copy.headline,'Kept')
+})
+test('an empty image account is reported through onWarning instead of a UI call',async()=>{
+ const warnings=[]
+ const fetch=async(url,init)=>{
+  const payload=JSON.parse(init.body)
+  const data=url==='/api/plan-post'?{copy:{headline:'H'},needsVisuals:true,plan:{designId:'d',layoutPlan:{},slots:[{slot_id:'s',needs_visual:true}]}}:url==='/api/resolve-assets'?{slots:[{slot_id:'s',warning:'OpenAI: no credits left'}]}:{id:'c',payload}
+  return {ok:true,json:async()=>data}
+ }
+ const run=new Function('fetch',body+';return runPostGeneration')(fetch)
+ const noop=()=>{}
+ await run({idea:{topic:'T'},brandContext:{id:'b'},brandId:'brand_b',keepCopy:null,onStage:noop,onCopy:noop,onPlan:noop,onResolve:noop,onDesign:noop,onWarning:m=>warnings.push(m)})
+ assert.equal(warnings.length,1)
+ assert.match(warnings[0],/no credits left/)
 })
